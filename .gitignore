@@ -1,0 +1,14 @@
+.gocache/
+.appdata/
+.userprofile/
+.pub-cache/
+.dart_tool/
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.exe
+/example/dart/example.h
+.idea/
+.vscode/
