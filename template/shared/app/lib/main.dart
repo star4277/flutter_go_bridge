@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:myapp/src/bridge_generated.dart';
+import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/bridge_generated.dart';
 
 Future<void> main() async {
   FlutterGoBridge.initialize();
