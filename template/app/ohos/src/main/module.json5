@@ -1,0 +1,10 @@
+{
+  "module": {
+    "name": "REPLACE_ME_GO_MOD_NAME",
+    "type": "har",
+    "deviceTypes": [
+      "default",
+      "tablet"
+    ]
+  }
+}

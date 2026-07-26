@@ -1,0 +1,6 @@
+[submodule "template/app/gokit"]
+	path = template/app/gokit
+	url = https://github.com/star4277/gokit.git
+[submodule "template/plugin/gokit"]
+	path = template/plugin/gokit
+	url = https://github.com/star4277/gokit.git
