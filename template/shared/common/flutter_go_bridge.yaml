@@ -1,0 +1,4 @@
+go_input: REPLACE_ME_GO_MOD_DIR/api
+go_output: REPLACE_ME_GO_MOD_DIR/bridge_generated.go
+dart_output: lib/src/bridge_generated.dart
+dart_format: true
