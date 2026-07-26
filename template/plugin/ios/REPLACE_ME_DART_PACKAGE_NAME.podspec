@@ -1,6 +1,6 @@
 #
 # To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
-# Run `pod lib lint REPLACE_ME_RUST_CRATE_NAME.podspec` to validate before publishing.
+# Run `pod lib lint REPLACE_ME_GO_MOD_NAME.podspec` to validate before publishing.
 #
 Pod::Spec.new do |s|
   s.name             = 'REPLACE_ME_DART_PACKAGE_NAME'
@@ -12,7 +12,7 @@ A new Flutter FFI plugin project.
   s.homepage         = 'http://example.com'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'Your Company' => 'email@example.com' }
-  s.module_name      = 'REPLACE_ME_RUST_CRATE_NAME'
+  s.module_name      = 'REPLACE_ME_GO_MOD_NAME'
 
   # This will ensure the source files in Classes/ are included in the native
   # builds of apps using this FFI plugin. Podspec does not support relative
@@ -28,19 +28,19 @@ A new Flutter FFI plugin project.
   s.swift_version = '5.0'
 
   s.script_phase = {
-    :name => 'Build Rust library',
+    :name => 'Build Go library',
     # First argument is relative path to the `rust` folder, second is name of rust library
-    :script => 'sh "$PODS_TARGET_SRCROOT/../cargokit/build_pod.sh" ../REPLACE_ME_RUST_CRATE_DIR REPLACE_ME_RUST_CRATE_NAME',
+    :script => 'sh "$PODS_TARGET_SRCROOT/../gokit/build_pod.sh" ../REPLACE_ME_GO_MOD_DIR REPLACE_ME_GO_MOD_NAME',
     :execution_position => :before_compile,
-    :input_files => ['${BUILT_PRODUCTS_DIR}/cargokit_phony'],
+    :input_files => ['${BUILT_PRODUCTS_DIR}/gokit_phony'],
     # Let XCode know that the static library referenced in -force_load below is
     # created by this build step.
-    :output_files => ["${PODS_CONFIGURATION_BUILD_DIR}/REPLACE_ME_RUST_CRATE_NAME/libREPLACE_ME_RUST_CRATE_NAME.a"],
+    :output_files => ["${PODS_CONFIGURATION_BUILD_DIR}/REPLACE_ME_GO_MOD_NAME/libREPLACE_ME_GO_MOD_NAME.a"],
   }
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     # Flutter.framework does not contain a i386 slice.
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
-    'OTHER_LDFLAGS' => '-force_load ${PODS_CONFIGURATION_BUILD_DIR}/REPLACE_ME_RUST_CRATE_NAME/libREPLACE_ME_RUST_CRATE_NAME.a',
+    'OTHER_LDFLAGS' => '-force_load ${PODS_CONFIGURATION_BUILD_DIR}/REPLACE_ME_GO_MOD_NAME/libREPLACE_ME_GO_MOD_NAME.a',
   }
 end

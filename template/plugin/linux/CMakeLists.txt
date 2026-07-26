@@ -7,13 +7,13 @@ cmake_minimum_required(VERSION 3.10)
 set(PROJECT_NAME "REPLACE_ME_DART_PACKAGE_NAME")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
-include("../cargokit/cmake/cargokit.cmake")
-apply_cargokit(${PROJECT_NAME} ../REPLACE_ME_RUST_CRATE_DIR REPLACE_ME_RUST_CRATE_NAME "")
+include("../gokit/cmake/gokit.cmake")
+apply_gokit(${PROJECT_NAME} ../REPLACE_ME_GO_MOD_DIR REPLACE_ME_GO_MOD_NAME "")
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
 # external build triggered from this build file.
 set(REPLACE_ME_DART_PACKAGE_NAME_bundled_libraries
-  "${${PROJECT_NAME}_cargokit_lib}"
+  "${${PROJECT_NAME}_gokit_lib}"
   PARENT_SCOPE
 )

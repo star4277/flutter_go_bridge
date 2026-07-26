@@ -1,6 +1,6 @@
 {
   "module": {
-    "name": "REPLACE_ME_RUST_CRATE_NAME",
+    "name": "REPLACE_ME_GO_MOD_NAME",
     "type": "har",
     "deviceTypes": [
       "default",

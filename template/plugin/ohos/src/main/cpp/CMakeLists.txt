@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 # Project-level configuration.
-set(PROJECT_NAME "REPLACE_ME_RUST_CRATE_NAME")
+set(PROJECT_NAME "REPLACE_ME_GO_MOD_NAME")
 set(TARGET_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../libs/${OHOS_ARCH})
 project(${PROJECT_NAME} LANGUAGES CXX)
 if (NOT DEFINED FLUTTER_TARGET_PLATFORM)
@@ -18,5 +18,5 @@ if (NOT DEFINED FLUTTER_TARGET_PLATFORM)
     endif()
         message(STATUS "Detected OpenHarmony platform: ${FLUTTER_TARGET_PLATFORM}")
 endif()
-include("../../../../cargokit/cmake/cargokit.cmake")
-apply_cargokit(${PROJECT_NAME} ../../../../rust REPLACE_ME_RUST_CRATE_NAME "")
+include("../../../../gokit/cmake/gokit.cmake")
+apply_cargokit(${PROJECT_NAME} ../../../../REPLACE_ME_GO_MOD_DIR REPLACE_ME_GO_MOD_NAME "")
