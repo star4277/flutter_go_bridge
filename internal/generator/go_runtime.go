@@ -28,6 +28,7 @@ var fgbEndian binary.ByteOrder = binary.LittleEndian
 var fgbHandles sync.Map
 var fgbNextHandle atomic.Uintptr
 var fgbDartAPIData unsafe.Pointer
+var fgbDartOpaquePort atomic.Int64
 
 func init() {
 	var marker uint16 = 0x1
@@ -987,5 +988,26 @@ func fgb_internal_drop_go(handle unsafe.Pointer) {
 	if handle != nil {
 		fgbHandles.Delete(uintptr(handle))
 	}
+}
+
+//export fgb_dart_opaque_port
+func fgb_dart_opaque_port(port C.int64_t) {
+	fgbDartOpaquePort.Store(int64(port))
+}
+
+// fgbReleaseDartOpaque tells the Dart side that the last Go copy of a
+// DartOpaque was collected, so its registry entry can be dropped. Used by
+// generated decoders via fgb.NewDartOpaque; safe to call from cleanup
+// goroutines.
+func fgbReleaseDartOpaque(handle int64) {
+	port := fgbDartOpaquePort.Load()
+	if port == 0 || handle == 0 {
+		return
+	}
+	object, err := fgbDcoInt64(handle)
+	if err != nil {
+		return
+	}
+	fgbPostDco(port, object)
 }
 `

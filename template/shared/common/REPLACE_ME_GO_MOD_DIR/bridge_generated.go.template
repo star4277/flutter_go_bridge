@@ -302,15 +302,30 @@ static void fgb_drop_impl(void* handle) {
 }
 #endif
 
+typedef struct FgbCstType1 FgbCstType1;
 typedef struct FgbCstArgs0 FgbCstArgs0;
 struct FgbCstArgs0 {
   FgbCstBytes* name;
 };
 typedef struct FgbCstArgs1 FgbCstArgs1;
 struct FgbCstArgs1 {
+  FgbCstType1* receiver;
+  int64_t dx;
+  int64_t dy;
+};
+typedef struct FgbCstArgs2 FgbCstArgs2;
+struct FgbCstArgs2 {
+  uint8_t fgbPad;
+};
+typedef struct FgbCstArgs3 FgbCstArgs3;
+struct FgbCstArgs3 {
   uintptr_t receiver;
+  int64_t delta;
+};
+struct FgbCstType1 {
   int64_t x;
   int64_t y;
+  FgbCstBytes* label;
 };
 
 */
@@ -318,8 +333,8 @@ import "C"
 
 import (
 	"bytes"
-	"encoding/binary"
 	api "com.flutter_go_bridge/REPLACE_ME_GO_MOD_NAME/api"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math/big"
@@ -358,6 +373,7 @@ var fgbEndian binary.ByteOrder = binary.LittleEndian
 var fgbHandles sync.Map
 var fgbNextHandle atomic.Uintptr
 var fgbDartAPIData unsafe.Pointer
+var fgbDartOpaquePort atomic.Int64
 
 func init() {
 	var marker uint16 = 0x1
@@ -1325,6 +1341,27 @@ func fgb_internal_drop_go(handle unsafe.Pointer) {
 	}
 }
 
+//export fgb_dart_opaque_port
+func fgb_dart_opaque_port(port C.int64_t) {
+	fgbDartOpaquePort.Store(int64(port))
+}
+
+// fgbReleaseDartOpaque tells the Dart side that the last Go copy of a
+// DartOpaque was collected, so its registry entry can be dropped. Used by
+// generated decoders via fgb.NewDartOpaque; safe to call from cleanup
+// goroutines.
+func fgbReleaseDartOpaque(handle int64) {
+	port := fgbDartOpaquePort.Load()
+	if port == 0 || handle == 0 {
+		return
+	}
+	object, err := fgbDcoInt64(handle)
+	if err != nil {
+		return
+	}
+	fgbPostDco(port, object)
+}
+
 // Required for c-shared and c-archive build modes.
 func main() {}
 
@@ -1339,19 +1376,30 @@ func fgbCstDecode0(value *C.FgbCstBytes, path string) (string, error) {
 	return raw, nil
 }
 
-func fgbCstDecode1(value C.uintptr_t, path string) (*api.Point, error) {
-	if value == 0 {
-		return nil, nil
+func fgbCstDecode1(value *C.FgbCstType1, path string) (api.Point, error) {
+	if value == nil {
+		var zero api.Point
+		return zero, fmt.Errorf("%s: null struct", path)
 	}
-	handle := uintptr(value)
-	raw, ok := fgbHandles.Load(handle)
-	if !ok {
-		return nil, fmt.Errorf("%s: unknown or released handle %d", path, handle)
+	var result api.Point
+	decodedX, err := fgbCstDecode2(value.x, path+".x")
+	if err != nil {
+		var zero api.Point
+		return zero, err
 	}
-	result, ok := raw.(*api.Point)
-	if !ok {
-		return nil, fmt.Errorf("%s: handle %d has incompatible Go type %T", path, handle, raw)
+	result.X = decodedX
+	decodedY, err := fgbCstDecode2(value.y, path+".y")
+	if err != nil {
+		var zero api.Point
+		return zero, err
 	}
+	result.Y = decodedY
+	decodedLabel, err := fgbCstDecode0(value.label, path+".label")
+	if err != nil {
+		var zero api.Point
+		return zero, err
+	}
+	result.Label = decodedLabel
 	return result, nil
 }
 
@@ -1364,11 +1412,57 @@ func fgbCstDecode2(value C.int64_t, path string) (int, error) {
 	return int(raw), nil
 }
 
+func fgbCstDecode3(value C.uintptr_t, path string) (*api.Counter, error) {
+	if value == 0 {
+		return nil, nil
+	}
+	handle := uintptr(value)
+	raw, ok := fgbHandles.Load(handle)
+	if !ok {
+		return nil, fmt.Errorf("%s: unknown or released handle %d", path, handle)
+	}
+	result, ok := raw.(*api.Counter)
+	if !ok {
+		return nil, fmt.Errorf("%s: handle %d has incompatible Go type %T", path, handle, raw)
+	}
+	return result, nil
+}
+
 func fgbDcoEncode0(value string) (*C.FgbDartCObject, error) {
 	return fgbDcoString(value)
 }
 
-func fgbDcoEncode1(value *api.Point) (*C.FgbDartCObject, error) {
+func fgbDcoEncode1(value api.Point) (*C.FgbDartCObject, error) {
+	result := C.fgb_dco_array_new(3)
+	if result == nil {
+		return nil, fmt.Errorf("DCO struct allocation failed")
+	}
+	child0, err := fgbDcoEncode2(value.X)
+	if err != nil {
+		C.fgb_internal_dco_free(result)
+		return nil, fmt.Errorf("x"+": %w", err)
+	}
+	C.fgb_dco_array_set(result, 0, child0)
+	child1, err := fgbDcoEncode2(value.Y)
+	if err != nil {
+		C.fgb_internal_dco_free(result)
+		return nil, fmt.Errorf("y"+": %w", err)
+	}
+	C.fgb_dco_array_set(result, 1, child1)
+	child2, err := fgbDcoEncode0(value.Label)
+	if err != nil {
+		C.fgb_internal_dco_free(result)
+		return nil, fmt.Errorf("label"+": %w", err)
+	}
+	C.fgb_dco_array_set(result, 2, child2)
+	return result, nil
+}
+
+func fgbDcoEncode2(value int) (*C.FgbDartCObject, error) {
+	return fgbDcoInt64(int64(value))
+}
+
+func fgbDcoEncode3(value *api.Counter) (*C.FgbDartCObject, error) {
 	if value == nil {
 		return fgbDcoNull()
 	}
@@ -1378,10 +1472,6 @@ func fgbDcoEncode1(value *api.Point) (*C.FgbDartCObject, error) {
 	}
 	fgbHandles.Store(handle, value)
 	return fgbDcoInt64(int64(handle))
-}
-
-func fgbDcoEncode2(value int) (*C.FgbDartCObject, error) {
-	return fgbDcoInt64(int64(value))
 }
 
 func fgbDecode0(value any, path string) (string, error) {
@@ -1396,35 +1486,52 @@ func fgbEncode0(value string) (any, error) {
 	return value, nil
 }
 
-func fgbDecode1(value any, path string) (*api.Point, error) {
-	if value == nil {
-		return nil, nil
+func fgbDecode1(value any, path string) (api.Point, error) {
+	raw, ok := value.(map[any]any)
+	if !ok {
+		var zero api.Point
+		return zero, fgbTypeError(path, "Map", value)
 	}
-	handle, err := fgbAsHandle(value, path)
+	var result api.Point
+	decodedX, err := fgbDecode2(raw["x"], path+".x")
 	if err != nil {
-		return nil, err
+		var zero api.Point
+		return zero, err
 	}
-	raw, ok := fgbHandles.Load(handle)
-	if !ok {
-		return nil, fmt.Errorf("%s: unknown or released handle %d", path, handle)
+	result.X = decodedX
+	decodedY, err := fgbDecode2(raw["y"], path+".y")
+	if err != nil {
+		var zero api.Point
+		return zero, err
 	}
-	result, ok := raw.(*api.Point)
-	if !ok {
-		return nil, fmt.Errorf("%s: handle %d has incompatible Go type %T", path, handle, raw)
+	result.Y = decodedY
+	decodedLabel, err := fgbDecode0(raw["label"], path+".label")
+	if err != nil {
+		var zero api.Point
+		return zero, err
 	}
+	result.Label = decodedLabel
 	return result, nil
 }
 
-func fgbEncode1(value *api.Point) (any, error) {
-	if value == nil {
-		return nil, nil
+func fgbEncode1(value api.Point) (any, error) {
+	result := make(map[any]any, 3)
+	encodedX, err := fgbEncode2(value.X)
+	if err != nil {
+		return nil, fmt.Errorf("x"+": %w", err)
 	}
-	handle := fgbNextHandle.Add(1)
-	if handle == 0 {
-		return nil, fmt.Errorf("opaque handle space exhausted")
+	result["x"] = encodedX
+	encodedY, err := fgbEncode2(value.Y)
+	if err != nil {
+		return nil, fmt.Errorf("y"+": %w", err)
 	}
-	fgbHandles.Store(handle, value)
-	return int64(handle), nil
+	result["y"] = encodedY
+	encodedLabel, err := fgbEncode0(value.Label)
+	if err != nil {
+		return nil, fmt.Errorf("label"+": %w", err)
+	}
+	result["label"] = encodedLabel
+	return result, nil
 }
 
 func fgbDecode2(value any, path string) (int, error) {
@@ -1444,6 +1551,37 @@ func fgbEncode2(value int) (any, error) {
 	return int64(value), nil
 }
 
+func fgbDecode3(value any, path string) (*api.Counter, error) {
+	if value == nil {
+		return nil, nil
+	}
+	handle, err := fgbAsHandle(value, path)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := fgbHandles.Load(handle)
+	if !ok {
+		return nil, fmt.Errorf("%s: unknown or released handle %d", path, handle)
+	}
+	result, ok := raw.(*api.Counter)
+	if !ok {
+		return nil, fmt.Errorf("%s: handle %d has incompatible Go type %T", path, handle, raw)
+	}
+	return result, nil
+}
+
+func fgbEncode3(value *api.Counter) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	handle := fgbNextHandle.Add(1)
+	if handle == 0 {
+		return nil, fmt.Errorf("opaque handle space exhausted")
+	}
+	fgbHandles.Store(handle, value)
+	return int64(handle), nil
+}
+
 func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 	switch call.Method {
 	case "Greeting":
@@ -1461,7 +1599,7 @@ func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
 		}
 		return encoded, nil
-	case "Point.Move":
+	case "Point.Moved":
 		args, err := fgbRequireArgs(call.Arguments, 3)
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
@@ -1470,16 +1608,49 @@ func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		arg0, err := fgbDecode2(args[1], "x")
+		arg0, err := fgbDecode2(args[1], "dx")
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		arg1, err := fgbDecode2(args[2], "y")
+		arg1, err := fgbDecode2(args[2], "dy")
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		receiver.Move(arg0, arg1)
-		return nil, nil
+		result := receiver.Moved(arg0, arg1)
+		encoded, err := fgbEncode1(result)
+		if err != nil {
+			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
+		}
+		return encoded, nil
+	case "NewCounter":
+		if _, err := fgbRequireArgs(call.Arguments, 0); err != nil {
+			return nil, fgbInvalidArguments(call.Method, err)
+		}
+		result := api.NewCounter()
+		encoded, err := fgbEncode3(result)
+		if err != nil {
+			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
+		}
+		return encoded, nil
+	case "Counter.Add":
+		args, err := fgbRequireArgs(call.Arguments, 2)
+		if err != nil {
+			return nil, fgbInvalidArguments(call.Method, err)
+		}
+		receiver, err := fgbDecode3(args[0], "receiver")
+		if err != nil {
+			return nil, fgbInvalidArguments(call.Method, err)
+		}
+		arg0, err := fgbDecode2(args[1], "delta")
+		if err != nil {
+			return nil, fgbInvalidArguments(call.Method, err)
+		}
+		result := receiver.Add(arg0)
+		encoded, err := fgbEncode2(result)
+		if err != nil {
+			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
+		}
+		return encoded, nil
 	default:
 		return nil, &fgbCallError{Code: "method_not_found", Message: fmt.Sprintf("unknown method %q", call.Method)}
 	}
@@ -1503,23 +1674,56 @@ func fgbDispatchCst(callID int32, raw unsafe.Pointer) (*C.FgbDartCObject, *fgbCa
 		return encoded, nil
 	case 1:
 		if raw == nil {
-			return nil, fgbInvalidArguments("Point.Move", fmt.Errorf("null CST arguments"))
+			return nil, fgbInvalidArguments("Point.Moved", fmt.Errorf("null CST arguments"))
 		}
 		args := (*C.FgbCstArgs1)(raw)
 		receiver, err := fgbCstDecode1(args.receiver, "receiver")
 		if err != nil {
-			return nil, fgbInvalidArguments("Point.Move", err)
+			return nil, fgbInvalidArguments("Point.Moved", err)
 		}
-		arg0, err := fgbCstDecode2(args.x, "x")
+		arg0, err := fgbCstDecode2(args.dx, "dx")
 		if err != nil {
-			return nil, fgbInvalidArguments("Point.Move", err)
+			return nil, fgbInvalidArguments("Point.Moved", err)
 		}
-		arg1, err := fgbCstDecode2(args.y, "y")
+		arg1, err := fgbCstDecode2(args.dy, "dy")
 		if err != nil {
-			return nil, fgbInvalidArguments("Point.Move", err)
+			return nil, fgbInvalidArguments("Point.Moved", err)
 		}
-		receiver.Move(arg0, arg1)
-		return nil, nil
+		result := receiver.Moved(arg0, arg1)
+		encoded, err := fgbDcoEncode1(result)
+		if err != nil {
+			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "Point.Moved"}}
+		}
+		return encoded, nil
+	case 2:
+		if raw == nil {
+			return nil, fgbInvalidArguments("NewCounter", fmt.Errorf("null CST arguments"))
+		}
+		result := api.NewCounter()
+		encoded, err := fgbDcoEncode3(result)
+		if err != nil {
+			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "NewCounter"}}
+		}
+		return encoded, nil
+	case 3:
+		if raw == nil {
+			return nil, fgbInvalidArguments("Counter.Add", fmt.Errorf("null CST arguments"))
+		}
+		args := (*C.FgbCstArgs3)(raw)
+		receiver, err := fgbCstDecode3(args.receiver, "receiver")
+		if err != nil {
+			return nil, fgbInvalidArguments("Counter.Add", err)
+		}
+		arg0, err := fgbCstDecode2(args.delta, "delta")
+		if err != nil {
+			return nil, fgbInvalidArguments("Counter.Add", err)
+		}
+		result := receiver.Add(arg0)
+		encoded, err := fgbDcoEncode2(result)
+		if err != nil {
+			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "Counter.Add"}}
+		}
+		return encoded, nil
 	default:
 		return nil, &fgbCallError{Code: "method_not_found", Message: fmt.Sprintf("unknown CST call id %d", callID)}
 	}

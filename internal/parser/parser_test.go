@@ -4,6 +4,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/star4277/flutter-go-bridge-gokit/internal/model"
@@ -48,14 +49,13 @@ func TestParseCallModeDirectives(t *testing.T) {
 	}
 	source := `package modes
 
-// fgb(sync)
+//fgb:sync
 func Sync(value int) int { return value }
 
-// fgb(async)
+//fgb:async
 func Async(value int) int { return value }
 
-// fgb:mode=sync
-func Explicit(value int) int { return value }
+func Unmarked(value int) int { return value }
 `
 	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
@@ -77,11 +77,97 @@ func TestParseRejectsInvalidCompactCallMode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/invalid-mode\n\ngo 1.24\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte("package api\n\n// fgb(background)\nfunc Work() {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte("package api\n\n//fgb:background\nfunc Work() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Parse(Options{Input: dir, BaseDir: dir}); err == nil {
 		t.Fatal("expected invalid fgb mode to be rejected")
+	}
+}
+
+func TestParseDirectivesIgnoreRenameOpaque(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/directives\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := `package directives
+
+//fgb:ignore
+func Hidden() {}
+
+//fgb:async, rename = "fetchValue"
+func Load() int { return 42 }
+
+//fgb:opaque
+type Res struct {
+	n int
+}
+
+func (r *Res) Total() int { return r.n }
+
+//fgb:ignore
+type Gone struct {
+	X int
+}
+
+func (g Gone) Method() int { return g.X }
+
+func lowercase() {}
+`
+	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := Parse(Options{Input: dir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, callable := range api.Callables {
+		names = append(names, callable.DartName)
+	}
+	if len(names) != 2 || names[0] != "fetchValue" || names[1] != "total" {
+		t.Fatalf("unexpected callables %v (ignored/unexported/ignored-receiver must be dropped)", names)
+	}
+	if api.Callables[0].Mode != model.CallModeAsync {
+		t.Fatal("combined directive lost the async mode")
+	}
+	if !api.OpaqueTypes["Res"] {
+		t.Fatal("fgb(opaque) was not recorded")
+	}
+	if !api.IgnoredTypes["Gone"] {
+		t.Fatal("fgb(ignore) on a type was not recorded")
+	}
+	for _, declaration := range api.Types {
+		if declaration.Object.Name() == "Gone" {
+			t.Fatal("ignored type must not be collected")
+		}
+	}
+}
+
+func TestParseRejectsInvalidDirective(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/invalid-directive\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte("package api\n\n//fgb:rename = \nfunc Work() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(Options{Input: dir, BaseDir: dir}); err == nil {
+		t.Fatal("expected invalid rename directive to be rejected")
+	}
+}
+
+func TestParseRejectsSpacedDirectiveSpelling(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/spaced-directive\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte("package api\n\n// fgb:sync\nfunc Work() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Parse(Options{Input: dir, BaseDir: dir})
+	if err == nil || !strings.Contains(err.Error(), "without a space") {
+		t.Fatalf("a spaced `// fgb:` must fail loudly, got %v", err)
 	}
 }
 
@@ -91,7 +177,7 @@ func TestParseKeepsCgoSourceAndMirrorsItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	sourcePath := filepath.Join(dir, "api.go")
-	source := "package api\n\nimport \"C\"\n\n// fgb(sync)\nfunc Greeting(value string) string { return value }\n"
+	source := "package api\n\nimport \"C\"\n\n//fgb:sync\nfunc Greeting(value string) string { return value }\n"
 	if err := os.WriteFile(sourcePath, []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}

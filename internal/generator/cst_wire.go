@@ -42,7 +42,7 @@ func cstIsScalar(typ *wireType) bool {
 		return false
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindFloat, kindOpaque:
+	case kindBool, kindSigned, kindUnsigned, kindFloat, kindOpaque, kindDartOpaque:
 		return true
 	case kindNamed:
 		return cstIsScalar(typ.Named.Underlying)
@@ -77,6 +77,8 @@ func cstStorageFor(typ *wireType) cstStorage {
 		return cstStorage{CType: "double", DartType: "ffi.Double", DartField: "@ffi.Double() external double", Scalar: true}
 	case kindOpaque:
 		return cstStorage{CType: "uintptr_t", DartType: "ffi.UintPtr", DartField: "@ffi.UintPtr() external int", Scalar: true}
+	case kindDartOpaque:
+		return cstStorage{CType: "int64_t", DartType: "ffi.Int64", DartField: "@ffi.Int64() external int", Scalar: true}
 	case kindString, kindTime, kindBigInt:
 		return cstStorage{CType: "FgbCstBytes*", DartType: "ffi.Pointer<_FgbCstBytes>", Pointer: true}
 	case kindBytes:
@@ -278,6 +280,10 @@ func cstCArgsDefinition(call *callModel) string {
 	for _, param := range call.Params {
 		fmt.Fprintf(&b, "  %s %s;\n", cstCTypeForSignature(param.Type), param.CName)
 	}
+	if call.Receiver == nil && len(call.Params) == 0 {
+		// C and dart:ffi both reject empty structs; keep the layouts in sync.
+		b.WriteString("  uint8_t fgbPad;\n")
+	}
 	b.WriteString("};\n")
 	return b.String()
 }
@@ -296,6 +302,9 @@ func cstDartArgsDefinition(call *callModel) string {
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
+	}
+	if call.Receiver == nil && len(call.Params) == 0 {
+		b.WriteString("  @ffi.Uint8() external int fgbPad;\n")
 	}
 	b.WriteString("}\n")
 	return b.String()

@@ -12,7 +12,7 @@
 - 生成器内部使用可递归扩展的类型 IR 和 codec capability 判定，作用类似 FRB 的 `MirType`。
 - 默认序列化方向与 FRB 一致：Dart → Go 使用 CST（C 结构体），Go → Dart 使用 DCO（`Dart_CObject`）。
 - `map`、`any` 等当前无法安全表示为 CST/DCO 的调用，会整体回退到内置的纯 Dart Standard codec；不导入 Flutter SDK。
-- Dart API DL 用于 `fgb(async)` 的 DCO 对象投递；同步 DCO 结果通过返回的 `Dart_CObject*` 解码。
+- Dart API DL 用于 `//fgb:async` 的 DCO 对象投递；同步 DCO 结果通过返回的 `Dart_CObject*` 解码。
 - 所有 `dart:ffi`、动态库加载、内存管理和 Dart API DL 代码都集中在 `bridge_generated.dart`。
 - 每个 Go 源文件生成一个同名 Dart API 文件；目录结构按 Go 输入目录原样镜像。
 - Go 端只生成一个 `bridge_generated.go`，默认放在最近的 `go.mod` 同级目录，不生成 `.c` 或 `.h` 文件。
@@ -33,7 +33,7 @@ Dart 可空类型，构造参数不加 `required`。所有 CST/DCO/FFI 细节仍
 
 ## 同步与异步标记
 
-未标记函数和 `fgb(sync)` 都只生成同步 Dart 方法；只有 `fgb(async)` 才生成异步 Dart 方法。
+未标记函数和 `//fgb:sync` 都只生成同步 Dart 方法；只有 `//fgb:async` 才生成异步 Dart 方法。
 同一个 Go 方法不会同时生成同步、异步两个版本，Dart 方法名也不会添加 `Sync` 或 `Async` 后缀。
 
 ```go
@@ -41,12 +41,12 @@ func Add(a, b int) int { // 默认同步
 	return a + b
 }
 
-// fgb(sync)
+//fgb:sync
 func Subtract(a, b int) int {
 	return a - b
 }
 
-// fgb(async)
+//fgb:async
 func LoadValue() int {
 	return 42
 }
@@ -55,8 +55,8 @@ func LoadValue() int {
 生成的 Dart API：
 
 ```dart
-final sum = add(20, 22);
-final difference = subtract(22, 20);
+final sum = add(a: 20, b: 22);
+final difference = subtract(a: 22, b: 20);
 final value = await loadValue();
 ```
 
@@ -193,21 +193,22 @@ flutter_go_bridge_codegen integrate -t plugin       # FFI plugin 模板
 
 ## Dart 调用
 
-生成代码只依赖 Dart SDK 自带库，可在纯 Dart VM 或 Flutter 中使用：
+生成代码只依赖 Dart SDK 自带库，可在纯 Dart VM 或 Flutter 中使用。所有生成的
+Dart 入口（函数、方法、构造函数）一律使用命名参数；`bridge_generated.dart` 不再
+re-export 各 API 文件，需要什么就 import 什么：
 
 ```dart
+import 'bridge_generated.dart'; // FlutterGoBridge / FgbPlatformException / GoOpaque
 import 'api.dart';
 import 'account.dart';
 
 void main() async {
   FlutterGoBridge.initialize(libraryPath: 'path/to/mylib.dll');
 
-  final answer = add(20, 22);          // 未标记：同步
-  final account = await loadAccount(); // fgb(async)：异步
+  final answer = add(a: 20, b: 22);    // 未标记：同步
+  final account = await loadAccount(); // Go 侧标记 //fgb:async：异步
 }
 ```
-
-也可以只导入 `bridge_generated.dart`，它会统一 export 所有生成的 Go 源文件 API。
 
 ## 稳定 ABI
 
@@ -222,7 +223,8 @@ void main() async {
 | `fgb` | Standard codec 同步 fallback 入口 |
 | `fgb_async` | Standard codec 异步 fallback 入口 |
 | `fgb_alloc` / `fgb_free` | FFI 请求与响应缓冲区管理 |
-| `fgb_drop` | `NativeFinalizer` 自动释放 opaque Go 句柄 |
+| `fgb_drop` | `NativeFinalizer` 自动释放 GoOpaque 句柄 |
+| `fgb_dart_opaque_port` | 注册 DartOpaque 释放通知端口 |
 
 这些符号由 `bridge_generated.go` 中的 cgo 导出声明生成；代码生成器本身不会创建 C 源文件或头文件。
 
@@ -255,25 +257,53 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | `[]int32`, `[]int64`, `[]float64` | 对应 typed list |
 | 其他 slice/array | `List<T>` |
 | `map[K]V` | `Map<K, V>` |
-| 值结构体 | 对应源文件中的 Dart `final class` |
-| 普通 `*struct` 值 | 对应 Dart 可空 value class，字段继续参与 CST/DCO 序列化 |
-| 具有指针 receiver 方法的 `*struct` | opaque Dart 类 + `NativeFinalizer` 自动释放 |
+| 可翻译结构体（默认） | 对应源文件中的 Dart class：带字段、命名构造参数；指针字段可空 |
+| 普通 `*struct` 值 | 可空 Dart value class，字段继续参与 CST/DCO 序列化 |
+| GoOpaque 结构体 | `extends GoOpaque` 的句柄类 + `NativeFinalizer` 自动释放 |
+| `fgb.DartOpaque` / `*fgb.DartOpaque` | `Object` / `Object?`（Dart 对象按句柄穿透 Go） |
 | `time.Time` | `DateTime` |
 | `math/big.Int` | `BigInt` |
 | 最后一个 `error` 返回值 | `FgbPlatformException` |
 | `any` / `interface{}` | `Object?` |
 
-当前支持零个或一个非 `error` 返回值；`error` 必须位于最后。泛型函数、可变参数、多非 error 返回值、
-非空接口和复杂外部命名类型暂未支持。
+结构体分类与 FRB 一致：字段全部可序列化的结构体默认按字段翻译（指针 receiver 方法照常生成，
+但 receiver 按值序列化，Go 侧的修改不会写回 Dart 对象）；含不可序列化字段（func、chan、
+非空接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；`//fgb:opaque` 可强制句柄
+语义——需要在 Go 侧保存内部状态、或私有字段承载状态的类型建议显式标记。GoOpaque 类型必须
+以 `*T` 出现在签名中。小写开头的私有类型、字段、方法、函数、常量一律不参与生成。
 
-## 其他指令
+`fgb.DartOpaque`（来自 `github.com/star4277/flutter-go-bridge-gokit/fgb` 运行时包）把任意
+Dart 对象按句柄交给 Go 保存、之后原样传回；Go 侧最后一份拷贝被 GC 后会自动通知 Dart 释放。
+只有 API 用到它时 go.mod 才需要这一个依赖。
+
+当前支持零个或一个非 `error` 返回值；`error` 必须位于最后。泛型函数、可变参数、多非 error 返回值、
+非空接口、函数类型（回调）和复杂外部命名类型暂未支持。
+
+## 指令与字段 tag
+
+声明上的注释指令采用 Go 指令语法 `//fgb:xxx`（`//` 后不加空格，gofmt 不会改写，
+也不会混入文档注释）；多个指令可以分行写，或在一行内用逗号组合：
 
 ```go
-// flutter_go_bridge:dart_name=fetchValue
-func FetchValue() Value { /* ... */ }
-
-// flutter_go_bridge:ignore
+//fgb:ignore                       // 跳过该函数/方法/类型/常量；被忽略类型的方法一并跳过
 func InternalOnly() {}
+
+//fgb:async, rename = "fetchValue" // 异步 + 重命名，可逗号组合
+func LoadValue() Value { /* ... */ }
+
+//fgb:opaque                       // 强制 GoOpaque 句柄语义
+type Counter struct{ total int }
+```
+
+结构体字段的 `fgb` tag（逗号组合；`defaultValue` 会吞掉其后的所有内容，须放最后）：
+
+```go
+type Item struct {
+	Name   string `fgb:"rename:title"`          // Dart 字段与 wire key 改名
+	Count  int    `fgb:"non-final,defaultValue: 0"` // 非 final 字段 + 构造默认值
+	Hidden string `fgb:"ignore"`                // 不参与生成
+	Note   *string                              // 指针字段：可空、构造参数不加 required
+}
 ```
 
 ## 验证

@@ -64,12 +64,14 @@ func TestGenerateStableABIAndDartAPIDL(t *testing.T) {
 	sourceFile := mustRead(t, filepath.Join(dir, "lib", "api.dart"))
 	for _, expected := range []string{
 		"int calculate", "fgbInternalCall", `import "bridge_generated.dart";`,
-		`export "bridge_generated.dart" show FixtureBridge, FgbPlatformException;`,
 		"final class Value",
 	} {
 		if !strings.Contains(sourceFile, expected) {
 			t.Fatalf("generated per-source Dart library missing %q", expected)
 		}
+	}
+	if strings.Contains(sourceFile, "\nexport ") {
+		t.Fatalf("per-source Dart library must not re-export anything:\n%s", sourceFile)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "lib", "_types.dart")); !os.IsNotExist(err) {
 		t.Fatal("a separate _types.dart must not be generated")
@@ -162,17 +164,17 @@ func TestGenerateCallModeEmitsExactlyOneDartEntrypoint(t *testing.T) {
 
 func Plain(value int) int { return value }
 
-// fgb(sync)
+//fgb:sync
 func ExplicitSync(value int) int { return value }
 
-// fgb(async)
+//fgb:async
 func ExplicitAsync(value int) int { return value }
 
 type Worker struct{}
 
 func NewWorker() *Worker { return &Worker{} }
 
-// fgb(async)
+//fgb:async
 func (worker *Worker) Run(value int) int { return value }
 `
 	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
@@ -244,8 +246,12 @@ func TestGenerateDirectMainPackageDoesNotDuplicateMain(t *testing.T) {
 		t.Fatal("Dart entrypoint class token replacement was applied more than once")
 	}
 	sourcePath := filepath.Join(dir, "api.dart")
-	if source := mustRead(t, sourcePath); !strings.Contains(source, "show MyFlutterGoBridge, FgbPlatformException") {
-		t.Fatal("per-source Dart library did not export the configured bridge class")
+	source := mustRead(t, sourcePath)
+	if !strings.Contains(source, "MyFlutterGoBridge.instance") {
+		t.Fatal("per-source Dart library did not use the configured bridge class")
+	}
+	if strings.Contains(source, "\nexport ") {
+		t.Fatal("per-source Dart library must not re-export the bridge")
 	}
 }
 
@@ -293,15 +299,18 @@ func Second(value SecondValue) SecondValue { return value }
 		t.Fatalf("got %d files, want Go bridge, central, and two source Dart files", len(result.Files))
 	}
 	central := mustRead(t, filepath.Join(outputDir, "bridge_generated.dart"))
-	if !strings.Contains(central, `export "first.dart";`) || !strings.Contains(central, `export "second.dart";`) {
+	if !strings.Contains(central, `import "first.dart";`) || !strings.Contains(central, `import "second.dart";`) {
 		t.Fatalf("central Dart file does not mirror source files:\n%s", central)
+	}
+	if strings.Contains(central, `export "first.dart";`) || strings.Contains(central, `export "second.dart";`) {
+		t.Fatalf("central Dart file must not re-export API files:\n%s", central)
 	}
 	first := mustRead(t, filepath.Join(outputDir, "first.dart"))
 	second := mustRead(t, filepath.Join(outputDir, "second.dart"))
-	if !strings.Contains(first, `import "bridge_generated.dart";`) || !strings.Contains(first, "FirstValue first") || !strings.Contains(first, "final class FirstValue") || strings.Contains(first, "SecondValue") {
+	if !strings.Contains(first, `import "bridge_generated.dart";`) || !strings.Contains(first, "FirstValue first({required FirstValue value})") || !strings.Contains(first, "final class FirstValue") || strings.Contains(first, "SecondValue") {
 		t.Fatalf("first.dart contains the wrong API: %s", first)
 	}
-	if !strings.Contains(second, "SecondValue second") || !strings.Contains(second, "final class SecondValue") || strings.Contains(second, "FirstValue") {
+	if !strings.Contains(second, "SecondValue second({required SecondValue value})") || !strings.Contains(second, "final class SecondValue") || strings.Contains(second, "FirstValue") {
 		t.Fatalf("second.dart contains the wrong API: %s", second)
 	}
 }

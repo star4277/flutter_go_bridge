@@ -74,6 +74,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.line("  if (value == null) return 0;")
 		r.line("  if (!identical(value.fgbBridge, arena.bridge)) throw StateError('opaque value belongs to a different bridge');")
 		r.line("  return value.fgbHandle;")
+	case kindDartOpaque:
+		r.line("  return arena.bridge.fgbInternalRegisterDartOpaque(value);")
 	case kindNamed:
 		r.line("  return fgbCstEncode%d(value.value, arena, path);", typ.Named.Underlying.ID)
 	default:
@@ -99,7 +101,7 @@ func cstDartEncoderReturnType(typ *wireType) string {
 		return storage.DartType
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindOpaque:
+	case kindBool, kindSigned, kindUnsigned, kindOpaque, kindDartOpaque:
 		return "int"
 	case kindFloat:
 		return "double"

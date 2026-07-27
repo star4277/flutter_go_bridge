@@ -1,9 +1,8 @@
 package api
 
-import "C"
 import "fmt"
 
-// fgb(sync)
+//fgb:sync
 func Greeting(name string) string {
 	return fmt.Sprintf("Hello, %s!", name)
 }
@@ -11,10 +10,27 @@ func Greeting(name string) string {
 type Point struct {
 	X     int
 	Y     int
-	Label string
+	Label string `fgb:"non-final"`
 }
 
-func (p *Point) Move(x int, y int) {
-	p.X = x
-	p.Y = y
+// Moved returns a copy of the point shifted by (dx, dy).
+func (p Point) Moved(dx int, dy int) Point {
+	p.X += dx
+	p.Y += dy
+	return p
+}
+
+// Counter keeps its state on the Go side and crosses the bridge as a
+// GoOpaque handle.
+//
+//fgb:opaque
+type Counter struct {
+	total int
+}
+
+func NewCounter() *Counter { return &Counter{} }
+
+func (c *Counter) Add(delta int) int {
+	c.total += delta
+	return c.total
 }

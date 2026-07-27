@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/bridge_generated.dart';
+import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/lib.dart';
 
 Future<void> main() async {
   FlutterGoBridge.initialize();
@@ -16,7 +17,7 @@ class MyApp extends StatelessWidget {
         appBar: AppBar(title: const Text('flutter_go_bridge quickstart')),
         body: Center(
           child: Text(
-            'Action: Call go `greet("Tom")`\nResult: `${greeting("Tom")}`',
+            'Action: Call go `greet("Tom")`\nResult: `${greeting(name: "Tom")}`',
           ),
         ),
       ),

@@ -15,8 +15,8 @@ final class FgbPlatformException implements Exception {
 /// Base class for generated opaque Go handles. The generated source files do
 /// not need to expose dart:ffi; finalizer plumbing stays in this integration
 /// library.
-abstract base class FgbOpaque implements ffi.Finalizable {
-  FgbOpaque(this.fgbBridge, this.fgbHandle) {
+abstract base class GoOpaque implements ffi.Finalizable {
+  GoOpaque({required this.fgbBridge, required this.fgbHandle}) {
     fgbBridge.fgbAttachOpaqueFinalizer(this, fgbHandle);
   }
 
@@ -309,6 +309,8 @@ typedef _FgbCstAsyncNative = ffi.Void Function(ffi.Int32, ffi.Pointer<ffi.Void>,
 typedef _FgbCstAsyncDart = void Function(int, ffi.Pointer<ffi.Void>, int);
 typedef _FgbDcoFreeNative = ffi.Void Function(ffi.Pointer<ffi.Void>);
 typedef _FgbDcoFreeDart = void Function(ffi.Pointer<ffi.Void>);
+typedef _FgbDartOpaquePortNative = ffi.Void Function(ffi.Int64);
+typedef _FgbDartOpaquePortDart = void Function(int);
 
 final class _FgbBindings {
   _FgbBindings(this.library)
@@ -321,6 +323,7 @@ final class _FgbBindings {
         cst = library.lookupFunction<_FgbCstNative, _FgbCstDart>('fgb_cst'),
         cstAsync = library.lookupFunction<_FgbCstAsyncNative, _FgbCstAsyncDart>('fgb_cst_async'),
         dcoFree = library.lookupFunction<_FgbDcoFreeNative, _FgbDcoFreeDart>('fgb_dco_free'),
+        dartOpaquePort = library.lookupFunction<_FgbDartOpaquePortNative, _FgbDartOpaquePortDart>('fgb_dart_opaque_port'),
         dropAddress = library.lookup<ffi.NativeFunction<_FgbDropNative>>('fgb_drop');
 
   final ffi.DynamicLibrary library;
@@ -333,6 +336,7 @@ final class _FgbBindings {
   final ffi.Pointer<ffi.Void> Function(int, ffi.Pointer<ffi.Void>) cst;
   final void Function(int, ffi.Pointer<ffi.Void>, int) cstAsync;
   final void Function(ffi.Pointer<ffi.Void>) dcoFree;
+  final void Function(int) dartOpaquePort;
   final ffi.Pointer<ffi.NativeFunction<_FgbDropNative>> dropAddress;
 }
 
@@ -441,6 +445,14 @@ final class __FGB_BRIDGE_CLASS__ {
       : _handleFinalizer = ffi.NativeFinalizer(_bindings.dropAddress) {
     final status = _bindings.init(ffi.NativeApi.initializeApiDLData);
     if (status != 0) throw StateError('Dart API DL initialization failed (status $status)');
+    // Go notifies this port when the last Go copy of a DartOpaque value was
+    // collected; the entry keeping the Dart object alive is then dropped. The
+    // port must not keep the isolate alive on its own.
+    _dartOpaqueReleases.keepIsolateAlive = false;
+    _dartOpaqueReleases.handler = (Object? message) {
+      if (message is int) _dartOpaqueObjects.remove(message);
+    };
+    _bindings.dartOpaquePort(_dartOpaqueReleases.sendPort.nativePort);
   }
 
   static __FGB_BRIDGE_CLASS__? _instance;
@@ -477,7 +489,26 @@ final class __FGB_BRIDGE_CLASS__ {
   final _FgbBindings _bindings;
   final String? _libraryPath;
   final ffi.NativeFinalizer _handleFinalizer;
+  final RawReceivePort _dartOpaqueReleases = RawReceivePort();  final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
+  int _dartOpaqueNextHandle = 0;
   static const _FgbCodec _codec = _FgbCodec();
+
+  /// Internal: registers a Dart object crossing into Go as a DartOpaque
+  /// handle. The registry entry keeps the object alive while Go holds it.
+  int fgbInternalRegisterDartOpaque(Object value) {
+    final handle = ++_dartOpaqueNextHandle;
+    _dartOpaqueObjects[handle] = value;
+    return handle;
+  }
+
+  /// Internal: resolves a DartOpaque handle returned by Go.
+  Object fgbInternalResolveDartOpaque(int handle, String path) {
+    final value = _dartOpaqueObjects[handle];
+    if (value == null) {
+      throw StateError('$path: unknown or released DartOpaque handle $handle');
+    }
+    return value;
+  }
 
   /// Internal entrypoint used by generated per-source Dart API files.
   Object? fgbInvokeSync(String method, List<Object?> arguments) {

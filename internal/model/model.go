@@ -19,6 +19,13 @@ type API struct {
 	Callables   []*Callable
 	Types       map[*types.TypeName]*TypeDecl
 	Constants   map[*types.Named][]*Constant
+	// IgnoredTypes records input-package type names carrying fgb(ignore).
+	// Their methods are dropped; referencing them from a bridged signature is
+	// a generation error.
+	IgnoredTypes map[string]bool
+	// OpaqueTypes records input-package type names carrying fgb(opaque):
+	// they always bridge as GoOpaque handles, never as serialized fields.
+	OpaqueTypes map[string]bool
 }
 
 // CallMode controls which Dart entrypoint is emitted for a Go callable.

@@ -9,32 +9,35 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
 	"github.com/star4277/flutter-go-bridge-gokit/internal/model"
 	"github.com/star4277/flutter-go-bridge-gokit/internal/names"
 )
 
-type namedUsage uint8
+// structClass is the FRB-style bridge classification of a named Go struct:
+// fully translatable structs travel by serialized fields, everything else
+// degrades to a GoOpaque handle.
+type structClass uint8
 
 const (
-	usageUnknown namedUsage = iota
-	usageValue
-	usageOpaque
+	classUnknown structClass = iota
+	classInProgress
+	classValue
+	classOpaque
 )
 
 type builder struct {
-	api          *model.API
-	config       config.Resolved
-	unit         *unit
-	typeCache    map[types.Type]*wireType
-	namedUsage   map[*types.Named]namedUsage
-	namedModels  map[*types.Named]*namedModel
-	structModels map[*types.Named]*structModel
-	opaqueModels map[*types.Named]*opaqueModel
-	warnings     []error
-	nextTypeID   int
+	api           *model.API
+	config        config.Resolved
+	unit          *unit
+	typeCache     map[types.Type]*wireType
+	structClasses map[*types.Named]structClass
+	namedModels   map[*types.Named]*namedModel
+	structModels  map[*types.Named]*structModel
+	opaqueModels  map[*types.Named]*opaqueModel
+	warnings      []error
+	nextTypeID    int
 }
 
 func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []error, error) {
@@ -62,12 +65,10 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 	}
 	b := &builder{
 		api: api, config: resolved, unit: result,
-		typeCache: map[types.Type]*wireType{}, namedUsage: map[*types.Named]namedUsage{},
-		namedModels: map[*types.Named]*namedModel{}, structModels: map[*types.Named]*structModel{},
+		typeCache:     map[types.Type]*wireType{},
+		structClasses: map[*types.Named]structClass{},
+		namedModels:   map[*types.Named]*namedModel{}, structModels: map[*types.Named]*structModel{},
 		opaqueModels: map[*types.Named]*opaqueModel{},
-	}
-	if err := b.discoverUsages(); err != nil {
-		return nil, nil, err
 	}
 	for _, callable := range api.Callables {
 		call, err := b.mapCallable(callable)
@@ -102,112 +103,6 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 	return b.unit, b.warnings, nil
 }
 
-func (b *builder) discoverUsages() error {
-	// Pointer receivers force reference semantics. Value receivers alone do not.
-	for _, callable := range b.api.Callables {
-		if callable.PointerRecv && callable.Receiver != nil {
-			if err := b.markNamedUsage(callable.Receiver, usageOpaque); err != nil {
-				return err
-			}
-		}
-	}
-	for _, callable := range b.api.Callables {
-		sig := callable.Signature
-		for i := 0; i < sig.Params().Len(); i++ {
-			if err := b.discoverTypeUsage(sig.Params().At(i).Type(), map[types.Type]bool{}); err != nil {
-				return fmt.Errorf("%s parameter %d: %w", callable.Func.FullName(), i, err)
-			}
-		}
-		for i := 0; i < sig.Results().Len(); i++ {
-			if isErrorType(sig.Results().At(i).Type()) {
-				continue
-			}
-			if err := b.discoverTypeUsage(sig.Results().At(i).Type(), map[types.Type]bool{}); err != nil {
-				return fmt.Errorf("%s result %d: %w", callable.Func.FullName(), i, err)
-			}
-		}
-	}
-	return nil
-}
-
-func (b *builder) discoverTypeUsage(typ types.Type, seen map[types.Type]bool) error {
-	typ = types.Unalias(typ)
-	if seen[typ] {
-		return nil
-	}
-	seen[typ] = true
-	switch typ := typ.(type) {
-	case *types.Pointer:
-		elem := types.Unalias(typ.Elem())
-		if named, ok := elem.(*types.Named); ok {
-			if _, ok := named.Underlying().(*types.Struct); ok && !isBigInt(named) {
-				// A pointer to an ordinary value struct is an optional,
-				// serializable value. Pointer receiver methods are marked
-				// opaque in the pass above and retain handle semantics.
-				if b.namedUsage[named] == usageOpaque {
-					return nil
-				}
-				if err := b.markNamedUsage(named, usageValue); err != nil {
-					return err
-				}
-				structure := named.Underlying().(*types.Struct)
-				for i := 0; i < structure.NumFields(); i++ {
-					field := structure.Field(i)
-					if field.Name() == "_" || field.Pkg() != nil && !field.Exported() {
-						continue
-					}
-					if err := b.discoverTypeUsage(field.Type(), seen); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
-		}
-		return b.discoverTypeUsage(elem, seen)
-	case *types.Named:
-		if _, ok := typ.Underlying().(*types.Struct); ok && !isTime(typ) && !isBigInt(typ) {
-			if err := b.markNamedUsage(typ, usageValue); err != nil {
-				return err
-			}
-			structure := typ.Underlying().(*types.Struct)
-			for i := 0; i < structure.NumFields(); i++ {
-				field := structure.Field(i)
-				if field.Name() == "_" || field.Pkg() != nil && !field.Exported() {
-					continue
-				}
-				if err := b.discoverTypeUsage(field.Type(), seen); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		return b.discoverTypeUsage(typ.Underlying(), seen)
-	case *types.Slice:
-		return b.discoverTypeUsage(typ.Elem(), seen)
-	case *types.Array:
-		return b.discoverTypeUsage(typ.Elem(), seen)
-	case *types.Map:
-		if err := b.discoverTypeUsage(typ.Key(), seen); err != nil {
-			return err
-		}
-		return b.discoverTypeUsage(typ.Elem(), seen)
-	default:
-		return nil
-	}
-}
-
-func (b *builder) markNamedUsage(named *types.Named, usage namedUsage) error {
-	if named.Obj() == nil || named.Obj().Pkg() == nil {
-		return nil
-	}
-	previous := b.namedUsage[named]
-	if previous != usageUnknown && previous != usage {
-		return fmt.Errorf("Go struct %s is used both by value and by pointer; choose one bridge representation", named.Obj().Name())
-	}
-	b.namedUsage[named] = usage
-	return nil
-}
-
 func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 	sig := source.Signature
 	if sig.TypeParams() != nil && sig.TypeParams().Len() != 0 {
@@ -224,21 +119,20 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		call.WireName = source.Func.Name()
 		call.GoTarget = b.qualifyInput(source.Func.Name())
 	} else {
-		usage := b.namedUsage[source.Receiver]
-		if usage == usageOpaque {
-			pointer := types.NewPointer(source.Receiver)
-			receiver, err := b.mapType(pointer)
-			if err != nil {
-				return nil, fmt.Errorf("receiver: %w", err)
-			}
-			call.Receiver = receiver
+		// Value structs travel by serialized fields (pointer-receiver methods
+		// then operate on the reconstructed, addressable Go value); GoOpaque
+		// receivers keep handle semantics and preserve Go-side state.
+		var receiver *wireType
+		var err error
+		if b.classifyStruct(source.Receiver) == classOpaque {
+			receiver, err = b.mapType(types.NewPointer(source.Receiver))
 		} else {
-			receiver, err := b.mapType(source.Receiver)
-			if err != nil {
-				return nil, fmt.Errorf("receiver: %w", err)
-			}
-			call.Receiver = receiver
+			receiver, err = b.mapType(source.Receiver)
 		}
+		if err != nil {
+			return nil, fmt.Errorf("receiver: %w", err)
+		}
+		call.Receiver = receiver
 		call.WireName = source.Receiver.Obj().Name() + "." + source.Func.Name()
 		call.GoTarget = source.Func.Name()
 	}
@@ -300,11 +194,11 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 				b.unit.UsesBigInt = true
 				return b.newSimpleType(original, kindBigInt, "BigInt?"), nil
 			}
-			if _, ok := named.Underlying().(*types.Struct); ok {
+			if _, ok := named.Underlying().(*types.Struct); ok && !isDartOpaque(named) && !isTime(named) {
 				if err := b.ensureNamedFromInput(named); err != nil {
 					return nil, err
 				}
-				if b.namedUsage[named] == usageOpaque {
+				if b.classifyStruct(named) == classOpaque {
 					return b.mapOpaque(original, named)
 				}
 			}
@@ -375,12 +269,16 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			b.unit.UsesBigInt = true
 			return b.newSimpleType(original, kindBigInt, "BigInt"), nil
 		}
+		if isDartOpaque(typ) {
+			b.unit.UsesDartOpaque = true
+			return b.newSimpleType(original, kindDartOpaque, "Object"), nil
+		}
 		if err := b.ensureNamedFromInput(typ); err != nil {
 			return nil, err
 		}
 		if _, ok := typ.Underlying().(*types.Struct); ok {
-			if b.namedUsage[typ] == usageOpaque {
-				return b.mapOpaque(types.NewPointer(typ), typ)
+			if b.classifyStruct(typ) == classOpaque {
+				return nil, fmt.Errorf("GoOpaque type %s must be passed as *%s", typ.Obj().Name(), typ.Obj().Name())
 			}
 			return b.mapStruct(original, typ)
 		}
@@ -472,6 +370,192 @@ func (b *builder) mapNamed(original types.Type, named *types.Named) (*wireType, 
 	return result, nil
 }
 
+// classifyStruct decides how a named struct bridges. FRB semantics: a struct
+// whose (bridged) fields are all translatable becomes a Dart value class;
+// anything else - or an explicit fgb(opaque) - becomes a GoOpaque handle.
+func (b *builder) classifyStruct(named *types.Named) structClass {
+	if named == nil || named.Obj() == nil {
+		return classValue
+	}
+	if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
+		return classValue
+	}
+	if existing := b.structClasses[named]; existing == classValue || existing == classOpaque {
+		return existing
+	}
+	if b.structClasses[named] == classInProgress {
+		// A pointer cycle through value structs stays translatable; the
+		// outermost frame owns the final verdict.
+		return classValue
+	}
+	if named.Obj().Pkg() == b.api.Package.Types && b.api.OpaqueTypes[named.Obj().Name()] {
+		b.structClasses[named] = classOpaque
+		return classOpaque
+	}
+	b.structClasses[named] = classInProgress
+	class := classValue
+	goStruct := named.Underlying().(*types.Struct)
+	for i := 0; i < goStruct.NumFields(); i++ {
+		field := goStruct.Field(i)
+		tag := reflect.StructTag(goStruct.Tag(i))
+		options, err := parseFieldTag(tag.Get("fgb"))
+		if err != nil {
+			// The tag error surfaces from mapStruct with full context.
+			continue
+		}
+		if skipStructField(field, tag, options) {
+			continue
+		}
+		if reason := b.fieldTranslateBlocker(field.Type(), map[types.Type]bool{}); reason != "" {
+			b.warnings = append(b.warnings, fmt.Errorf(
+				"struct %s bridges as GoOpaque because field %s %s; mark the type with fgb(opaque) to silence this warning",
+				named.Obj().Name(), field.Name(), reason))
+			class = classOpaque
+			break
+		}
+	}
+	b.structClasses[named] = class
+	return class
+}
+
+// fieldTranslateBlocker reports why a field type prevents value translation,
+// or "" when it is serializable.
+func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool) string {
+	typ = types.Unalias(typ)
+	if seen[typ] {
+		return ""
+	}
+	seen[typ] = true
+	switch typ := typ.(type) {
+	case *types.Basic:
+		switch typ.Kind() {
+		case types.Bool, types.String,
+			types.Int8, types.Int16, types.Int32, types.Int64, types.Int,
+			types.Uint8, types.Uint16, types.Uint32, types.Uint64, types.Uint, types.Uintptr,
+			types.Float32, types.Float64:
+			return ""
+		default:
+			return fmt.Sprintf("has unsupported basic type %s", typ.Name())
+		}
+	case *types.Pointer:
+		elem := types.Unalias(typ.Elem())
+		if _, nested := elem.(*types.Pointer); nested {
+			return "has a nested pointer type"
+		}
+		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isBigInt(named) && !isDartOpaque(named) {
+			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
+				if external := b.externalTypeBlocker(named); external != "" {
+					return external
+				}
+				// *Struct is always bridgeable: either an optional value or a
+				// GoOpaque handle.
+				return ""
+			}
+		}
+		return b.fieldTranslateBlocker(elem, seen)
+	case *types.Slice:
+		return b.fieldTranslateBlocker(typ.Elem(), seen)
+	case *types.Array:
+		return b.fieldTranslateBlocker(typ.Elem(), seen)
+	case *types.Map:
+		if blocker := b.fieldTranslateBlocker(typ.Key(), seen); blocker != "" {
+			return blocker
+		}
+		return b.fieldTranslateBlocker(typ.Elem(), seen)
+	case *types.Interface:
+		if typ.Empty() {
+			return ""
+		}
+		return "has a non-empty interface type"
+	case *types.Named:
+		if isTime(typ) || isBigInt(typ) || isDartOpaque(typ) {
+			return ""
+		}
+		if external := b.externalTypeBlocker(typ); external != "" {
+			return external
+		}
+		if _, isStruct := typ.Underlying().(*types.Struct); isStruct {
+			if b.classifyStruct(typ) == classOpaque {
+				return fmt.Sprintf("holds GoOpaque struct %s by value (use *%s)", typ.Obj().Name(), typ.Obj().Name())
+			}
+			return ""
+		}
+		return b.fieldTranslateBlocker(typ.Underlying(), seen)
+	case *types.Signature:
+		return "has a function type"
+	case *types.Chan:
+		return "has a channel type"
+	default:
+		return fmt.Sprintf("has unsupported type %s", typ.String())
+	}
+}
+
+func (b *builder) externalTypeBlocker(named *types.Named) string {
+	if named.Obj() == nil || named.Obj().Pkg() == nil || named.Obj().Pkg() == b.api.Package.Types {
+		return ""
+	}
+	return fmt.Sprintf("uses external type %s.%s", named.Obj().Pkg().Path(), named.Obj().Name())
+}
+
+// skipStructField mirrors the shared exclusion rules: blank/unexported fields
+// and fields opted out through fgb/json/flutter_go_bridge tags.
+func skipStructField(field *types.Var, tag reflect.StructTag, options fieldTagOptions) bool {
+	if options.Ignore || field.Name() == "_" || !field.Exported() {
+		return true
+	}
+	if strings.Split(tag.Get("flutter_go_bridge"), ",")[0] == "-" {
+		return true
+	}
+	return strings.Split(tag.Get("json"), ",")[0] == "-"
+}
+
+// fieldTagOptions is the parsed form of an `fgb:"..."` struct tag.
+type fieldTagOptions struct {
+	Ignore       bool
+	NonFinal     bool
+	Rename       string
+	DefaultValue string
+}
+
+// parseFieldTag understands `fgb:"ignore"`, `fgb:"rename:name"`,
+// `fgb:"non-final"`, and `fgb:"defaultValue: expr"` - combinable with commas.
+// defaultValue consumes the rest of the tag so Dart expressions may contain
+// commas; it must therefore be the last option.
+func parseFieldTag(raw string) (fieldTagOptions, error) {
+	var result fieldTagOptions
+	rest := strings.TrimSpace(raw)
+	for rest != "" {
+		if value, ok := strings.CutPrefix(rest, "defaultValue:"); ok {
+			result.DefaultValue = strings.TrimSpace(value)
+			if result.DefaultValue == "" {
+				return result, errors.New(`fgb:"defaultValue:" needs a Dart expression`)
+			}
+			break
+		}
+		token := rest
+		if index := strings.Index(rest, ","); index >= 0 {
+			token, rest = strings.TrimSpace(rest[:index]), strings.TrimSpace(rest[index+1:])
+		} else {
+			rest = ""
+		}
+		switch {
+		case token == "":
+		case token == "ignore" || token == "-":
+			result.Ignore = true
+		case token == "non-final":
+			result.NonFinal = true
+		case strings.HasPrefix(token, "rename:"):
+			result.Rename = strings.TrimSpace(strings.TrimPrefix(token, "rename:"))
+			if result.Rename == "" {
+				return result, errors.New(`fgb:"rename:" needs a field name`)
+			}
+		default:
+			return result, fmt.Errorf("unknown fgb field tag option %q (want ignore, rename:name, non-final, or defaultValue: expr)", token)
+		}
+	}
+	return result, nil
+}
+
 func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType, error) {
 	if existing := b.structModels[named]; existing != nil {
 		return existing.Type, nil
@@ -498,17 +582,19 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 	for i := 0; i < goStruct.NumFields(); i++ {
 		field := goStruct.Field(i)
 		tag := reflect.StructTag(goStruct.Tag(i))
-		jsonName := strings.Split(tag.Get("json"), ",")[0]
-		fgbName := strings.Split(tag.Get("flutter_go_bridge"), ",")[0]
-		if fgbName == "-" || jsonName == "-" || field.Name() == "_" {
+		options, err := parseFieldTag(tag.Get("fgb"))
+		if err != nil {
+			return nil, fmt.Errorf("struct %s field %s: %w", named.Obj().Name(), field.Name(), err)
+		}
+		if skipStructField(field, tag, options) {
 			continue
 		}
-		if !field.Exported() {
-			return nil, fmt.Errorf("value struct %s has unexported field %s; exclude it with `flutter_go_bridge:\"-\"`", named.Obj().Name(), field.Name())
-		}
-		wireName := fgbName
+		wireName := options.Rename
 		if wireName == "" {
-			wireName = jsonName
+			wireName = strings.Split(tag.Get("flutter_go_bridge"), ",")[0]
+		}
+		if wireName == "" {
+			wireName = strings.Split(tag.Get("json"), ",")[0]
 		}
 		if wireName == "" {
 			wireName = names.LowerCamel(field.Name())
@@ -521,10 +607,15 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", field.Name(), err)
 		}
-		dartName := uniqueName(names.LowerCamel(wireName), usedNames)
+		dartName := options.Rename
+		if dartName == "" {
+			dartName = names.LowerCamel(wireName)
+		}
+		dartName = uniqueName(dartName, usedNames)
 		structure.Fields = append(structure.Fields, &fieldModel{
 			GoName: field.Name(), CName: names.CIdentifier(wireName), DartName: dartName, WireName: wireName,
 			Type: mapped, Optional: isPointerType(field.Type()),
+			NonFinal: options.NonFinal, DefaultValue: options.DefaultValue,
 		})
 	}
 	return result, nil
@@ -589,7 +680,10 @@ func (b *builder) ensureNamedFromInput(named *types.Named) error {
 		return nil
 	}
 	if named.Obj().Pkg() != b.api.Package.Types {
-		return fmt.Errorf("external named type %s.%s is not supported yet (time.Time and math/big.Int are supported)", named.Obj().Pkg().Path(), named.Obj().Name())
+		return fmt.Errorf("external named type %s.%s is not supported yet (time.Time, math/big.Int, and fgb.DartOpaque are supported)", named.Obj().Pkg().Path(), named.Obj().Name())
+	}
+	if b.api.IgnoredTypes[named.Obj().Name()] {
+		return fmt.Errorf("type %s is marked fgb(ignore) but is used by the bridged API", named.Obj().Name())
 	}
 	return nil
 }
@@ -612,6 +706,14 @@ func isTime(named *types.Named) bool {
 
 func isBigInt(named *types.Named) bool {
 	return isNamed(named, "math/big", "Int")
+}
+
+// dartOpaquePackagePath is the runtime module holding fgb.DartOpaque; the
+// generated bridge imports it only when the API actually uses DartOpaque.
+const dartOpaquePackagePath = "github.com/star4277/flutter-go-bridge-gokit/fgb"
+
+func isDartOpaque(named *types.Named) bool {
+	return isNamed(named, dartOpaquePackagePath, "DartOpaque")
 }
 
 func isNamed(named *types.Named, packagePath, name string) bool {
@@ -661,13 +763,6 @@ func dartConstantLiteral(value constant.Value, underlying *wireType) (string, bo
 	default:
 		return "", false, fmt.Errorf("underlying type %s cannot be emitted as a Dart constant", underlying.Kind)
 	}
-}
-
-func exportedIdentifier(value string) bool {
-	for _, r := range value {
-		return unicode.IsUpper(r)
-	}
-	return false
 }
 
 func isPointerType(typ types.Type) bool {

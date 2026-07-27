@@ -42,6 +42,11 @@ func renderGo(unit *unit) ([]byte, error) {
 	for _, item := range imports {
 		r.line("\t%q", item)
 	}
+	if unit.UsesDartOpaque {
+		// The exported ABI already owns the identifier `fgb` (the sync
+		// entrypoint), so the runtime package needs an alias.
+		r.line("\tfgbrt %q", dartOpaquePackagePath)
+	}
 	if !unit.Direct {
 		r.line("\tapi %q", unit.PackagePath)
 	}
@@ -188,6 +193,11 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tresult, ok := raw.(%s)", goType)
 		r.raw("\tif !ok { return nil, fmt.Errorf(\"%s: handle %d has incompatible Go type %T\", path, handle, raw) }")
 		r.line("\treturn result, nil")
+	case kindDartOpaque:
+		r.line("\traw, err := fgbAsInt64(value, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tif raw == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid DartOpaque handle 0\", path) }", goType)
+		r.line("\treturn fgbrt.NewDartOpaque(raw, fgbReleaseDartOpaque), nil")
 	case kindNamed:
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -275,6 +285,9 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\tif handle == 0 { return nil, fmt.Errorf(\"opaque handle space exhausted\") }")
 		r.line("\tfgbHandles.Store(handle, value)")
 		r.line("\treturn int64(handle), nil")
+	case kindDartOpaque:
+		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
+		r.line("\treturn value.Handle(), nil")
 	case kindNamed:
 		underlyingGo := r.goType(typ.Named.Underlying.Original)
 		r.line("\treturn fgbEncode%d(%s(value))", typ.Named.Underlying.ID, underlyingGo)
@@ -294,8 +307,12 @@ func (r *goRenderer) renderDispatch() {
 		if call.Receiver != nil {
 			argumentCount++
 		}
-		r.line("\t\targs, err := fgbRequireArgs(call.Arguments, %d)", argumentCount)
-		r.line("\t\tif err != nil { return nil, fgbInvalidArguments(call.Method, err) }")
+		if argumentCount == 0 {
+			r.line("\t\tif _, err := fgbRequireArgs(call.Arguments, 0); err != nil { return nil, fgbInvalidArguments(call.Method, err) }")
+		} else {
+			r.line("\t\targs, err := fgbRequireArgs(call.Arguments, %d)", argumentCount)
+			r.line("\t\tif err != nil { return nil, fgbInvalidArguments(call.Method, err) }")
+		}
 		argOffset := 0
 		if call.Receiver != nil {
 			r.line("\t\treceiver, err := fgbDecode%d(args[0], \"receiver\")", call.Receiver.ID)
@@ -422,6 +439,8 @@ func (r *goRenderer) goType(typ types.Type) string {
 			return "time"
 		case "math/big":
 			return "big"
+		case dartOpaquePackagePath:
+			return "fgbrt"
 		default:
 			return pkg.Name()
 		}

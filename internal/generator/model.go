@@ -23,6 +23,7 @@ const (
 	kindMap         typeKind = "map"
 	kindStruct      typeKind = "struct"
 	kindOpaque      typeKind = "opaque"
+	kindDartOpaque  typeKind = "dart_opaque"
 	kindNamed       typeKind = "named"
 	kindBytes       typeKind = "bytes"
 	kindInt32List   typeKind = "int32_list"
@@ -42,14 +43,15 @@ type unit struct {
 	GoPreamble   string
 	DartPreamble string
 
-	Calls      []*callModel
-	TopCalls   []*callModel
-	Types      []*wireType
-	Structs    []*structModel
-	Opaques    []*opaqueModel
-	Named      []*namedModel
-	UsesTime   bool
-	UsesBigInt bool
+	Calls          []*callModel
+	TopCalls       []*callModel
+	Types          []*wireType
+	Structs        []*structModel
+	Opaques        []*opaqueModel
+	Named          []*namedModel
+	UsesTime       bool
+	UsesBigInt     bool
+	UsesDartOpaque bool
 }
 
 // codecMode mirrors flutter_rust_bridge's directional codec model. The
@@ -150,6 +152,11 @@ type fieldModel struct {
 	WireName string
 	Type     *wireType
 	Optional bool
+	// NonFinal drops the Dart `final` keyword (fgb:"non-final").
+	NonFinal bool
+	// DefaultValue is a raw Dart expression used as the constructor default
+	// (fgb:"defaultValue: ..."); such fields are not `required`.
+	DefaultValue string
 }
 
 type opaqueModel struct {

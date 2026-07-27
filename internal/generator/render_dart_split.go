@@ -30,15 +30,22 @@ func dartResultType(call *callModel) string {
 	return call.Result.DartType
 }
 
+// dartParams renders the public API parameter list. Every generated Dart
+// entrypoint uses named parameters; Go pointer parameters map to optional
+// nullable ones, everything else is required.
 func dartParams(call *callModel) string {
 	if call == nil || len(call.Params) == 0 {
 		return ""
 	}
 	params := make([]string, 0, len(call.Params))
 	for _, param := range call.Params {
-		params = append(params, fmt.Sprintf("%s %s", param.Type.DartType, param.DartName))
+		if isPointerType(param.Type.Original) {
+			params = append(params, fmt.Sprintf("%s %s", param.Type.DartType, param.DartName))
+		} else {
+			params = append(params, fmt.Sprintf("required %s %s", param.Type.DartType, param.DartName))
+		}
 	}
-	return strings.Join(params, ", ")
+	return "{" + strings.Join(params, ", ") + "}"
 }
 
 func isAsyncCall(call *callModel) bool {
@@ -64,10 +71,6 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 	for _, key := range orderedKeys {
 		relative := paths[key]
 		centralRenderer.line("import %s;", strconv.Quote(filepath.ToSlash(relative)))
-	}
-	for _, key := range orderedKeys {
-		relative := paths[key]
-		centralRenderer.line("export %s;", strconv.Quote(filepath.ToSlash(relative)))
 	}
 	centralRenderer.line("")
 	if unit.DartPreamble != "" {
@@ -109,7 +112,6 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		renderer.line("// ignore_for_file: unused_element, unused_import, unnecessary_import")
 		renderer.line("import %s;", centralImport)
 		renderer.line("import 'dart:typed_data';")
-		renderer.line("export %s show __FGB_BRIDGE_CLASS__, FgbPlatformException;", centralImport)
 		renderer.line("")
 		group := groups[key]
 		for _, structure := range group.Structs {
@@ -263,14 +265,28 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 	r.dartDoc(structure.Docs, "")
 	r.line("final class %s {", structure.DartName)
 	for _, field := range structure.Fields {
-		r.line("  final %s %s;", field.Type.DartType, field.DartName)
+		if field.NonFinal {
+			r.line("  %s %s;", field.Type.DartType, field.DartName)
+		} else {
+			r.line("  final %s %s;", field.Type.DartType, field.DartName)
+		}
 	}
 	r.line("")
-	r.line("  const %s({", structure.DartName)
+	constructorKeyword := "const "
 	for _, field := range structure.Fields {
-		if field.Optional {
+		if field.NonFinal {
+			constructorKeyword = ""
+			break
+		}
+	}
+	r.line("  %s%s({", constructorKeyword, structure.DartName)
+	for _, field := range structure.Fields {
+		switch {
+		case field.DefaultValue != "":
+			r.line("    this.%s = %s,", field.DartName, field.DefaultValue)
+		case field.Optional:
 			r.line("    this.%s,", field.DartName)
-		} else {
+		default:
 			r.line("    required this.%s,", field.DartName)
 		}
 	}
@@ -285,8 +301,8 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 
 func (r *splitDartRenderer) renderOpaque(opaque *opaqueModel) {
 	r.dartDoc(opaque.Docs, "")
-	r.line("final class %s extends FgbOpaque {", opaque.DartName)
-	r.line("  %s.fgbInternal(__FGB_BRIDGE_CLASS__ bridge, int handle) : super(bridge, handle);", opaque.DartName)
+	r.line("final class %s extends GoOpaque {", opaque.DartName)
+	r.line("  %s.fgbInternal({required super.fgbBridge, required super.fgbHandle});", opaque.DartName)
 	for _, call := range opaque.Methods {
 		r.line("")
 		r.renderInstanceCall(call, "this", "fgbBridge", false, "  ")
@@ -348,15 +364,6 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 	r.line("%s}", indent)
 }
 
-func (r *splitDartRenderer) renderCallReturn(call *callModel, indent, invocation, bridge string) {
-	if call.Result == nil {
-		r.line("%s%s;", indent, invocation)
-		return
-	}
-	r.line("%sfinal wireResult = %s;", indent, invocation)
-	r.line("%sreturn fgbDecode%d(wireResult, %s, 'result');", indent, call.Result.ID, bridge)
-}
-
 func (r *splitDartRenderer) line(format string, args ...any) {
 	if len(args) == 0 {
 		r.buffer.WriteString(format)
@@ -375,7 +382,7 @@ func (r *splitDartRenderer) dartDoc(docs, indent string) {
 	if docs == "" {
 		return
 	}
-	for _, line := range strings.Split(docs, "\n") {
+	for line := range strings.SplitSeq(docs, "\n") {
 		r.line("%s/// %s", indent, strings.ReplaceAll(line, "*/", "* /"))
 	}
 }
@@ -470,7 +477,10 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindOpaque:
 		r.line("  if (value == null) return null;")
 		r.line("  if (value is! int || value <= 0) throw FormatException('$path: expected opaque handle');")
-		r.line("  return %s.fgbInternal(bridge, value);", typ.Opaque.DartName)
+		r.line("  return %s.fgbInternal(fgbBridge: bridge, fgbHandle: value);", typ.Opaque.DartName)
+	case kindDartOpaque:
+		r.line("  if (value is! int) throw FormatException('$path: expected DartOpaque handle');")
+		r.line("  return bridge.fgbInternalResolveDartOpaque(value, path);")
 	case kindNamed:
 		r.line("  return %s(fgbDecode%d(value, bridge, path));", typ.Named.DartName, typ.Named.Underlying.ID)
 	default:
@@ -519,6 +529,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  if (value == null) return null;")
 		r.line("  if (!identical(value.fgbBridge, bridge)) throw StateError('opaque value belongs to a different bridge');")
 		r.line("  return value.fgbHandle;")
+	case kindDartOpaque:
+		r.line("  return bridge.fgbInternalRegisterDartOpaque(value);")
 	case kindNamed:
 		r.line("  return fgbEncode%d(value.value, bridge, path);", typ.Named.Underlying.ID)
 	default:

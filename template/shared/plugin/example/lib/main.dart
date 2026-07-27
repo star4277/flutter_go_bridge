@@ -16,7 +16,7 @@ class MyApp extends StatelessWidget {
         appBar: AppBar(title: const Text('flutter_go_bridge quickstart')),
         body: Center(
           child: Text(
-            'Action: Call go `greet("Tom")`\nResult: `${greeting("Tom")}`',
+            'Action: Call go `greet("Tom")`\nResult: `${greeting(name: "Tom")}`',
           ),
         ),
       ),

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/star4277/flutter-go-bridge-gokit/internal/model"
@@ -72,10 +73,12 @@ func Parse(options Options) (*model.API, error) {
 	}
 
 	api := &model.API{
-		Package:   pkg,
-		InputDir:  packageDir(pkg, dir),
-		Types:     map[*types.TypeName]*model.TypeDecl{},
-		Constants: map[*types.Named][]*model.Constant{},
+		Package:      pkg,
+		InputDir:     packageDir(pkg, dir),
+		Types:        map[*types.TypeName]*model.TypeDecl{},
+		Constants:    map[*types.Named][]*model.Constant{},
+		IgnoredTypes: map[string]bool{},
+		OpaqueTypes:  map[string]bool{},
 	}
 
 	seenSourceFiles := map[string]bool{}
@@ -125,6 +128,17 @@ func Parse(options Options) (*model.API, error) {
 		}
 	}
 
+	// A type marked fgb(ignore) drags its methods with it, wherever they were
+	// declared.
+	kept := api.Callables[:0]
+	for _, callable := range api.Callables {
+		if callable.Receiver != nil && api.IgnoredTypes[callable.Receiver.Obj().Name()] {
+			continue
+		}
+		kept = append(kept, callable)
+	}
+	api.Callables = kept
+
 	sort.SliceStable(api.Callables, func(i, j int) bool {
 		return api.Callables[i].Position < api.Callables[j].Position
 	})
@@ -142,16 +156,19 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 		switch declaration := declaration.(type) {
 		case *ast.FuncDecl:
 			object, _ := api.Package.TypesInfo.Defs[declaration.Name].(*types.Func)
-			if object == nil || !object.Exported() || hasIgnoreDirective(declaration.Doc) {
+			if object == nil || !object.Exported() {
 				continue
 			}
 			signature, _ := object.Type().(*types.Signature)
 			if signature == nil {
 				continue
 			}
-			mode, err := directiveCallMode(declaration.Doc)
+			directives, err := parseDirectives(declaration.Doc)
 			if err != nil {
 				return fmt.Errorf("%s: %w", object.FullName(), err)
+			}
+			if directives.Ignore {
+				continue
 			}
 			callable := &model.Callable{
 				Func:       object,
@@ -159,8 +176,8 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 				Position:   declaration.Pos(),
 				SourceFile: sourceFile,
 				Docs:       cleanDocs(declaration.Doc),
-				DartName:   directiveValue(declaration.Doc, "dart_name"),
-				Mode:       mode,
+				DartName:   directives.Rename,
+				Mode:       directives.Mode,
 			}
 			if callable.DartName == "" {
 				callable.DartName = names.LowerCamel(object.Name())
@@ -187,8 +204,19 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 						continue
 					}
 					object, _ := api.Package.TypesInfo.Defs[typeSpec.Name].(*types.TypeName)
-					if object == nil || hasIgnoreDirective(typeSpec.Doc) || hasIgnoreDirective(declaration.Doc) {
+					if object == nil {
 						continue
+					}
+					directives, err := mergeSpecDirectives(typeSpec.Doc, declaration.Doc)
+					if err != nil {
+						return fmt.Errorf("type %s: %w", object.Name(), err)
+					}
+					if directives.Ignore {
+						api.IgnoredTypes[object.Name()] = true
+						continue
+					}
+					if directives.Opaque {
+						api.OpaqueTypes[object.Name()] = true
 					}
 					named, _ := object.Type().(*types.Named)
 					if named == nil {
@@ -198,7 +226,7 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 					if docs == nil {
 						docs = declaration.Doc
 					}
-					dartName := directiveValue(docs, "dart_name")
+					dartName := directives.Rename
 					if dartName == "" {
 						dartName = names.UpperCamel(object.Name())
 					}
@@ -213,9 +241,16 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 					if valueSpec == nil {
 						continue
 					}
+					directives, err := mergeSpecDirectives(valueSpec.Doc, declaration.Doc)
+					if err != nil {
+						return fmt.Errorf("const %s: %w", constSpecName(valueSpec), err)
+					}
+					if directives.Ignore {
+						continue
+					}
 					for _, identifier := range valueSpec.Names {
 						object, _ := api.Package.TypesInfo.Defs[identifier].(*types.Const)
-						if object == nil || !object.Exported() || hasIgnoreDirective(valueSpec.Doc) || hasIgnoreDirective(declaration.Doc) {
+						if object == nil || !object.Exported() {
 							continue
 						}
 						named, _ := types.Unalias(object.Type()).(*types.Named)
@@ -226,7 +261,7 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 						if docs == nil {
 							docs = declaration.Doc
 						}
-						dartName := directiveValue(docs, "dart_name")
+						dartName := directives.Rename
 						if dartName == "" {
 							dartName = names.LowerCamel(identifier.Name)
 						}
@@ -239,6 +274,13 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 		}
 	}
 	return nil
+}
+
+func constSpecName(spec *ast.ValueSpec) string {
+	if len(spec.Names) != 0 {
+		return spec.Names[0].Name
+	}
+	return "<unnamed>"
 }
 
 func loadTarget(baseDir, input string) (dir, pattern string, err error) {
@@ -325,110 +367,115 @@ func packageErrors(pkgs []*packages.Package) error {
 	return errors.New(strings.Join(lines, "\n"))
 }
 
-func hasIgnoreDirective(group *ast.CommentGroup) bool {
-	return directiveValue(group, "ignore") != ""
+var renameDirectivePattern = regexp.MustCompile(`^rename\s*=\s*(.+)$`)
+
+// directiveSet is everything an `//fgb:` directive can request for one
+// declaration.
+type directiveSet struct {
+	Mode   model.CallMode
+	Ignore bool
+	Opaque bool
+	Rename string
 }
 
-var callModeDirectivePattern = regexp.MustCompile(`^(?:fgb|flutter_go_bridge)\s*\(\s*([^)]*?)\s*\)$`)
-
-// directiveCallMode accepts the compact marker requested by the generator
-// API (`// fgb(sync)` / `// fgb(async)`) as well as the colon form used by
-// earlier versions (`// fgb:mode=async`). Unmarked declarations are sync.
-func directiveCallMode(group *ast.CommentGroup) (model.CallMode, error) {
-	mode := model.CallModeSync
-	seen := false
-	if group == nil {
-		return mode, nil
+// parseDirectives understands `//fgb:sync`, `//fgb:async`, `//fgb:ignore`,
+// `//fgb:opaque`, and `//fgb:rename = "name"` - either as separate lines or
+// comma-combined like `//fgb:async, rename = "name"`. The spelling follows
+// the Go directive convention (`//tool:directive`, no space after `//`), so
+// gofmt leaves the line alone and it never leaks into doc comments. Unmarked
+// declarations are sync.
+func parseDirectives(group *ast.CommentGroup) (directiveSet, error) {
+	result := directiveSet{Mode: model.CallModeSync}
+	modeSeen := false
+	applyMode := func(value model.CallMode) error {
+		if modeSeen && value != result.Mode {
+			return fmt.Errorf("conflicting fgb call mode directives")
+		}
+		result.Mode, modeSeen = value, true
+		return nil
 	}
-	for _, comment := range group.List {
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(comment.Text, "//"), "/*"))
-		text = strings.TrimSuffix(text, "*/")
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			candidate := callModeDirectivePattern.FindStringSubmatch(line)
-			value := ""
-			if len(candidate) == 2 {
-				value = strings.TrimSpace(candidate[1])
-				if value == "" {
-					return mode, fmt.Errorf("invalid empty fgb call mode (want sync or async)")
-				}
-			} else {
-				for _, prefix := range []string{"flutter_go_bridge:", "fgb:"} {
-					if !strings.HasPrefix(line, prefix) {
-						continue
-					}
-					raw := strings.TrimSpace(strings.TrimPrefix(line, prefix))
-					switch {
-					case raw == "sync" || raw == "async":
-						value = raw
-					case strings.HasPrefix(raw, "mode="):
-						value = strings.TrimSpace(strings.TrimPrefix(raw, "mode="))
-					}
-					break
-				}
+	applyToken := func(token string) error {
+		switch token {
+		case "sync":
+			return applyMode(model.CallModeSync)
+		case "async":
+			return applyMode(model.CallModeAsync)
+		case "ignore":
+			result.Ignore = true
+			return nil
+		case "opaque":
+			result.Opaque = true
+			return nil
+		}
+		if match := renameDirectivePattern.FindStringSubmatch(token); match != nil {
+			value := strings.TrimSpace(match[1])
+			if unquoted, err := strconv.Unquote(value); err == nil {
+				value = unquoted
 			}
 			if value == "" {
-				continue
+				return fmt.Errorf("invalid empty fgb rename")
 			}
-			var parsed model.CallMode
-			switch value {
-			case "sync":
-				parsed = model.CallModeSync
-			case "async":
-				parsed = model.CallModeAsync
-			default:
-				return mode, fmt.Errorf("invalid fgb call mode %q (want sync or async)", value)
-			}
-			if seen && parsed != mode {
-				return mode, fmt.Errorf("conflicting fgb call mode directives")
-			}
-			mode, seen = parsed, true
+			result.Rename = value
+			return nil
 		}
+		return fmt.Errorf("invalid //fgb: directive %q (want sync, async, ignore, opaque, or rename = \"name\")", token)
 	}
-	return mode, nil
-}
 
-func isBridgeDirectiveLine(line string) bool {
-	line = strings.TrimSpace(line)
-	if strings.HasPrefix(line, "flutter_go_bridge:") || strings.HasPrefix(line, "fgb:") {
-		return true
-	}
-	return callModeDirectivePattern.MatchString(line)
-}
-
-func directiveValue(group *ast.CommentGroup, key string) string {
 	if group == nil {
-		return ""
+		return result, nil
 	}
 	for _, comment := range group.List {
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(comment.Text, "//"), "/*"))
-		text = strings.TrimSuffix(text, "*/")
-		for _, prefix := range []string{"flutter_go_bridge:", "fgb:"} {
-			if !strings.HasPrefix(text, prefix) {
-				continue
+		inner, isDirective := strings.CutPrefix(comment.Text, "//fgb:")
+		if !isDirective {
+			// A spaced `// fgb:` spelling would silently count as prose (and
+			// leak into doc comments), so fail loudly on the near-miss.
+			if trimmed := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//")); strings.HasPrefix(trimmed, "fgb:") {
+				return result, fmt.Errorf("malformed directive %q: write //fgb:... without a space after //", comment.Text)
 			}
-			value := strings.TrimSpace(strings.TrimPrefix(text, prefix))
-			if value == key {
-				return "true"
-			}
-			if strings.HasPrefix(value, key+"=") {
-				return strings.TrimSpace(strings.TrimPrefix(value, key+"="))
+			continue
+		}
+		inner = strings.TrimSpace(inner)
+		if inner == "" {
+			return result, fmt.Errorf("invalid empty //fgb: directive")
+		}
+		for token := range strings.SplitSeq(inner, ",") {
+			if err := applyToken(strings.TrimSpace(token)); err != nil {
+				return result, err
 			}
 		}
 	}
-	return ""
+	return result, nil
 }
 
+// mergeSpecDirectives combines the doc comments of a spec and its enclosing
+// declaration group; the spec's own comment wins for renames.
+func mergeSpecDirectives(specDoc, declDoc *ast.CommentGroup) (directiveSet, error) {
+	fromSpec, err := parseDirectives(specDoc)
+	if err != nil {
+		return fromSpec, err
+	}
+	fromDecl, err := parseDirectives(declDoc)
+	if err != nil {
+		return fromDecl, err
+	}
+	result := fromSpec
+	result.Ignore = fromSpec.Ignore || fromDecl.Ignore
+	result.Opaque = fromSpec.Opaque || fromDecl.Opaque
+	if result.Rename == "" {
+		result.Rename = fromDecl.Rename
+	}
+	return result, nil
+}
+
+// cleanDocs turns a comment group into Dart-doc-ready text. `//fgb:` lines
+// follow the Go directive syntax, so ast.CommentGroup.Text() already excludes
+// them; only trailing whitespace is normalized here.
 func cleanDocs(group *ast.CommentGroup) string {
 	if group == nil {
 		return ""
 	}
 	var kept []string
-	for _, line := range strings.Split(group.Text(), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if isBridgeDirectiveLine(trimmed) {
-			continue
-		}
+	for line := range strings.SplitSeq(group.Text(), "\n") {
 		kept = append(kept, strings.TrimRight(line, " \t"))
 	}
 	return strings.TrimSpace(strings.Join(kept, "\n"))

@@ -9,7 +9,6 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 import "lib.dart";
-export "lib.dart";
 
 final class _FgbCstBytes extends ffi.Struct {
   external ffi.Pointer<ffi.Uint8> ptr;
@@ -17,17 +16,36 @@ final class _FgbCstBytes extends ffi.Struct {
   external int len;
 }
 
+final class _FgbCstType1 extends ffi.Struct {
+  @ffi.Int64()
+  external int x;
+  @ffi.Int64()
+  external int y;
+  external ffi.Pointer<_FgbCstBytes> label;
+}
+
 final class _FgbCstArgs0 extends ffi.Struct {
   external ffi.Pointer<_FgbCstBytes> name;
 }
 
 final class _FgbCstArgs1 extends ffi.Struct {
+  external ffi.Pointer<_FgbCstType1> receiver;
+  @ffi.Int64()
+  external int dx;
+  @ffi.Int64()
+  external int dy;
+}
+
+final class _FgbCstArgs2 extends ffi.Struct {
+  @ffi.Uint8()
+  external int fgbPad;
+}
+
+final class _FgbCstArgs3 extends ffi.Struct {
   @ffi.UintPtr()
   external int receiver;
   @ffi.Int64()
-  external int x;
-  @ffi.Int64()
-  external int y;
+  external int delta;
 }
 
 final class FgbPlatformException implements Exception {
@@ -44,8 +62,8 @@ final class FgbPlatformException implements Exception {
 /// Base class for generated opaque Go handles. The generated source files do
 /// not need to expose dart:ffi; finalizer plumbing stays in this integration
 /// library.
-abstract base class FgbOpaque implements ffi.Finalizable {
-  FgbOpaque(this.fgbBridge, this.fgbHandle) {
+abstract base class GoOpaque implements ffi.Finalizable {
+  GoOpaque({required this.fgbBridge, required this.fgbHandle}) {
     fgbBridge.fgbAttachOpaqueFinalizer(this, fgbHandle);
   }
 
@@ -338,6 +356,8 @@ typedef _FgbCstAsyncNative = ffi.Void Function(ffi.Int32, ffi.Pointer<ffi.Void>,
 typedef _FgbCstAsyncDart = void Function(int, ffi.Pointer<ffi.Void>, int);
 typedef _FgbDcoFreeNative = ffi.Void Function(ffi.Pointer<ffi.Void>);
 typedef _FgbDcoFreeDart = void Function(ffi.Pointer<ffi.Void>);
+typedef _FgbDartOpaquePortNative = ffi.Void Function(ffi.Int64);
+typedef _FgbDartOpaquePortDart = void Function(int);
 
 final class _FgbBindings {
   _FgbBindings(this.library)
@@ -350,6 +370,9 @@ final class _FgbBindings {
       cst = library.lookupFunction<_FgbCstNative, _FgbCstDart>('fgb_cst'),
       cstAsync = library.lookupFunction<_FgbCstAsyncNative, _FgbCstAsyncDart>('fgb_cst_async'),
       dcoFree = library.lookupFunction<_FgbDcoFreeNative, _FgbDcoFreeDart>('fgb_dco_free'),
+      dartOpaquePort = library.lookupFunction<_FgbDartOpaquePortNative, _FgbDartOpaquePortDart>(
+        'fgb_dart_opaque_port',
+      ),
       dropAddress = library.lookup<ffi.NativeFunction<_FgbDropNative>>('fgb_drop');
 
   final ffi.DynamicLibrary library;
@@ -362,6 +385,7 @@ final class _FgbBindings {
   final ffi.Pointer<ffi.Void> Function(int, ffi.Pointer<ffi.Void>) cst;
   final void Function(int, ffi.Pointer<ffi.Void>, int) cstAsync;
   final void Function(ffi.Pointer<ffi.Void>) dcoFree;
+  final void Function(int) dartOpaquePort;
   final ffi.Pointer<ffi.NativeFunction<_FgbDropNative>> dropAddress;
 }
 
@@ -470,6 +494,14 @@ final class FlutterGoBridge {
     : _handleFinalizer = ffi.NativeFinalizer(_bindings.dropAddress) {
     final status = _bindings.init(ffi.NativeApi.initializeApiDLData);
     if (status != 0) throw StateError('Dart API DL initialization failed (status $status)');
+    // Go notifies this port when the last Go copy of a DartOpaque value was
+    // collected; the entry keeping the Dart object alive is then dropped. The
+    // port must not keep the isolate alive on its own.
+    _dartOpaqueReleases.keepIsolateAlive = false;
+    _dartOpaqueReleases.handler = (Object? message) {
+      if (message is int) _dartOpaqueObjects.remove(message);
+    };
+    _bindings.dartOpaquePort(_dartOpaqueReleases.sendPort.nativePort);
   }
 
   static FlutterGoBridge? _instance;
@@ -506,7 +538,27 @@ final class FlutterGoBridge {
   final _FgbBindings _bindings;
   final String? _libraryPath;
   final ffi.NativeFinalizer _handleFinalizer;
+  final RawReceivePort _dartOpaqueReleases = RawReceivePort();
+  final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
+  int _dartOpaqueNextHandle = 0;
   static const _FgbCodec _codec = _FgbCodec();
+
+  /// Internal: registers a Dart object crossing into Go as a DartOpaque
+  /// handle. The registry entry keeps the object alive while Go holds it.
+  int fgbInternalRegisterDartOpaque(Object value) {
+    final handle = ++_dartOpaqueNextHandle;
+    _dartOpaqueObjects[handle] = value;
+    return handle;
+  }
+
+  /// Internal: resolves a DartOpaque handle returned by Go.
+  Object fgbInternalResolveDartOpaque(int handle, String path) {
+    final value = _dartOpaqueObjects[handle];
+    if (value == null) {
+      throw StateError('$path: unknown or released DartOpaque handle $handle');
+    }
+    return value;
+  }
 
   /// Internal entrypoint used by generated per-source Dart API files.
   Object? fgbInvokeSync(String method, List<Object?> arguments) {
@@ -653,17 +705,31 @@ Object? fgbEncode0(String value, FlutterGoBridge bridge, String path) {
   return value;
 }
 
-Point? fgbDecode1(Object? value, FlutterGoBridge bridge, String path) {
-  if (value == null) return null;
-  if (value is! int || value <= 0) throw FormatException('$path: expected opaque handle');
-  return Point.fgbInternal(bridge, value);
+Point fgbDecode1(Object? value, FlutterGoBridge bridge, String path) {
+  if (value is Map) {
+    return Point(
+      x: fgbDecode2(value["x"], bridge, '$path.x'),
+      y: fgbDecode2(value["y"], bridge, '$path.y'),
+      label: fgbDecode0(value["label"], bridge, '$path.label'),
+    );
+  }
+  if (value is List) {
+    if (value.length != 3) throw FormatException('$path: expected 3 fields');
+    return Point(
+      x: fgbDecode2(value[0], bridge, '$path[0]'),
+      y: fgbDecode2(value[1], bridge, '$path[1]'),
+      label: fgbDecode0(value[2], bridge, '$path[2]'),
+    );
+  }
+  throw FormatException('$path: expected Map or List');
 }
 
-Object? fgbEncode1(Point? value, FlutterGoBridge bridge, String path) {
-  if (value == null) return null;
-  if (!identical(value.fgbBridge, bridge))
-    throw StateError('opaque value belongs to a different bridge');
-  return value.fgbHandle;
+Object? fgbEncode1(Point value, FlutterGoBridge bridge, String path) {
+  return <Object?, Object?>{
+    "x": fgbEncode2(value.x, bridge, path + ".x"),
+    "y": fgbEncode2(value.y, bridge, path + ".y"),
+    "label": fgbEncode0(value.label, bridge, path + ".label"),
+  };
 }
 
 int fgbDecode2(Object? value, FlutterGoBridge bridge, String path) {
@@ -675,6 +741,19 @@ Object? fgbEncode2(int value, FlutterGoBridge bridge, String path) {
   return value;
 }
 
+Counter? fgbDecode3(Object? value, FlutterGoBridge bridge, String path) {
+  if (value == null) return null;
+  if (value is! int || value <= 0) throw FormatException('$path: expected opaque handle');
+  return Counter.fgbInternal(fgbBridge: bridge, fgbHandle: value);
+}
+
+Object? fgbEncode3(Counter? value, FlutterGoBridge bridge, String path) {
+  if (value == null) return null;
+  if (!identical(value.fgbBridge, bridge))
+    throw StateError('opaque value belongs to a different bridge');
+  return value.fgbHandle;
+}
+
 ffi.Pointer<_FgbCstBytes> fgbCstEncode0(String value, _FgbArena arena, String path) {
   final raw = utf8.encode(value);
   final result = arena.allocate<_FgbCstBytes>(ffi.sizeOf<_FgbCstBytes>());
@@ -683,15 +762,23 @@ ffi.Pointer<_FgbCstBytes> fgbCstEncode0(String value, _FgbArena arena, String pa
   return result;
 }
 
-int fgbCstEncode1(Point? value, _FgbArena arena, String path) {
-  if (value == null) return 0;
-  if (!identical(value.fgbBridge, arena.bridge))
-    throw StateError('opaque value belongs to a different bridge');
-  return value.fgbHandle;
+ffi.Pointer<_FgbCstType1> fgbCstEncode1(Point value, _FgbArena arena, String path) {
+  final result = arena.allocate<_FgbCstType1>(ffi.sizeOf<_FgbCstType1>());
+  result.ref.x = fgbCstEncode2(value.x, arena, path + ".x");
+  result.ref.y = fgbCstEncode2(value.y, arena, path + ".y");
+  result.ref.label = fgbCstEncode0(value.label, arena, path + ".label");
+  return result;
 }
 
 int fgbCstEncode2(int value, _FgbArena arena, String path) {
   return value;
+}
+
+int fgbCstEncode3(Counter? value, _FgbArena arena, String path) {
+  if (value == null) return 0;
+  if (!identical(value.fgbBridge, arena.bridge))
+    throw StateError('opaque value belongs to a different bridge');
+  return value.fgbHandle;
 }
 
 extension FgbGeneratedCalls on FlutterGoBridge {
@@ -707,15 +794,39 @@ extension FgbGeneratedCalls on FlutterGoBridge {
     }
   }
 
-  void fgbInternalCall1(Point receiver, int x, int y) {
+  Point fgbInternalCall1(Point receiver, int dx, int dy) {
     final arena = _FgbArena(this);
     try {
       final args = arena.allocate<_FgbCstArgs1>(ffi.sizeOf<_FgbCstArgs1>());
       args.ref.receiver = fgbCstEncode1(receiver, arena, 'receiver');
-      args.ref.x = fgbCstEncode2(x, arena, "x");
-      args.ref.y = fgbCstEncode2(y, arena, "y");
-      fgbInvokeCstSync(1, args.cast<ffi.Void>());
-      return;
+      args.ref.dx = fgbCstEncode2(dx, arena, "dx");
+      args.ref.dy = fgbCstEncode2(dy, arena, "dy");
+      final wireResult = fgbInvokeCstSync(1, args.cast<ffi.Void>());
+      return fgbDecode1(wireResult, this, 'result');
+    } finally {
+      arena.close();
+    }
+  }
+
+  Counter? fgbInternalCall2() {
+    final arena = _FgbArena(this);
+    try {
+      final args = arena.allocate<_FgbCstArgs2>(ffi.sizeOf<_FgbCstArgs2>());
+      final wireResult = fgbInvokeCstSync(2, args.cast<ffi.Void>());
+      return fgbDecode3(wireResult, this, 'result');
+    } finally {
+      arena.close();
+    }
+  }
+
+  int fgbInternalCall3(Counter receiver, int delta) {
+    final arena = _FgbArena(this);
+    try {
+      final args = arena.allocate<_FgbCstArgs3>(ffi.sizeOf<_FgbCstArgs3>());
+      args.ref.receiver = fgbCstEncode3(receiver, arena, 'receiver');
+      args.ref.delta = fgbCstEncode2(delta, arena, "delta");
+      final wireResult = fgbInvokeCstSync(3, args.cast<ffi.Void>());
+      return fgbDecode2(wireResult, this, 'result');
     } finally {
       arena.close();
     }

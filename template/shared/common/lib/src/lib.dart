@@ -2,17 +2,36 @@
 // ignore_for_file: unused_element, unused_import, unnecessary_import
 import "bridge_generated.dart";
 import 'dart:typed_data';
-export "bridge_generated.dart" show FlutterGoBridge, FgbPlatformException;
 
-final class Point extends FgbOpaque {
-  Point.fgbInternal(FlutterGoBridge bridge, int handle) : super(bridge, handle);
+final class Point {
+  final int x;
+  final int y;
+  String label;
 
-  void move(int x, int y) {
-    fgbBridge.fgbInternalCall1(this, x, y);
+  Point({required this.x, required this.y, required this.label});
+
+  /// Moved returns a copy of the point shifted by (dx, dy).
+  Point moved({required int dx, required int dy}) {
+    return FlutterGoBridge.instance.fgbInternalCall1(this, dx, dy);
   }
 }
 
-String greeting(String name) {
+/// Counter keeps its state on the Go side and crosses the bridge as a
+/// GoOpaque handle.
+final class Counter extends GoOpaque {
+  Counter.fgbInternal({required super.fgbBridge, required super.fgbHandle});
+
+  int add({required int delta}) {
+    return fgbBridge.fgbInternalCall3(this, delta);
+  }
+}
+
+String greeting({required String name}) {
   final bridge = FlutterGoBridge.instance;
   return bridge.fgbInternalCall0(name);
+}
+
+Counter? newCounter() {
+  final bridge = FlutterGoBridge.instance;
+  return bridge.fgbInternalCall2();
 }

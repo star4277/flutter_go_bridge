@@ -105,6 +105,9 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\tresult, ok := raw.(%s)", goType)
 		r.raw("\tif !ok { return nil, fmt.Errorf(\"%s: handle %d has incompatible Go type %T\", path, handle, raw) }")
 		r.line("\treturn result, nil")
+	case kindDartOpaque:
+		r.line("\tif value == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid DartOpaque handle 0\", path) }", goType)
+		r.line("\treturn fgbrt.NewDartOpaque(int64(value), fgbReleaseDartOpaque), nil")
 	case kindNamed:
 		r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -245,6 +248,9 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\tif handle == 0 || uint64(handle) > uint64(^uint64(0)>>1) { return nil, fmt.Errorf(\"opaque handle space exhausted\") }")
 		r.line("\tfgbHandles.Store(handle, value)")
 		r.line("\treturn fgbDcoInt64(int64(handle))")
+	case kindDartOpaque:
+		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
+		r.line("\treturn fgbDcoInt64(value.Handle())")
 	case kindNamed:
 		r.line("return fgbDcoEncode%d(%s(value))", typ.Named.Underlying.ID, r.goType(typ.Named.Underlying.Original))
 	default:
@@ -286,7 +292,9 @@ func (r *goRenderer) renderCstDispatch() {
 		}
 		r.line("\tcase %d:", call.ID)
 		r.line("\t\tif raw == nil { return nil, fgbInvalidArguments(%s, fmt.Errorf(\"null CST arguments\")) }", strconv.Quote(call.WireName))
-		r.line("\t\targs := (*C.%s)(raw)", cstArgsName(call))
+		if call.Receiver != nil || len(call.Params) != 0 {
+			r.line("\t\targs := (*C.%s)(raw)", cstArgsName(call))
+		}
 		argOffset := 0
 		if call.Receiver != nil {
 			r.line("\t\treceiver, err := fgbCstDecode%d(args.receiver, \"receiver\")", call.Receiver.ID)
