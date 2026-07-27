@@ -319,7 +319,7 @@ import "C"
 import (
 	"bytes"
 	"encoding/binary"
-	api "example/go_lib_myapp/api"
+	api "com.flutter_go_bridge/REPLACE_ME_GO_MOD_NAME/api"
 	"fmt"
 	"io"
 	"math/big"

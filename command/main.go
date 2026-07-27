@@ -8,15 +8,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
 	"github.com/star4277/flutter-go-bridge-gokit/internal/generator"
+	"github.com/star4277/flutter-go-bridge-gokit/internal/integrate"
 	"github.com/star4277/flutter-go-bridge-gokit/internal/parser"
 )
 
@@ -54,8 +53,57 @@ func newRootCommand() *cobra.Command {
 	}
 	root.AddCommand(newGenerateCommand(flags))
 	root.AddCommand(deferredCommand("create", "Project creation is intentionally deferred; run flutter_go_bridge_codegen generate."))
-	root.AddCommand(deferredCommand("integrate", "Project integration is intentionally deferred; configure gokit and run generate."))
+	root.AddCommand(newIntegrateCommand())
 	return root
+}
+
+type integrateFlags struct {
+	template          string
+	libraryName       string
+	goModDir          string
+	platforms         string
+	noWriteLib        bool
+	noIntegrationTest bool
+	noDartFix         bool
+	noDartFormat      bool
+}
+
+func newIntegrateCommand() *cobra.Command {
+	flags := &integrateFlags{}
+	command := &cobra.Command{
+		Use:   "integrate",
+		Short: "Integrate Go via Gokit into an existing Flutter project",
+		RunE: func(*cobra.Command, []string) error {
+			template, err := integrate.ParseTemplate(flags.template)
+			if err != nil {
+				return err
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return integrate.Run(integrate.Config{
+				WorkDir:               cwd,
+				Template:              template,
+				LibraryName:           flags.libraryName,
+				GoModDir:              flags.goModDir,
+				Platforms:             flags.platforms,
+				EnableWriteLib:        !flags.noWriteLib,
+				EnableIntegrationTest: !flags.noIntegrationTest,
+				EnableDartFix:         !flags.noDartFix,
+				EnableDartFormat:      !flags.noDartFormat,
+			})
+		},
+	}
+	command.Flags().StringVarP(&flags.template, "template", "t", "app", "Template matching the Flutter project type (app or plugin)")
+	command.Flags().StringVar(&flags.libraryName, "library-name", "", "Go module/dynamic library name (default go_lib_<pubspec name> for app, <pubspec name> for plugin)")
+	command.Flags().StringVar(&flags.goModDir, "go-mod-dir", "", "Directory of the Go module, relative to the project path (default \"go\")")
+	command.Flags().StringVar(&flags.platforms, "platforms", "", "Comma-separated platforms to support (default auto-detected)")
+	command.Flags().BoolVar(&flags.noWriteLib, "no-write-lib", false, "Do not generate code related to lib/example etc.")
+	command.Flags().BoolVar(&flags.noIntegrationTest, "no-integration-test", false, "Do not generate code related to integration test")
+	command.Flags().BoolVar(&flags.noDartFix, "no-dart-fix", false, "Do not apply dart fix after generating code")
+	command.Flags().BoolVar(&flags.noDartFormat, "no-dart-format", false, "Do not format dart code after generating code")
+	return command
 }
 
 func newGenerateCommand(flags *generateFlags) *cobra.Command {
@@ -173,10 +221,7 @@ func (flags *generateFlags) toConfig(command *cobra.Command) config.Config {
 }
 
 func formatDart(paths []string, lineLength int) error {
-	dart, err := findDartExecutable()
-	if err != nil {
-		return err
-	}
+	dart := integrate.FindDartExecutable()
 	args := []string{"format"}
 	if lineLength > 0 {
 		args = append(args, "--line-length", strconv.Itoa(lineLength))
@@ -202,22 +247,4 @@ func formatDart(paths []string, lineLength int) error {
 		return err
 	}
 	return nil
-}
-
-func findDartExecutable() (string, error) {
-	dart, err := exec.LookPath("dart")
-	if err != nil {
-		return "", err
-	}
-	// Flutter's Windows `dart.bat` wrapper performs SDK/bootstrap checks before
-	// launching dart.exe. Those checks are unnecessary for formatting generated
-	// files and can hang in non-interactive codegen runs. Prefer the SDK binary
-	// living beside the wrapper when it exists.
-	if ext := strings.ToLower(filepath.Ext(dart)); runtime.GOOS == "windows" && (ext == ".bat" || ext == ".cmd") {
-		candidate := filepath.Join(filepath.Dir(dart), "cache", "dart-sdk", "bin", "dart.exe")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return candidate, nil
-		}
-	}
-	return dart, nil
 }

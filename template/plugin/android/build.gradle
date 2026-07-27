@@ -1,6 +1,6 @@
 // The Android Gradle Plugin builds the native code with the Android NDK.
 
-group 'com.flutter_rust_bridge.REPLACE_ME_DART_PACKAGE_NAME'
+group 'com.flutter_go_bridge.REPLACE_ME_DART_PACKAGE_NAME'
 version '1.0'
 
 buildscript {

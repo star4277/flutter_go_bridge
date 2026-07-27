@@ -28,12 +28,7 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 			modulePath = api.Package.Module.Path
 		}
 		baseName := names.LibraryBase(modulePath)
-		baseName = strings.TrimPrefix(baseName, "rust_lib_")
-		if strings.HasPrefix(baseName, "go_lib_") {
-			resolved.LibraryName = baseName
-		} else {
-			resolved.LibraryName = "go_lib_" + baseName
-		}
+		resolved.LibraryName = config.GoLibraryName(baseName)
 	}
 
 	outputDir := filepath.Dir(resolved.GoOutput)

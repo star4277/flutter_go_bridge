@@ -193,7 +193,7 @@ func Resolve(raw Config, cwd string) (Resolved, error) {
 		// fallback remains available for
 		// standalone Go projects.
 		if name := pubspecName(absBase); name != "" {
-			result.LibraryName = goLibraryName(name)
+			result.LibraryName = GoLibraryName(name)
 		}
 	}
 	if raw.DartEntrypointClassName != nil && *raw.DartEntrypointClassName != "" {
@@ -220,11 +220,10 @@ func Resolve(raw Config, cwd string) (Resolved, error) {
 	return result, nil
 }
 
-func goLibraryName(projectName string) string {
+// GoLibraryName converts a project name into the go_lib_<project> dynamic
+// library naming convention shared by generate and integrate.
+func GoLibraryName(projectName string) string {
 	projectName = strings.TrimSpace(projectName)
-	if strings.HasPrefix(projectName, "rust_lib_") {
-		projectName = strings.TrimPrefix(projectName, "rust_lib_")
-	}
 	if strings.HasPrefix(projectName, "go_lib_") {
 		return projectName
 	}

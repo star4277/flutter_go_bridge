@@ -4,7 +4,7 @@
 `flutter_rust_bridge_codegen` 的 CLI 与生成结构，但不依赖 Flutter Native Assets，也不依赖
 `package:flutter/services.dart`。
 
-当前只实现 `generate`。`create`、`integrate` 和 `generate --watch` 已保留命令边界，但会明确提示尚未实现。
+当前实现 `generate` 和 `integrate`。`create` 和 `generate --watch` 已保留命令边界，但会明确提示尚未实现。
 
 ## 设计约定
 
@@ -126,6 +126,35 @@ flutter_go_bridge_codegen generate \
 - `pubspec.yaml` 中的 `flutter_go_bridge:` 节
 
 命令行参数覆盖配置文件。
+
+## integrate
+
+在已有 Flutter 工程内（任意子目录均可，会向上查找 `pubspec.yaml`）执行：
+
+```text
+flutter_go_bridge_codegen integrate                 # app 模板
+flutter_go_bridge_codegen integrate -t plugin       # FFI plugin 模板
+```
+
+它参照 `flutter_rust_bridge_codegen integrate` 的流程初始化项目：
+
+- 覆盖模板：`flutter_go_bridge.yaml`、`go/`（Go 模块 + 示例 API + 预生成
+  `bridge_generated.go`）、`lib/src/`（预生成 Dart bridge）、`test_driver/`，app 模板附加
+  `go_builder/`（内含 gokit），plugin 模板附加平台构建文件和工程根的 `gokit/`。
+- 已存在的文件一律跳过并告警；只有 `lib/main.dart`（app）或 `lib/<package>.dart`（plugin）
+  会把原内容整体注释后写入模板，便于生成可运行的自包含 demo。
+- app 模板执行 `flutter pub add <library_name> --path=go_builder`；按需为工程（及 plugin 的
+  `example/`）添加 `integration_test`。
+- 在 gokit `build_tool` 中执行 `flutter pub get`，把 gokit 目录加入 `analysis_options.yaml`
+  的 analyzer exclude，最后运行 `dart fix --apply` 与 `dart format`。
+
+库名默认 `go_lib_<pubspec name>`（plugin 为 `<pubspec name>`），Go 模块目录默认 `go`，可用
+`--library-name` / `--go-mod-dir` 覆盖。`--platforms` 指定平台列表（缺省会通过
+`flutter create --help` 探测 ohos 支持）；其余开关与 FRB 一致：`--no-write-lib`、
+`--no-integration-test`、`--no-dart-fix`、`--no-dart-format`。
+
+模板通过 `go:embed` 内嵌进 codegen 二进制；从源码构建前需要
+`git submodule update --init --recursive` 拉取 gokit 子模块，否则 `integrate` 会在运行时报错。
 
 ## Dart 调用
 

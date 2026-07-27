@@ -498,7 +498,7 @@ final class FlutterGoBridge {
 
   static ffi.DynamicLibrary _openDefaultLibrary() {
     if (Platform.isMacOS || Platform.isIOS) return ffi.DynamicLibrary.process();
-    const libraryName = "go_lib_myapp";
+    const libraryName = "REPLACE_ME_GO_MOD_NAME";
     if (Platform.isWindows) return ffi.DynamicLibrary.open('$libraryName.dll');
     return ffi.DynamicLibrary.open('lib$libraryName.so');
   }

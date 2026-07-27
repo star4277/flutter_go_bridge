@@ -86,21 +86,6 @@ func TestResolveDoesNotDuplicateGoLibraryPrefix(t *testing.T) {
 	}
 }
 
-func TestResolveConvertsRustLibraryPrefixForGo(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "pubspec.yaml"), []byte("name: rust_lib_mihomoui\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	input := "go/api"
-	resolved, err := Resolve(Config{GoInput: &input}, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved.LibraryName != "go_lib_mihomoui" {
-		t.Fatalf("got library name %q, want rust_lib_ converted to go_lib_", resolved.LibraryName)
-	}
-}
-
 func TestLoadAutoNotFound(t *testing.T) {
 	_, err := LoadAuto(t.TempDir())
 	if !errors.Is(err, ErrNotFound) {
