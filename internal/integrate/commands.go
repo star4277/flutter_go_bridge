@@ -38,6 +38,21 @@ func flutterPubAdd(dir string, items ...string) error {
 	return runCommand(dir, "flutter", append([]string{"pub", "add"}, items...)...)
 }
 
+// flutterCreate scaffolds a new Flutter project: template `app` for apps and
+// `plugin_ffi` for plugins, matching FRB's flutter_create.
+func flutterCreate(dir, name, org string, template Template, platforms string) error {
+	args := []string{"create", name}
+	if org != "" {
+		args = append(args, "--org", org)
+	}
+	templateArg := "app"
+	if template == TemplatePlugin {
+		templateArg = "plugin_ffi"
+	}
+	args = append(args, "--template", templateArg, "--platforms", platforms)
+	return runCommand(dir, "flutter", args...)
+}
+
 func flutterPubGet(dir string) error {
 	return runCommand(dir, "flutter", "pub", "get")
 }

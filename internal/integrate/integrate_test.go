@@ -53,6 +53,7 @@ func fakeTemplates() fstest.MapFS {
 		"shared/common/test_driver/integration_test.dart":                  file("void main() {}\n"),
 		"shared/app/lib/main.dart":                                         file("import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/bridge_generated.dart';\nvoid main() {}\n"),
 		"shared/plugin/lib/REPLACE_ME_DART_PACKAGE_NAME.dart":              file("library REPLACE_ME_DART_PACKAGE_NAME;\n"),
+		"shared/plugin/example/lib/main.dart":                              file("import 'package:REPLACE_ME_DART_PACKAGE_NAME/REPLACE_ME_DART_PACKAGE_NAME.dart';\n\nvoid main() {\n  FlutterGoBridge.initialize();\n}\n"),
 		"app/go_builder/pubspec.yaml":                                      file("name: REPLACE_ME_GO_MOD_NAME\nflutter:\n  plugin:\n    platforms:\n      windows:\n        ffiPlugin: trueREPLACE_ME_OHOS_PLUGIN_PLATFORM_TEXT\n"),
 		"app/go_builder/windows/CMakeLists.txt":                            file("apply_gokit(REPLACE_ME_GO_MOD_NAME ../../../../../../REPLACE_ME_GO_MOD_DIR REPLACE_ME_GO_MOD_NAME \"\")\n"),
 		"app/go_builder/ohos/module.json5":                                 file("{}\n"),

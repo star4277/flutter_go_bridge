@@ -4,7 +4,7 @@
 `flutter_rust_bridge_codegen` 的 CLI 与生成结构，但不依赖 Flutter Native Assets，也不依赖
 `package:flutter/services.dart`。
 
-当前实现 `generate`、`generate --watch` 和 `integrate`。`create` 已保留命令边界，但会明确提示尚未实现。
+当前实现 `generate`、`generate --watch`、`create` 和 `integrate`。
 
 ## 设计约定
 
@@ -141,6 +141,26 @@ flutter_go_bridge_codegen generate --watch
 - 每轮都重新加载配置文件，改配置在下一轮生效；
 - 生成失败只打印告警并继续监听，Ctrl+C 退出；
 - `--watch` 要求 `go_input` 是本地路径，包模式（package pattern）会直接报错。
+
+## create
+
+```text
+flutter_go_bridge_codegen create my_app
+flutter_go_bridge_codegen create my_plugin -t plugin
+```
+
+对应 `flutter_rust_bridge_codegen create`，从零建出一个可直接运行的 Flutter + Go 工程：
+
+1. 执行 `flutter create`（app 用 `--template app`，plugin 用 `--template plugin_ffi`；
+   `--org`、`--platforms` 透传）；
+2. 删除会与模板冲突的脚手架文件（app 的 `lib/`、`test/`；plugin 的 `lib/`、`src/`、
+   `ffigen.yaml`、各平台构建文件、`example/lib/` 等），因此入口文件是全新模板，
+   不会带 integrate 那样的注释保留；
+3. 在新工程上运行与 `integrate` 完全相同的注入流程（模板覆盖、pub 依赖、
+   gokit build_tool、dart fix/format）。
+
+目标目录已存在时会报错并提示改用 `integrate`。`--library-name` / `--go-mod-dir` /
+`--platforms` 与 `integrate` 同义。
 
 ## integrate
 

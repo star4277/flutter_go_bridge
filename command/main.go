@@ -53,9 +53,51 @@ func newRootCommand() *cobra.Command {
 		Short:   "Generate pure-Dart bindings for a Go library built by Gokit",
 	}
 	root.AddCommand(newGenerateCommand(flags))
-	root.AddCommand(deferredCommand("create", "Project creation is intentionally deferred; run flutter_go_bridge_codegen generate."))
+	root.AddCommand(newCreateCommand())
 	root.AddCommand(newIntegrateCommand())
 	return root
+}
+
+type createFlags struct {
+	org         string
+	template    string
+	libraryName string
+	goModDir    string
+	platforms   string
+}
+
+func newCreateCommand() *cobra.Command {
+	flags := &createFlags{}
+	command := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create a new Flutter + Go (Gokit) project",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			template, err := integrate.ParseTemplate(flags.template)
+			if err != nil {
+				return err
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return integrate.Create(integrate.CreateConfig{
+				Name:        args[0],
+				Org:         flags.org,
+				WorkDir:     cwd,
+				Template:    template,
+				LibraryName: flags.libraryName,
+				GoModDir:    flags.goModDir,
+				Platforms:   flags.platforms,
+			})
+		},
+	}
+	command.Flags().StringVar(&flags.org, "org", "", "The organization responsible for the new project, in reverse domain name notation")
+	command.Flags().StringVarP(&flags.template, "template", "t", "app", "The template type for the new project (app or plugin)")
+	command.Flags().StringVar(&flags.libraryName, "library-name", "", "Go module/dynamic library name (default go_lib_<name> for app, <name> for plugin)")
+	command.Flags().StringVar(&flags.goModDir, "go-mod-dir", "", "Directory of the Go module, relative to the project path (default \"go\")")
+	command.Flags().StringVar(&flags.platforms, "platforms", "", "Comma-separated platforms to support (default auto-detected)")
+	return command
 }
 
 type integrateFlags struct {
@@ -132,14 +174,6 @@ func newGenerateCommand(flags *generateFlags) *cobra.Command {
 	command.Flags().BoolVar(&flags.printAST, "print-ast", false, "Print official Go AST nodes while parsing")
 	command.Flags().BoolVar(&flags.watch, "watch", false, "Automatically re-generate whenever the input files change")
 	return command
-}
-
-func deferredCommand(name, message string) *cobra.Command {
-	return &cobra.Command{
-		Use:   name,
-		Short: message,
-		RunE:  func(*cobra.Command, []string) error { return errors.New(message) },
-	}
 }
 
 // resolveGenerateConfig loads and merges the CLI, file, and default
