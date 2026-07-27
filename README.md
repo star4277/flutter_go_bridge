@@ -4,7 +4,7 @@
 `flutter_rust_bridge_codegen` 的 CLI 与生成结构，但不依赖 Flutter Native Assets，也不依赖
 `package:flutter/services.dart`。
 
-当前实现 `generate` 和 `integrate`。`create` 和 `generate --watch` 已保留命令边界，但会明确提示尚未实现。
+当前实现 `generate`、`generate --watch` 和 `integrate`。`create` 已保留命令边界，但会明确提示尚未实现。
 
 ## 设计约定
 
@@ -126,6 +126,21 @@ flutter_go_bridge_codegen generate \
 - `pubspec.yaml` 中的 `flutter_go_bridge:` 节
 
 命令行参数覆盖配置文件。
+
+### generate --watch
+
+```text
+flutter_go_bridge_codegen generate --watch
+```
+
+监听 `go_input`（目录递归，或单个 `.go` 文件）并在变更后自动重新生成，行为对应
+`flutter_rust_bridge_codegen generate --watch`：
+
+- 采用约 400ms 的轮询快照对比（无额外依赖，跨平台/网络盘/原子改名保存均可靠），
+  `go_output`、`dart_output` 与点目录（如 `.git`）不会触发重跑；
+- 每轮都重新加载配置文件，改配置在下一轮生效；
+- 生成失败只打印告警并继续监听，Ctrl+C 退出；
+- `--watch` 要求 `go_input` 是本地路径，包模式（package pattern）会直接报错。
 
 ## integrate
 

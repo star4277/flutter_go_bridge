@@ -46,8 +46,8 @@ func fakeTemplates() fstest.MapFS {
 	}
 	return fstest.MapFS{
 		"shared/common/flutter_go_bridge.yaml":                             file("go_input: REPLACE_ME_GO_MOD_DIR/api\nlibrary_name: REPLACE_ME_GO_MOD_NAME\n"),
-		"shared/common/REPLACE_ME_GO_MOD_DIR/go.mod.template":              file("module REPLACE_ME_DART_PACKAGE_NAME/REPLACE_ME_GO_MOD_NAME\n\ngo 1.25.6\n"),
-		"shared/common/REPLACE_ME_GO_MOD_DIR/bridge_generated.go.template": file("package main\n\nimport api \"REPLACE_ME_DART_PACKAGE_NAME/REPLACE_ME_GO_MOD_NAME/api\"\n"),
+		"shared/common/REPLACE_ME_GO_MOD_DIR/go.mod.template":              file("module com.flutter_go_bridge/REPLACE_ME_GO_MOD_NAME\n\ngo 1.24.5\n"),
+		"shared/common/REPLACE_ME_GO_MOD_DIR/bridge_generated.go.template": file("package main\n\nimport api \"com.flutter_go_bridge/REPLACE_ME_GO_MOD_NAME/api\"\n"),
 		"shared/common/REPLACE_ME_GO_MOD_DIR/api/lib.go.template":          file("package api\n"),
 		"shared/common/lib/src/bridge_generated.dart":                      file("const libraryName = \"REPLACE_ME_GO_MOD_NAME\";\n"),
 		"shared/common/test_driver/integration_test.dart":                  file("void main() {}\n"),
@@ -108,11 +108,11 @@ func TestRunAppOverlaysTemplates(t *testing.T) {
 	}
 
 	goMod := readFile(t, filepath.Join(dir, "go", "go.mod"))
-	if !strings.Contains(goMod, "module myapp/go_lib_myapp") {
+	if !strings.Contains(goMod, "module com.flutter_go_bridge/go_lib_myapp") {
 		t.Fatalf("go.mod placeholders not replaced: %q", goMod)
 	}
 	bridgeGo := readFile(t, filepath.Join(dir, "go", "bridge_generated.go"))
-	if !strings.Contains(bridgeGo, "api \"myapp/go_lib_myapp/api\"") {
+	if !strings.Contains(bridgeGo, "api \"com.flutter_go_bridge/go_lib_myapp/api\"") {
 		t.Fatalf("bridge_generated.go placeholders not replaced: %q", bridgeGo)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "go", "api", "lib.go")); err != nil {
@@ -231,7 +231,7 @@ func TestRunPluginDefaultsAndCommentOut(t *testing.T) {
 	}
 
 	goMod := readFile(t, filepath.Join(dir, "go", "go.mod"))
-	if !strings.Contains(goMod, "module my_plugin/my_plugin") {
+	if !strings.Contains(goMod, "module com.flutter_go_bridge/my_plugin") {
 		t.Fatalf("plugin library name should default to the package name: %q", goMod)
 	}
 

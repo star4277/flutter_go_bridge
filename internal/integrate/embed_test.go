@@ -24,11 +24,11 @@ func TestRunAppWithEmbeddedTemplates(t *testing.T) {
 	}
 
 	goMod := readFile(t, filepath.Join(dir, "go", "go.mod"))
-	if !strings.Contains(goMod, "module my_app/go_lib_my_app") {
+	if !strings.Contains(goMod, "module com.flutter_go_bridge/go_lib_my_app") {
 		t.Fatalf("unexpected go.mod: %q", goMod)
 	}
 	bridgeGo := readFile(t, filepath.Join(dir, "go", "bridge_generated.go"))
-	if !strings.Contains(bridgeGo, "\"my_app/go_lib_my_app/api\"") {
+	if !strings.Contains(bridgeGo, "\"com.flutter_go_bridge/go_lib_my_app/api\"") {
 		t.Fatal("bridge_generated.go should import the templated api package")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "go", "api", "lib.go")); err != nil {

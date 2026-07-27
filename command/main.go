@@ -17,6 +17,7 @@ import (
 	"github.com/star4277/flutter-go-bridge-gokit/internal/generator"
 	"github.com/star4277/flutter-go-bridge-gokit/internal/integrate"
 	"github.com/star4277/flutter-go-bridge-gokit/internal/parser"
+	"github.com/star4277/flutter-go-bridge-gokit/internal/watcher"
 )
 
 var version = "0.1.0"
@@ -112,7 +113,7 @@ func newGenerateCommand(flags *generateFlags) *cobra.Command {
 		Short: "Generate a Go cgo bridge and pure-Dart API",
 		RunE: func(command *cobra.Command, _ []string) error {
 			if flags.watch {
-				return errors.New("--watch is reserved for a future release")
+				return runGenerateWatch(command, flags)
 			}
 			return runGenerate(command, flags)
 		},
@@ -129,7 +130,7 @@ func newGenerateCommand(flags *generateFlags) *cobra.Command {
 	command.Flags().BoolVar(&flags.noDartFormat, "no-dart-format", false, "Do not run dart format")
 	command.Flags().BoolVar(&flags.stopOnError, "stop-on-error", true, "Stop on the first unsupported exported declaration")
 	command.Flags().BoolVar(&flags.printAST, "print-ast", false, "Print official Go AST nodes while parsing")
-	command.Flags().BoolVar(&flags.watch, "watch", false, "Reserved for a future release")
+	command.Flags().BoolVar(&flags.watch, "watch", false, "Automatically re-generate whenever the input files change")
 	return command
 }
 
@@ -141,27 +142,52 @@ func deferredCommand(name, message string) *cobra.Command {
 	}
 }
 
-func runGenerate(command *cobra.Command, flags *generateFlags) error {
+// resolveGenerateConfig loads and merges the CLI, file, and default
+// configuration exactly like a plain `generate` run.
+func resolveGenerateConfig(command *cobra.Command, flags *generateFlags) (config.Resolved, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return err
+		return config.Resolved{}, err
 	}
 
 	var fileConfig config.Config
 	if flags.configFile != "" {
 		fileConfig, err = config.LoadExplicit(flags.configFile)
 		if err != nil {
-			return err
+			return config.Resolved{}, err
 		}
 	} else {
 		fileConfig, err = config.LoadAuto(cwd)
 		if err != nil && !errors.Is(err, config.ErrNotFound) {
-			return err
+			return config.Resolved{}, err
 		}
 	}
-	cliConfig := flags.toConfig(command)
-	merged := config.Merge(cliConfig, fileConfig)
-	resolved, err := config.Resolve(merged, cwd)
+	merged := config.Merge(flags.toConfig(command), fileConfig)
+	return config.Resolve(merged, cwd)
+}
+
+// runGenerateWatch keeps re-running the generator whenever the Go input tree
+// changes. The configuration is reloaded on every cycle, so edits to the
+// config file take effect on the next run; only the watched paths are fixed
+// at startup.
+func runGenerateWatch(command *cobra.Command, flags *generateFlags) error {
+	resolved, err := resolveGenerateConfig(command, flags)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(resolved.GoInput); err != nil {
+		return fmt.Errorf("--watch requires go_input to be a local file or directory, got %q", resolved.GoInput)
+	}
+	return watcher.Run(watcher.Options{
+		Roots:   []string{resolved.GoInput},
+		Exclude: []string{resolved.GoOutput, resolved.DartOutput},
+	}, func() error {
+		return runGenerate(command, flags)
+	})
+}
+
+func runGenerate(command *cobra.Command, flags *generateFlags) error {
+	resolved, err := resolveGenerateConfig(command, flags)
 	if err != nil {
 		return err
 	}
