@@ -714,3 +714,93 @@ func Ticks(out chan<- int) error { return nil }
 		t.Fatalf("channel streams in sync calls must be rejected, got %v", err)
 	}
 }
+
+func TestGenerateMultipleResultsBecomeRecord(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+func Divide(a, b int) (int, int, error) { return 0, 0, nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "(int, int) divide({required int a, required int b})") {
+		t.Fatalf("unnamed results should become a positional record:\n%s", apiDart)
+	}
+	if !strings.Contains(goSource, "result0, result1, goErr0 := api.Divide(arg0, arg1)") {
+		t.Fatalf("Go dispatch should bind every result:\n%s", goSource)
+	}
+	if !strings.Contains(goSource, "return []any{encoded0, encoded1}, nil") {
+		t.Fatal("several results should travel as one list")
+	}
+}
+
+func TestGenerateNamedResultsBecomeNamedRecord(t *testing.T) {
+	apiDart, central, _, _, err := generateFixture(t, `package api
+
+func Split(value string) (head string, tail string, err error) { return "", "", nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "({String head, String tail}) split({required String value})") {
+		t.Fatalf("named results should become a named record:\n%s", apiDart)
+	}
+	if !strings.Contains(central, "head:") || !strings.Contains(central, "tail:") {
+		t.Fatalf("the decoder should build the record with field names:\n%s", central)
+	}
+}
+
+func TestGenerateSingleResultStaysPlain(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+func Add(a, b int) (int, error) { return 0, nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "int add({required int a, required int b})") {
+		t.Fatalf("a single result must not be wrapped in a record:\n%s", apiDart)
+	}
+	if !strings.Contains(goSource, "fgbGoError(call.Method, goErr0)") {
+		t.Fatal("a single error should keep the plain error path")
+	}
+}
+
+func TestGenerateMultipleErrorsAreCollected(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+func Validate(name string) (string, error, error) { return "", nil, nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "String validate({required String name})") {
+		t.Fatalf("errors must not appear in the Dart result:\n%s", apiDart)
+	}
+	for _, expected := range []string{
+		"var fgbErrs []any",
+		"fgbErrs = append(fgbErrs, goErr0.Error())",
+		"fgbErrs = append(fgbErrs, goErr1.Error())",
+		"fgbGoErrors(call.Method, fgbErrs)",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go dispatch missing %q:\n%s", expected, goSource)
+		}
+	}
+}
+
+func TestGenerateErrorNeedNotBeLast(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+func Load(id int) (error, int) { return nil, 0 }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "int load({required int id})") {
+		t.Fatalf("a leading error should not change the Dart result:\n%s", apiDart)
+	}
+	if !strings.Contains(goSource, "goErr0, result0 := api.Load(arg0)") {
+		t.Fatalf("Go dispatch should keep the declared result order:\n%s", goSource)
+	}
+}

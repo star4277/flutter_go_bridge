@@ -212,29 +212,36 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		return nil, errors.New("parameters of function type require //fgb:async: a synchronous call blocks the Dart event loop, so the callback could never run")
 	}
 
+	// Every `error` result is collected - non-nil ones fail the call and are
+	// reported together - and the rest keep their Go order. Two or more of
+	// those become a Dart record, so `error` no longer has to come last.
 	results := sig.Results()
-	nonError := results.Len()
-	if results.Len() != 0 && isErrorType(results.At(results.Len()-1).Type()) {
-		call.HasError = true
-		nonError--
-	}
-	if nonError > 1 {
-		return nil, errors.New("multiple non-error results are not supported yet")
-	}
-	if nonError == 1 {
-		mapped, err := b.mapType(results.At(0).Type())
+	usedResultNames := map[string]int{}
+	named := results.Len() != 0
+	for i := 0; i < results.Len(); i++ {
+		variable := results.At(i)
+		if isErrorType(variable.Type()) {
+			call.ErrorCount++
+			continue
+		}
+		mapped, err := b.mapType(variable.Type())
 		if err != nil {
-			return nil, fmt.Errorf("result: %w", err)
+			return nil, fmt.Errorf("result %d: %w", i, err)
 		}
 		if containsStreamSink(mapped, map[int]bool{}) {
 			return nil, errors.New("a stream sink cannot be returned to Dart; take it as a parameter instead")
 		}
-		call.Result = mapped
-		call.ResultGoName = results.At(0).Name()
+		if variable.Name() == "" || variable.Name() == "_" {
+			named = false
+		}
+		call.Results = append(call.Results, &resultModel{
+			GoName: variable.Name(), DartName: uniqueName(names.LowerCamel(variable.Name()), usedResultNames),
+			GoIndex: i, Type: mapped,
+		})
 	}
-	if results.Len() > nonError+btoi(call.HasError) {
-		return nil, errors.New("error must be the final result")
-	}
+	// A record reads much better with the Go result names, and Go requires
+	// results to be either all named or none.
+	call.NamedResults = named && len(call.Results) > 1
 
 	// A call that only produces a stream owns it: exactly one sink and no
 	// value to return means the Dart function can hand back Stream<T>
@@ -255,7 +262,7 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 				return nil, fmt.Errorf("//fgb:nullable cannot be applied to the stream sink parameter %q", param.GoName)
 			}
 		}
-		if len(sinkParams) == 1 && call.Result == nil {
+		if len(sinkParams) == 1 && len(call.Results) == 0 {
 			call.StreamParam = sinkParams[0]
 		}
 	}

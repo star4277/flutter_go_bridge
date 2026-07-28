@@ -281,6 +281,47 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | 最后一个 `error` 返回值 | `FgbPlatformException` |
 | `any` / `interface{}` | `Object?` |
 
+## 多返回值与多 error
+
+**非 error 返回值有多个时封装成 Dart record（元组）**；Go 的结果要么全带名字要么全不带，
+所以规则很干净——全带名字就生成命名 record，否则生成位置 record：
+
+```go
+func Divide(a, b int) (int, int, error)                          // → (int, int) divide({...})
+func Split(v string) (head string, tail string, err error)       // → ({String head, String tail}) split({...})
+func Describe(n int) (Point, string, bool)                       // → (Point, String, bool) describe({...})
+```
+
+```dart
+final (q, r) = divide(a: 17, b: 5);        // 位置 record 可直接解构
+final parts = split(value: 'hello');
+print('${parts.head} / ${parts.tail}');    // 命名 record 按名字取
+```
+
+单个非 error 返回值保持原样，不会被包成一元元组。
+
+**`error` 可以出现在任意位置，而且可以有多个**：每一个非 nil 的 error 都会被收集起来，
+一起放进 `FgbPlatformException.goErrors`（`FgbGoErrors` 类型，内含 `List<String> messages`）：
+
+```go
+func Validate(name string, age int) (string, error, error)
+func Load(id int) (error, int)     // error 不必在最后
+```
+
+```dart
+try {
+  validate(name: '', age: -1);
+} on FgbPlatformException catch (error) {
+  print(error.message);            // "name is required; age must not be negative"
+  for (final m in error.goErrors!.messages) print(m);
+}
+```
+
+只声明一个 `error` 时 `goErrors` 为 null，用 `message` 即可——行为与之前完全一致。
+只有 error、没有非 error 返回值的函数在 Dart 侧仍是 `void`。
+
+当前泛型函数、可变参数、非空接口和复杂外部命名类型暂未支持。
+
 结构体分类与 FRB 一致：字段全部可序列化的结构体默认按字段翻译（指针 receiver 方法照常生成，
 但 receiver 按值序列化，Go 侧的修改不会写回 Dart 对象）；含不可序列化字段（func、chan、
 非空接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；`//fgb:opaque` 可强制句柄
@@ -310,9 +351,6 @@ go/
 - 每次 `generate` 都会重写它，因此支持包与生成的 bridge 永远同版本，不存在版本错配。
 - 它在**解析 Go 输入之前**写出，所以第一次使用时不会出现「先 import 才能生成、先生成才能 import」的死锁。
 - `internal` 包一律不参与代码生成：把 `go_input` 指向 `internal/...` 会直接报错。
-
-当前支持零个或一个非 `error` 返回值；`error` 必须位于最后。泛型函数、可变参数、多非 error 返回值、
-非空接口和复杂外部命名类型暂未支持。
 
 ## Stream
 

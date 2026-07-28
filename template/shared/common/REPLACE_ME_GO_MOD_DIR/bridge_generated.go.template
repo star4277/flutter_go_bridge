@@ -944,6 +944,23 @@ func fgbGoError(method string, err error) *fgbCallError {
 	}
 }
 
+// fgbGoErrors reports every non-nil error of a call that declares several
+// error results. The individual messages travel in the details so Dart can
+// surface them as FgbGoErrors.
+func fgbGoErrors(method string, messages []any) *fgbCallError {
+	combined := ""
+	for index, message := range messages {
+		if index != 0 {
+			combined += "; "
+		}
+		combined += fmt.Sprint(message)
+	}
+	return &fgbCallError{
+		Code: "go_error", Message: combined,
+		Details: map[any]any{"method": method, "errors": messages},
+	}
+}
+
 func fgbEncodeCallError(codec fgbStandardMethodCodec, callErr *fgbCallError) []byte {
 	encoded, err := codec.encodeError(callErr.Code, callErr.Message, callErr.Details)
 	if err == nil {
@@ -1147,6 +1164,30 @@ func fgbDcoEnvelopeSuccess(value *C.FgbDartCObject) *C.FgbDartCObject {
 	return root
 }
 
+// fgbDcoErrorDetails carries the individual messages of a multi-error call.
+// Dart_CObject has no map type, so the DCO path sends a plain list of strings
+// where the standard codec sends the whole details map.
+func fgbDcoErrorDetails(callErr *fgbCallError) (*C.FgbDartCObject, error) {
+	raw, _ := callErr.Details.(map[any]any)
+	messages, _ := raw["errors"].([]any)
+	if len(messages) == 0 {
+		return fgbDcoNull()
+	}
+	list := C.fgb_dco_array_new(C.int64_t(len(messages)))
+	if list == nil {
+		return nil, fmt.Errorf("DCO array allocation failed")
+	}
+	for index, message := range messages {
+		child, err := fgbDcoString(fmt.Sprint(message))
+		if err != nil {
+			C.fgb_internal_dco_free(list)
+			return nil, err
+		}
+		C.fgb_dco_array_set(list, C.int64_t(index), child)
+	}
+	return list, nil
+}
+
 func fgbDcoEnvelopeError(callErr *fgbCallError) *C.FgbDartCObject {
 	if callErr == nil {
 		callErr = &fgbCallError{Code: "bridge_error", Message: "unknown bridge error"}
@@ -1157,7 +1198,7 @@ func fgbDcoEnvelopeError(callErr *fgbCallError) *C.FgbDartCObject {
 	}
 	code, err1 := fgbDcoString(callErr.Code)
 	message, err2 := fgbDcoString(callErr.Message)
-	details, err3 := fgbDcoNull()
+	details, err3 := fgbDcoErrorDetails(callErr)
 	if err1 != nil || err2 != nil || err3 != nil {
 		C.fgb_internal_dco_free(root)
 		if code != nil {
@@ -1755,8 +1796,8 @@ func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		result := api.Greeting(arg0)
-		encoded, err := fgbEncode0(result)
+		result0 := api.Greeting(arg0)
+		encoded, err := fgbEncode0(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
 		}
@@ -1778,8 +1819,8 @@ func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		result := receiver.Moved(arg0, arg1)
-		encoded, err := fgbEncode1(result)
+		result0 := receiver.Moved(arg0, arg1)
+		encoded, err := fgbEncode1(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
 		}
@@ -1788,8 +1829,8 @@ func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 		if _, err := fgbRequireArgs(call.Arguments, 0); err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		result := api.NewCounter()
-		encoded, err := fgbEncode3(result)
+		result0 := api.NewCounter()
+		encoded, err := fgbEncode3(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
 		}
@@ -1807,8 +1848,8 @@ func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {
 		if err != nil {
 			return nil, fgbInvalidArguments(call.Method, err)
 		}
-		result := receiver.Add(arg0)
-		encoded, err := fgbEncode2(result)
+		result0 := receiver.Add(arg0)
+		encoded, err := fgbEncode2(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": call.Method}}
 		}
@@ -1828,8 +1869,8 @@ func fgbDispatchCst(callID int32, raw unsafe.Pointer) (*C.FgbDartCObject, *fgbCa
 		if err != nil {
 			return nil, fgbInvalidArguments("Greeting", err)
 		}
-		result := api.Greeting(arg0)
-		encoded, err := fgbDcoEncode0(result)
+		result0 := api.Greeting(arg0)
+		encoded, err := fgbDcoEncode0(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "Greeting"}}
 		}
@@ -1851,8 +1892,8 @@ func fgbDispatchCst(callID int32, raw unsafe.Pointer) (*C.FgbDartCObject, *fgbCa
 		if err != nil {
 			return nil, fgbInvalidArguments("Point.Moved", err)
 		}
-		result := receiver.Moved(arg0, arg1)
-		encoded, err := fgbDcoEncode1(result)
+		result0 := receiver.Moved(arg0, arg1)
+		encoded, err := fgbDcoEncode1(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "Point.Moved"}}
 		}
@@ -1861,8 +1902,8 @@ func fgbDispatchCst(callID int32, raw unsafe.Pointer) (*C.FgbDartCObject, *fgbCa
 		if raw == nil {
 			return nil, fgbInvalidArguments("NewCounter", fmt.Errorf("null CST arguments"))
 		}
-		result := api.NewCounter()
-		encoded, err := fgbDcoEncode3(result)
+		result0 := api.NewCounter()
+		encoded, err := fgbDcoEncode3(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "NewCounter"}}
 		}
@@ -1880,8 +1921,8 @@ func fgbDispatchCst(callID int32, raw unsafe.Pointer) (*C.FgbDartCObject, *fgbCa
 		if err != nil {
 			return nil, fgbInvalidArguments("Counter.Add", err)
 		}
-		result := receiver.Add(arg0)
-		encoded, err := fgbDcoEncode2(result)
+		result0 := receiver.Add(arg0)
+		encoded, err := fgbDcoEncode2(result0)
 		if err != nil {
 			return nil, &fgbCallError{Code: "encode_error", Message: err.Error(), Details: map[any]any{"method": "Counter.Add"}}
 		}

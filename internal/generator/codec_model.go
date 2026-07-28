@@ -11,7 +11,10 @@ func preferredCodecForCall(call *callModel) codecModePack {
 	for _, param := range call.Params {
 		cst = cst && param.Type.supportsCodec(codecModeCST, map[int]bool{})
 	}
-	dco := call.Result == nil || call.Result.supportsCodec(codecModeDCO, map[int]bool{})
+	dco := true
+	for _, result := range call.Results {
+		dco = dco && result.Type.supportsCodec(codecModeDCO, map[int]bool{})
+	}
 	if cst && dco {
 		return codecModePack{DartToGo: codecModeCST, GoToDart: codecModeDCO}
 	}

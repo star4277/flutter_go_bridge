@@ -598,6 +598,23 @@ func fgbGoError(method string, err error) *fgbCallError {
 	}
 }
 
+// fgbGoErrors reports every non-nil error of a call that declares several
+// error results. The individual messages travel in the details so Dart can
+// surface them as FgbGoErrors.
+func fgbGoErrors(method string, messages []any) *fgbCallError {
+	combined := ""
+	for index, message := range messages {
+		if index != 0 {
+			combined += "; "
+		}
+		combined += fmt.Sprint(message)
+	}
+	return &fgbCallError{
+		Code: "go_error", Message: combined,
+		Details: map[any]any{"method": method, "errors": messages},
+	}
+}
+
 func fgbEncodeCallError(codec fgbStandardMethodCodec, callErr *fgbCallError) []byte {
 	encoded, err := codec.encodeError(callErr.Code, callErr.Message, callErr.Details)
 	if err == nil {
@@ -801,6 +818,30 @@ func fgbDcoEnvelopeSuccess(value *C.FgbDartCObject) *C.FgbDartCObject {
 	return root
 }
 
+// fgbDcoErrorDetails carries the individual messages of a multi-error call.
+// Dart_CObject has no map type, so the DCO path sends a plain list of strings
+// where the standard codec sends the whole details map.
+func fgbDcoErrorDetails(callErr *fgbCallError) (*C.FgbDartCObject, error) {
+	raw, _ := callErr.Details.(map[any]any)
+	messages, _ := raw["errors"].([]any)
+	if len(messages) == 0 {
+		return fgbDcoNull()
+	}
+	list := C.fgb_dco_array_new(C.int64_t(len(messages)))
+	if list == nil {
+		return nil, fmt.Errorf("DCO array allocation failed")
+	}
+	for index, message := range messages {
+		child, err := fgbDcoString(fmt.Sprint(message))
+		if err != nil {
+			C.fgb_internal_dco_free(list)
+			return nil, err
+		}
+		C.fgb_dco_array_set(list, C.int64_t(index), child)
+	}
+	return list, nil
+}
+
 func fgbDcoEnvelopeError(callErr *fgbCallError) *C.FgbDartCObject {
 	if callErr == nil {
 		callErr = &fgbCallError{Code: "bridge_error", Message: "unknown bridge error"}
@@ -811,7 +852,7 @@ func fgbDcoEnvelopeError(callErr *fgbCallError) *C.FgbDartCObject {
 	}
 	code, err1 := fgbDcoString(callErr.Code)
 	message, err2 := fgbDcoString(callErr.Message)
-	details, err3 := fgbDcoNull()
+	details, err3 := fgbDcoErrorDetails(callErr)
 	if err1 != nil || err2 != nil || err3 != nil {
 		C.fgb_internal_dco_free(root)
 		if code != nil { C.fgb_internal_dco_free(code) }

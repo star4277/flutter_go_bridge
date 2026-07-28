@@ -173,13 +173,15 @@ func (r *splitDartRenderer) renderCentralCstCall(call *callModel, arguments []st
 		r.line("    args.ref.%s = fgbCstEncode%d(%s, arena, %s);", param.CName, param.Type.ID, arguments[argIndex], strconv.Quote(param.DartName))
 		argIndex++
 	}
-	if call.Result != nil {
+	if len(call.Results) != 0 {
 		if isAsyncCall(call) {
 			r.line("    final wireResult = await fgbInvokeCstAsync(%d, args.cast<ffi.Void>());", call.ID)
 		} else {
 			r.line("    final wireResult = fgbInvokeCstSync(%d, args.cast<ffi.Void>());", call.ID)
 		}
-		r.line("    return fgbDecode%d(wireResult, this, 'result');", call.Result.ID)
+		for _, line := range dartResultDecodeLines(call, "wireResult", "    ") {
+			r.line("%s", line)
+		}
 	} else if isAsyncCall(call) {
 		r.line("    await fgbInvokeCstAsync(%d, args.cast<ffi.Void>());", call.ID)
 		r.line("    return;")

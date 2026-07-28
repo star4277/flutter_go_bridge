@@ -23,11 +23,47 @@ type dartSourceGroup struct {
 	Named   []*namedModel
 }
 
+// dartResultType is the Dart type a call hands back: nothing, a single value,
+// or - for several non-error Go results - a record. Named Go results produce a
+// named record so callers read `result.total` instead of `result.$2`.
 func dartResultType(call *callModel) string {
-	if call == nil || call.Result == nil {
+	if call == nil || len(call.Results) == 0 {
 		return "void"
 	}
-	return call.Result.DartType
+	if len(call.Results) == 1 {
+		return call.Results[0].Type.DartType
+	}
+	fields := make([]string, 0, len(call.Results))
+	for _, result := range call.Results {
+		if call.NamedResults {
+			fields = append(fields, fmt.Sprintf("%s %s", result.Type.DartType, result.DartName))
+		} else {
+			fields = append(fields, result.Type.DartType)
+		}
+	}
+	if call.NamedResults {
+		return "({" + strings.Join(fields, ", ") + "})"
+	}
+	return "(" + strings.Join(fields, ", ") + ")"
+}
+
+// dartResultDecodeLines renders the statements that turn one wire value into
+// the call's Dart result. Several results arrive as a list and are rebuilt
+// into a record.
+func dartResultDecodeLines(call *callModel, wireExpression, indent string) []string {
+	if len(call.Results) == 1 {
+		return []string{fmt.Sprintf("%sreturn fgbDecode%d(%s, this, 'result');", indent, call.Results[0].Type.ID, wireExpression)}
+	}
+	lines := []string{fmt.Sprintf("%sfinal fgbRecord = fgbAsResultList(%s, %d);", indent, wireExpression, len(call.Results))}
+	fields := make([]string, 0, len(call.Results))
+	for index, result := range call.Results {
+		value := fmt.Sprintf("fgbDecode%d(fgbRecord[%d], this, 'result.%d')", result.Type.ID, index, index)
+		if call.NamedResults {
+			value = result.DartName + ": " + value
+		}
+		fields = append(fields, value)
+	}
+	return append(lines, fmt.Sprintf("%sreturn (%s);", indent, strings.Join(fields, ", ")))
 }
 
 // dartParamType is the Dart spelling of a parameter in the public API.
@@ -278,7 +314,7 @@ func (r *splitDartRenderer) renderTopCall(call *callModel) {
 	if isAsyncCall(call) {
 		r.line("Future<%s> %s(%s) async {", resultType, call.DartName, params)
 		r.line("  final bridge = __FGB_BRIDGE_CLASS__.instance;")
-		if call.Result == nil {
+		if len(call.Results) == 0 {
 			r.line("  await %s;", invocation)
 		} else {
 			r.line("  return await %s;", invocation)
@@ -286,7 +322,7 @@ func (r *splitDartRenderer) renderTopCall(call *callModel) {
 	} else {
 		r.line("%s %s(%s) {", resultType, call.DartName, params)
 		r.line("  final bridge = __FGB_BRIDGE_CLASS__.instance;")
-		if call.Result == nil {
+		if len(call.Results) == 0 {
 			r.line("  %s;", invocation)
 		} else {
 			r.line("  return %s;", invocation)
@@ -410,14 +446,14 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 	}
 	if isAsyncCall(call) {
 		r.line("%sFuture<%s> %s(%s) async {", indent, resultType, call.DartName, params)
-		if call.Result == nil {
+		if len(call.Results) == 0 {
 			r.line("%s  await %s;", indent, invocation)
 		} else {
 			r.line("%s  return await %s;", indent, invocation)
 		}
 	} else {
 		r.line("%s%s %s(%s) {", indent, resultType, call.DartName, params)
-		if call.Result == nil {
+		if len(call.Results) == 0 {
 			r.line("%s  %s;", indent, invocation)
 		} else {
 			r.line("%s  return %s;", indent, invocation)

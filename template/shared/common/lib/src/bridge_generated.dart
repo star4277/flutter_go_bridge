@@ -49,14 +49,51 @@ final class _FgbCstArgs3 extends ffi.Struct {
 }
 
 final class FgbPlatformException implements Exception {
-  FgbPlatformException(this.code, this.message, this.details);
+  FgbPlatformException(this.code, this.message, this.details, {this.goErrors});
 
   final String code;
   final String? message;
   final Object? details;
 
+  /// The individual Go errors, when the call declares several error results.
+  /// Null for a call with at most one error result - use [message] there.
+  final FgbGoErrors? goErrors;
+
   @override
   String toString() => 'FgbPlatformException($code, $message, $details)';
+}
+
+/// The combined errors of a Go call that declares several error results: every
+/// non-nil one is collected instead of only the first.
+final class FgbGoErrors implements Exception {
+  const FgbGoErrors(this.messages);
+
+  final List<String> messages;
+
+  int get length => messages.length;
+
+  String operator [](int index) => messages[index];
+
+  @override
+  String toString() => 'FgbGoErrors(${messages.join('; ')})';
+}
+
+/// Reads the individual error messages out of an error envelope's details.
+/// The standard codec sends the whole details map; the DCO path, which has no
+/// map type, sends a plain list of messages.
+FgbGoErrors? _fgbGoErrorsFrom(Object? details) {
+  Object? errors = details;
+  if (details is Map) errors = details['errors'];
+  if (errors is! List) return null;
+  return FgbGoErrors(List<String>.unmodifiable(errors.map((Object? error) => '$error')));
+}
+
+/// Internal: unwraps the list carrying a call's several results.
+List<Object?> fgbAsResultList(Object? value, int count) {
+  if (value is! List || value.length != count) {
+    throw FormatException('expected $count results, got $value');
+  }
+  return value;
 }
 
 /// Base class for generated opaque Go handles. The generated source files do
@@ -271,7 +308,12 @@ final class _FgbCodec {
       if (message != null && message is! String) {
         throw const FormatException('error message is not a String or null');
       }
-      return throw FgbPlatformException(code, message as String?, details);
+      return throw FgbPlatformException(
+        code,
+        message as String?,
+        details,
+        goErrors: _fgbGoErrorsFrom(details),
+      );
     }
     throw const FormatException('unknown method envelope flag');
   }
@@ -839,7 +881,12 @@ final class FlutterGoBridge {
     }
     if (raw.first == 0) return raw[1];
     if (raw.first == 1 && raw.length >= 4) {
-      throw FgbPlatformException(raw[1] as String, raw[2] as String?, raw[3]);
+      throw FgbPlatformException(
+        raw[1] as String,
+        raw[2] as String?,
+        raw[3],
+        goErrors: _fgbGoErrorsFrom(raw[3]),
+      );
     }
     throw const FormatException('unknown DCO envelope flag');
   }

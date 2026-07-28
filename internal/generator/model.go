@@ -83,21 +83,27 @@ type codecModePack struct {
 }
 
 type callModel struct {
-	ID           int
-	GoName       string
-	DartName     string
-	Mode         bridgemodel.CallMode
-	WireName     string
-	Docs         string
-	SourceFile   string
-	Receiver     *wireType
-	PointerRecv  bool
-	Params       []*paramModel
-	Result       *wireType
-	HasError     bool
-	GoTarget     string
-	ResultGoName string
-	Codec        codecModePack
+	ID          int
+	GoName      string
+	DartName    string
+	Mode        bridgemodel.CallMode
+	WireName    string
+	Docs        string
+	SourceFile  string
+	Receiver    *wireType
+	PointerRecv bool
+	Params      []*paramModel
+	// Results holds the non-error results in Go order. Two or more become a
+	// Dart record; exactly one stays a plain value.
+	Results []*resultModel
+	// NamedResults records that every Go result carries a name, so the Dart
+	// record uses named fields instead of positional ones.
+	NamedResults bool
+	// ErrorCount is how many `error` results the Go function declares. Any
+	// non-nil one fails the call; several are reported together.
+	ErrorCount int
+	GoTarget   string
+	Codec      codecModePack
 	// StreamParam is set when the call produces a Dart Stream on its own
 	// (exactly one StreamSink parameter and no non-error result). The
 	// parameter is then hidden from the Dart signature and the generated
@@ -107,6 +113,45 @@ type callModel struct {
 	// signature, or -1. The bridge supplies the context and cancels it when
 	// the Dart side stops listening to the stream this call owns.
 	ContextIndex int
+}
+
+// resultModel is one non-error result of a bridged call.
+type resultModel struct {
+	GoName   string
+	DartName string
+	// GoIndex is the position in the Go result list, which errors share.
+	GoIndex int
+	Type    *wireType
+}
+
+func (c *callModel) hasError() bool { return c != nil && c.ErrorCount > 0 }
+
+// resultShape reports, in Go result order, whether each result is an error.
+// Errors may appear anywhere in the signature.
+func (c *callModel) resultShape() []bool {
+	shape := make([]bool, 0, len(c.Results)+c.ErrorCount)
+	next := 0
+	for _, result := range c.Results {
+		for next < result.GoIndex {
+			shape = append(shape, true)
+			next++
+		}
+		shape = append(shape, false)
+		next++
+	}
+	for len(shape) < len(c.Results)+c.ErrorCount {
+		shape = append(shape, true)
+	}
+	return shape
+}
+
+// singleResult is the only non-error result, or nil when the call returns
+// nothing or a record.
+func (c *callModel) singleResult() *wireType {
+	if c == nil || len(c.Results) != 1 {
+		return nil
+	}
+	return c.Results[0].Type
 }
 
 type paramModel struct {

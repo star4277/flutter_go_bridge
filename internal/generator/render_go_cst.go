@@ -331,25 +331,26 @@ func (r *goRenderer) renderCstDispatch() {
 			return fmt.Sprintf("int64(args.%s)", call.Params[index].CName)
 		})
 		_ = argOffset
-		callExpr := r.goCallExpression(call)
-		switch {
-		case call.Result != nil && call.HasError:
-			r.line("\t\tresult, goErr := %s", callExpr)
-			r.line("\t\tif goErr != nil { return nil, fgbGoError(%s, goErr) }", strconv.Quote(call.WireName))
-		case call.Result != nil:
-			r.line("\t\tresult := %s", callExpr)
-		case call.HasError:
-			r.line("\t\tgoErr := %s", callExpr)
-			r.line("\t\tif goErr != nil { return nil, fgbGoError(%s, goErr) }", strconv.Quote(call.WireName))
-		default:
-			r.line("\t\t%s", callExpr)
-		}
-		if call.Result != nil {
-			r.line("\t\tencoded, err := fgbDcoEncode%d(result)", call.Result.ID)
-			r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: %s} }", fmt.Sprintf("map[any]any{\"method\": %q}", call.WireName))
-			r.line("\t\treturn encoded, nil")
-		} else {
+		r.renderGoCallStatement(call, "\t\t", strconv.Quote(call.WireName))
+		encodeError := fmt.Sprintf("map[any]any{\"method\": %q}", call.WireName)
+		switch len(call.Results) {
+		case 0:
 			r.line("\t\treturn nil, nil")
+		case 1:
+			r.line("\t\tencoded, err := fgbDcoEncode%d(result0)", call.Results[0].Type.ID)
+			r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: %s} }", encodeError)
+			r.line("\t\treturn encoded, nil")
+		default:
+			// Several results become one DCO array, which Dart rebuilds into a
+			// record.
+			r.line("\t\tencoded := C.fgb_dco_array_new(%d)", len(call.Results))
+			r.line("\t\tif encoded == nil { return nil, &fgbCallError{Code: \"encode_error\", Message: \"DCO array allocation failed\", Details: %s} }", encodeError)
+			for index, result := range call.Results {
+				r.line("\t\tchild%d, err := fgbDcoEncode%d(result%d)", index, result.Type.ID, index)
+				r.line("\t\tif err != nil { C.fgb_internal_dco_free(encoded); return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: %s} }", encodeError)
+				r.line("\t\tC.fgb_dco_array_set(encoded, %d, child%d)", index, index)
+			}
+			r.line("\t\treturn encoded, nil")
 		}
 	}
 	r.line("\tdefault:")

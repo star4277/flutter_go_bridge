@@ -421,6 +421,40 @@ func (r *goRenderer) renderStreamSinkFactory(typ *wireType) {
 	r.line("}")
 }
 
+// renderGoCallStatement emits the Go call plus the shared error handling.
+// Non-error results are bound to result<k>, every `error` result to goErr<j>;
+// any non-nil error fails the call, and several are reported together.
+func (r *goRenderer) renderGoCallStatement(call *callModel, indent, methodExpr string) {
+	assignments := make([]string, 0, len(call.Results)+call.ErrorCount)
+	nextResult, nextError := 0, 0
+	for _, isError := range call.resultShape() {
+		if isError {
+			assignments = append(assignments, fmt.Sprintf("goErr%d", nextError))
+			nextError++
+			continue
+		}
+		assignments = append(assignments, fmt.Sprintf("result%d", nextResult))
+		nextResult++
+	}
+	callExpr := r.goCallExpression(call)
+	if len(assignments) == 0 {
+		r.line("%s%s", indent, callExpr)
+	} else {
+		r.line("%s%s := %s", indent, strings.Join(assignments, ", "), callExpr)
+	}
+	switch call.ErrorCount {
+	case 0:
+	case 1:
+		r.line("%sif goErr0 != nil { return nil, fgbGoError(%s, goErr0) }", indent, methodExpr)
+	default:
+		r.line("%svar fgbErrs []any", indent)
+		for index := 0; index < call.ErrorCount; index++ {
+			r.line("%sif goErr%d != nil { fgbErrs = append(fgbErrs, goErr%d.Error()) }", indent, index, index)
+		}
+		r.line("%sif len(fgbErrs) != 0 { return nil, fgbGoErrors(%s, fgbErrs) }", indent, methodExpr)
+	}
+}
+
 func (r *goRenderer) renderDispatch() {
 	r.line("func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {")
 	r.line("\tswitch call.Method {")
@@ -453,25 +487,25 @@ func (r *goRenderer) renderDispatch() {
 		r.renderStreamChannelSetup(call, "\t\t", func(index int) string {
 			return fmt.Sprintf("fgbMustStreamHandle(args[%d])", index+argOffset)
 		})
-		callExpr := r.goCallExpression(call)
-		switch {
-		case call.Result != nil && call.HasError:
-			r.line("\t\tresult, goErr := %s", callExpr)
-			r.line("\t\tif goErr != nil { return nil, fgbGoError(call.Method, goErr) }")
-		case call.Result != nil:
-			r.line("\t\tresult := %s", callExpr)
-		case call.HasError:
-			r.line("\t\tgoErr := %s", callExpr)
-			r.line("\t\tif goErr != nil { return nil, fgbGoError(call.Method, goErr) }")
-		default:
-			r.line("\t\t%s", callExpr)
-		}
-		if call.Result != nil {
-			r.line("\t\tencoded, err := fgbEncode%d(result)", call.Result.ID)
+		r.renderGoCallStatement(call, "\t\t", "call.Method")
+		switch len(call.Results) {
+		case 0:
+			r.line("\t\treturn nil, nil")
+		case 1:
+			r.line("\t\tencoded, err := fgbEncode%d(result0)", call.Results[0].Type.ID)
 			r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: map[any]any{\"method\": call.Method}} }")
 			r.line("\t\treturn encoded, nil")
-		} else {
-			r.line("\t\treturn nil, nil")
+		default:
+			// Several results travel as one list and become a Dart record.
+			for index, result := range call.Results {
+				r.line("\t\tencoded%d, err := fgbEncode%d(result%d)", index, result.Type.ID, index)
+				r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: map[any]any{\"method\": call.Method}} }")
+			}
+			encoded := make([]string, len(call.Results))
+			for index := range call.Results {
+				encoded[index] = fmt.Sprintf("encoded%d", index)
+			}
+			r.line("\t\treturn []any{%s}, nil", strings.Join(encoded, ", "))
 		}
 	}
 	r.line("\tdefault:")
