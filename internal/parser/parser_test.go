@@ -195,3 +195,21 @@ func TestParseKeepsCgoSourceAndMirrorsItsFile(t *testing.T) {
 		t.Fatalf("got input dir %q, want %q", api.InputDir, dir)
 	}
 }
+
+func TestParseRejectsInternalPackage(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/internal-input\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "internal", "secret")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte("package secret\n\nfunc Hidden() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Parse(Options{Input: inputDir, BaseDir: dir})
+	if err == nil || !strings.Contains(err.Error(), "internal") {
+		t.Fatalf("internal packages must be excluded from generation, got %v", err)
+	}
+}

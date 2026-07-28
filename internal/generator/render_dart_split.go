@@ -53,18 +53,25 @@ func dartEncoderValueType(typ *wireType) string {
 
 // dartParams renders the public API parameter list. Every generated Dart
 // entrypoint uses named parameters; Go pointer parameters and nullable
-// callbacks map to optional ones, everything else is required.
+// callbacks map to optional ones, everything else is required. A sink that
+// the call owns (see callModel.StreamParam) is not part of the public API.
 func dartParams(call *callModel) string {
 	if call == nil || len(call.Params) == 0 {
 		return ""
 	}
 	params := make([]string, 0, len(call.Params))
 	for _, param := range call.Params {
+		if param == call.StreamParam {
+			continue
+		}
 		if param.Nullable || isPointerType(param.Type.Original) {
 			params = append(params, fmt.Sprintf("%s %s", dartParamType(param), param.DartName))
 		} else {
 			params = append(params, fmt.Sprintf("required %s %s", dartParamType(param), param.DartName))
 		}
+	}
+	if len(params) == 0 {
+		return ""
 	}
 	return "{" + strings.Join(params, ", ") + "}"
 }
@@ -192,7 +199,7 @@ func dartSourceGroups(unit *unit) (map[string]*dartSourceGroup, map[string]strin
 			if key == "<generated>" {
 				paths[key] = "_generated.dart"
 			} else {
-				paths[key] = sourceDartPath(unit.InputDir, source)
+				paths[key] = sourceDartPath(unit.MirrorRoot, source)
 			}
 		}
 		return key
@@ -241,15 +248,16 @@ func cleanSourcePath(value string) string {
 	return filepath.Clean(abs)
 }
 
-func sourceDartPath(inputDir, source string) string {
-	relative, err := filepath.Rel(inputDir, source)
+// sourceDartPath mirrors the Go package tree into the Dart output tree. The
+// anchor is the Go module root, so go/api/lib.go becomes api/lib.dart next to
+// bridge_generated.dart - the Dart layout then reads like the Go one instead
+// of flattening every package into a single directory.
+func sourceDartPath(mirrorRoot, source string) string {
+	relative, err := filepath.Rel(mirrorRoot, source)
 	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		relative = filepath.Base(source)
 	}
 	relative = strings.TrimSuffix(relative, filepath.Ext(relative)) + ".dart"
-	// Mirror the Go input tree directly below the Dart output root. For
-	// example, api/foo.go becomes api/foo.dart; there is no synthetic wrapper
-	// directory.
 	return filepath.ToSlash(relative)
 }
 
@@ -260,8 +268,13 @@ func (r *splitDartRenderer) renderTopCall(call *callModel) {
 	for index, param := range call.Params {
 		args[index] = param.DartName
 	}
-	invocation := fmt.Sprintf("bridge.fgbInternalCall%d(%s)", call.ID, strings.Join(args, ", "))
 	r.dartDoc(call.Docs, "")
+	if call.StreamParam != nil {
+		r.renderStreamCall(call, "__FGB_BRIDGE_CLASS__.instance", args, params, "")
+		r.line("")
+		return
+	}
+	invocation := fmt.Sprintf("bridge.fgbInternalCall%d(%s)", call.ID, strings.Join(args, ", "))
 	if isAsyncCall(call) {
 		r.line("Future<%s> %s(%s) async {", resultType, call.DartName, params)
 		r.line("  final bridge = __FGB_BRIDGE_CLASS__.instance;")
@@ -281,6 +294,29 @@ func (r *splitDartRenderer) renderTopCall(call *callModel) {
 	}
 	r.line("}")
 	r.line("")
+}
+
+// renderStreamCall emits a call that owns its stream: the generated function
+// creates the StreamController and hands its sink to Go. The Go call only
+// starts when the stream is listened to - a Dart stream is cold, and starting
+// eagerly would let a discarded stream buffer forever. Cancelling the
+// subscription releases the sink so the Go side learns to stop producing and
+// retires the controller; a failing call surfaces as a stream error.
+func (r *splitDartRenderer) renderStreamCall(call *callModel, bridge string, args []string, params, indent string) {
+	elem := call.StreamParam.Type.Stream.DartType
+	for index, param := range call.Params {
+		if param == call.StreamParam {
+			args[index] = "controller.sink"
+		}
+	}
+	r.line("%sStream<%s> %s(%s) {", indent, elem, call.DartName, params)
+	r.line("%s  final bridge = %s;", indent, bridge)
+	r.line("%s  final controller = StreamController<%s>();", indent, elem)
+	r.line("%s  controller.onListen = () {", indent)
+	r.line("%s    bridge.fgbInternalStartStream(controller, bridge.fgbInternalCall%d(%s));", indent, call.ID, strings.Join(args, ", "))
+	r.line("%s  };", indent)
+	r.line("%s  return controller.stream;", indent)
+	r.line("%s}", indent)
 }
 
 func (r *splitDartRenderer) renderStruct(structure *structModel) {
@@ -368,6 +404,10 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 		bridge = "__FGB_BRIDGE_CLASS__.instance"
 	}
 	r.dartDoc(call.Docs, indent)
+	if call.StreamParam != nil {
+		r.renderStreamCall(call, bridge, args, params, indent)
+		return
+	}
 	if isAsyncCall(call) {
 		r.line("%sFuture<%s> %s(%s) async {", indent, resultType, call.DartName, params)
 		if call.Result == nil {
@@ -384,6 +424,15 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 		}
 	}
 	r.line("%s}", indent)
+}
+
+// renderStreamSinkRegistration registers the Dart sink and hands Go the
+// resulting handle. The typed add closure is stored alongside the sink so the
+// shared stream dispatcher can decode items without knowing their type.
+func (r *splitDartRenderer) renderStreamSinkRegistration(typ *wireType, bridge string) {
+	r.line("  return %s.fgbInternalRegisterStreamSink(value, (Object? raw) {", bridge)
+	r.line("    value.add(fgbDecode%d(raw, %s, '$path item'));", typ.Stream.ID, bridge)
+	r.line("  });")
 }
 
 // renderCallbackRegistration wraps the user closure into a uniform invoker:
@@ -531,6 +580,8 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  return bridge.fgbInternalResolveDartOpaque(value, path);")
 	case kindCallback:
 		r.line("  throw UnsupportedError('$path: function values cannot travel from Go to Dart');")
+	case kindStreamSink:
+		r.line("  throw UnsupportedError('$path: stream sinks only travel from Dart to Go');")
 	case kindNamed:
 		r.line("  return %s(fgbDecode%d(value, bridge, path));", typ.Named.DartName, typ.Named.Underlying.ID)
 	default:
@@ -586,6 +637,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  return value.fgbHandle;")
 	case kindDartOpaque:
 		r.line("  return bridge.fgbInternalRegisterDartOpaque(value);")
+	case kindStreamSink:
+		r.renderStreamSinkRegistration(typ, "bridge")
 	case kindCallback:
 		r.renderCallbackRegistration(typ, "bridge")
 	case kindNamed:

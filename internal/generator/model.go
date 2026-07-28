@@ -25,6 +25,7 @@ const (
 	kindOpaque      typeKind = "opaque"
 	kindDartOpaque  typeKind = "dart_opaque"
 	kindCallback    typeKind = "callback"
+	kindStreamSink  typeKind = "stream_sink"
 	kindNamed       typeKind = "named"
 	kindBytes       typeKind = "bytes"
 	kindInt32List   typeKind = "int32_list"
@@ -33,9 +34,12 @@ const (
 )
 
 type unit struct {
-	PackagePath  string
-	PackageName  string
-	InputDir     string
+	PackagePath string
+	PackageName string
+	InputDir    string
+	// MirrorRoot anchors the Dart output tree: source paths are mirrored
+	// relative to it, so the Dart layout matches the Go package layout.
+	MirrorRoot   string
 	SourceFiles  []string
 	Direct       bool
 	NeedsMain    bool
@@ -53,6 +57,12 @@ type unit struct {
 	UsesTime       bool
 	UsesBigInt     bool
 	UsesDartOpaque bool
+	UsesStreamSink bool
+	// UsesRuntimePackage tracks whether the generated bridge has to import the
+	// fgb runtime package (DartOpaque and StreamSink live there).
+	UsesRuntimePackage bool
+	// SupportPackagePath is the import path of the generated support package.
+	SupportPackagePath string
 }
 
 // codecMode mirrors flutter_rust_bridge's directional codec model. The
@@ -88,6 +98,15 @@ type callModel struct {
 	GoTarget     string
 	ResultGoName string
 	Codec        codecModePack
+	// StreamParam is set when the call produces a Dart Stream on its own
+	// (exactly one StreamSink parameter and no non-error result). The
+	// parameter is then hidden from the Dart signature and the generated
+	// function returns Stream<T> instead of Future<void>.
+	StreamParam *paramModel
+	// ContextIndex is the position of a context.Context parameter in the Go
+	// signature, or -1. The bridge supplies the context and cancels it when
+	// the Dart side stops listening to the stream this call owns.
+	ContextIndex int
 }
 
 type paramModel struct {
@@ -105,20 +124,25 @@ type paramModel struct {
 // capability checks and every language-specific renderer consume this model
 // instead of rediscovering type behavior independently.
 type wireType struct {
-	ID        int
-	Kind      typeKind
-	Original  types.Type
-	DartType  string
-	Elem      *wireType
-	Key       *wireType
-	Length    int64
-	Named     *namedModel
-	Struct    *structModel
-	Opaque    *opaqueModel
-	Callback  *callbackModel
-	BasicKind types.BasicKind
-	BitSize   int
-	Signed    bool
+	ID       int
+	Kind     typeKind
+	Original types.Type
+	DartType string
+	Elem     *wireType
+	Key      *wireType
+	Length   int64
+	Named    *namedModel
+	Struct   *structModel
+	Opaque   *opaqueModel
+	Callback *callbackModel
+	// Stream is the element type of a fgb.StreamSink[T] parameter or field.
+	Stream *wireType
+	// ChannelStream marks a `chan<- T` parameter: the bridge owns the channel,
+	// drains it into the Dart stream, and closes it when the call returns.
+	ChannelStream bool
+	BasicKind     types.BasicKind
+	BitSize       int
+	Signed        bool
 }
 
 // nilableWithoutPointer reports whether the Go type can be nil on its own,

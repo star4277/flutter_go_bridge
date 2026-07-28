@@ -29,20 +29,27 @@ func generateFixture(t *testing.T, source string, setup ...func(dir string)) (ap
 	if writeErr := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	api, parseErr := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
-	if parseErr != nil {
-		return "", "", "", nil, parseErr
-	}
-	result, genErr := Generate(api, config.Resolved{
+	resolved := config.Resolved{
 		BaseDir: dir, GoInput: inputDir,
 		GoOutput:    filepath.Join(dir, "bridge_generated.go"),
 		DartOutput:  filepath.Join(dir, "dart", "bridge_generated.dart"),
 		LibraryName: "fixture", DartEntrypointClassName: "FixtureBridge", StopOnError: true,
-	})
+	}
+	// Mirrors the CLI: the support package exists before the input is loaded.
+	if _, writeErr := WriteSupportPackage(resolved); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	api, parseErr := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if parseErr != nil {
+		return "", "", "", nil, parseErr
+	}
+	result, genErr := Generate(api, resolved)
 	if genErr != nil {
 		return "", "", "", result.Warnings, genErr
 	}
-	return mustRead(t, filepath.Join(dir, "dart", "api.dart")),
+	// The Dart tree mirrors the Go package layout, so api/api.go lands in
+	// dart/api/api.dart.
+	return mustRead(t, filepath.Join(dir, "dart", "api", "api.dart")),
 		mustRead(t, filepath.Join(dir, "dart", "bridge_generated.dart")),
 		mustRead(t, filepath.Join(dir, "bridge_generated.go")),
 		result.Warnings, nil
@@ -281,24 +288,14 @@ func Origin() Point { return Point{} }
 }
 
 func TestGenerateDartOpaque(t *testing.T) {
-	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
-	if err != nil {
-		t.Fatal(err)
-	}
-	withWorkspace := func(dir string) {
-		goWork := "go 1.24.0\n\nuse (\n\t.\n\t" + filepath.ToSlash(repoRoot) + "\n)\n"
-		if writeErr := os.WriteFile(filepath.Join(dir, "go.work"), []byte(goWork), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
-		}
-	}
 	apiDart, central, goSource, _, err := generateFixture(t, `package api
 
-import "github.com/star4277/flutter-go-bridge-gokit/fgb"
+import "example.com/fixture/internal/fgb"
 
 func Keep(token fgb.DartOpaque) fgb.DartOpaque { return token }
 
 func MaybeKeep(token *fgb.DartOpaque) *fgb.DartOpaque { return token }
-`, withWorkspace)
+`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,8 +311,8 @@ func MaybeKeep(token *fgb.DartOpaque) *fgb.DartOpaque { return token }
 		}
 	}
 	for _, expected := range []string{
-		"\"github.com/star4277/flutter-go-bridge-gokit/fgb\"",
-		"fgb.NewDartOpaque", "fgbReleaseDartOpaque", "fgb_dart_opaque_port",
+		"\"example.com/fixture/internal/fgb\"",
+		"fgbrt.NewDartOpaque", "fgbReleaseDartOpaque", "fgb_dart_opaque_port",
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
@@ -542,5 +539,178 @@ func Fixed(values [3]int) int { return values[0] }
 `)
 	if err == nil || !strings.Contains(err.Error(), "nil without a pointer") {
 		t.Fatalf("arrays cannot be nil and must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateStreamOwnedByGo(t *testing.T) {
+	apiDart, central, goSource, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+//fgb:async
+func Ticks(count int, sink fgb.StreamSink[int]) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "Stream<int> ticks({required int count})") {
+		t.Fatalf("a call with only a sink should return Stream<T>:\n%s", apiDart)
+	}
+	if strings.Contains(apiDart, "sink") && strings.Contains(apiDart, "required StreamSink") {
+		t.Fatalf("the owned sink must not appear in the public signature:\n%s", apiDart)
+	}
+	for _, expected := range []string{"StreamController<int>()", "fgbInternalStartStream", "controller.stream"} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("api.dart missing %q:\n%s", expected, apiDart)
+		}
+	}
+	if !strings.Contains(central, "fgbInternalRegisterStreamSink") {
+		t.Fatal("central bridge should register the sink")
+	}
+	for _, expected := range []string{"fgbMakeStreamSink", "fgbrt.NewStreamSink", "//export fgb_stream_port", "//export fgb_stream_cancel"} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing %q", expected)
+		}
+	}
+}
+
+func TestGenerateStreamCreatedByDartWhenCallReturnsValue(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+//fgb:async
+func Subscribe(name string, sink fgb.StreamSink[string]) (int, error) { return 0, nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "Future<int> subscribe({required String name, required StreamSink<String> sink})") {
+		t.Fatalf("a call with a result keeps its return type and takes the sink:\n%s", apiDart)
+	}
+	if strings.Contains(apiDart, "StreamController") {
+		t.Fatalf("the Dart side owns the controller here:\n%s", apiDart)
+	}
+}
+
+func TestGenerateStreamSinkInStructField(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+type Watcher struct {
+	Name   string
+	Events fgb.StreamSink[string]
+}
+
+//fgb:async
+func Watch(watcher Watcher) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "final StreamSink<String> events;") {
+		t.Fatalf("a sink field should stay a Dart-created sink:\n%s", apiDart)
+	}
+	if strings.Contains(apiDart, "GoOpaque") {
+		t.Fatalf("a sink field must not force the struct opaque:\n%s", apiDart)
+	}
+}
+
+func TestGenerateStreamSinkRequiresAsync(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+func Ticks(sink fgb.StreamSink[int]) error { return nil }
+`)
+	if err == nil || !strings.Contains(err.Error(), "//fgb:async") {
+		t.Fatalf("stream sinks in sync calls must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateStreamSinkResultRejected(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+//fgb:async
+func Make() (fgb.StreamSink[int], error) { var zero fgb.StreamSink[int]; return zero, nil }
+`)
+	if err == nil || !strings.Contains(err.Error(), "cannot be returned to Dart") {
+		t.Fatalf("returning a sink must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateChannelStream(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+//fgb:async
+func Ticks(count int, out chan<- int) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "Stream<int> ticks({required int count})") {
+		t.Fatalf("a channel parameter should produce Stream<T>:\n%s", apiDart)
+	}
+	if strings.Contains(apiDart, "out") {
+		t.Fatalf("the bridge-owned channel must not reach Dart:\n%s", apiDart)
+	}
+	for _, expected := range []string{
+		"func fgbMakeStreamChannel", "make(chan int, 16)", "for value := range ch {",
+		"func fgbCloseStreamChannel", "defer fgbCloseStreamChannel",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing %q", expected)
+		}
+	}
+	if strings.Contains(goSource, "fgbMakeStreamSink") {
+		t.Fatal("a channel stream must not build a StreamSink")
+	}
+}
+
+func TestGenerateChannelStreamWithContext(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+import "context"
+
+//fgb:async
+func Watch(ctx context.Context, out chan<- string) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "Stream<String> watch()") {
+		t.Fatalf("context and channel must both stay out of the Dart signature:\n%s", apiDart)
+	}
+	for _, expected := range []string{
+		"context.WithCancel(context.Background())",
+		"fgbRegisterStreamCancel(", "api.Watch(fgbCtx, arg0)",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing %q:\n%s", expected, goSource)
+		}
+	}
+}
+
+func TestGenerateChannelStreamRejectsBidirectional(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+//fgb:async
+func Ticks(out chan int) error { return nil }
+`)
+	if err == nil || !strings.Contains(err.Error(), "send-only") {
+		t.Fatalf("only chan<- T may be bridged, got %v", err)
+	}
+}
+
+func TestGenerateChannelStreamRequiresAsync(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+func Ticks(out chan<- int) error { return nil }
+`)
+	if err == nil || !strings.Contains(err.Error(), "//fgb:async") {
+		t.Fatalf("channel streams in sync calls must be rejected, got %v", err)
 	}
 }

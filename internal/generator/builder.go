@@ -36,8 +36,11 @@ type builder struct {
 	namedModels   map[*types.Named]*namedModel
 	structModels  map[*types.Named]*structModel
 	opaqueModels  map[*types.Named]*opaqueModel
-	warnings      []error
-	nextTypeID    int
+	// supportImportPath is the import path of the generated support package
+	// for this project; empty disables DartOpaque/StreamSink detection.
+	supportImportPath string
+	warnings          []error
+	nextTypeID        int
 }
 
 func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []error, error) {
@@ -55,6 +58,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		PackagePath:  api.Package.PkgPath,
 		PackageName:  api.Package.Name,
 		InputDir:     api.InputDir,
+		MirrorRoot:   api.InputDir,
 		SourceFiles:  append([]string(nil), api.SourceFiles...),
 		Direct:       direct,
 		NeedsMain:    needsMain,
@@ -63,6 +67,11 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		GoPreamble:   resolved.GoPreamble,
 		DartPreamble: resolved.DartPreamble,
 	}
+	// Mirror the Dart tree from the Go module root so a package directory such
+	// as api/ shows up as api/ on the Dart side too.
+	if module := api.Package.Module; module != nil && module.Dir != "" {
+		result.MirrorRoot = module.Dir
+	}
 	b := &builder{
 		api: api, config: resolved, unit: result,
 		typeCache:     map[types.Type]*wireType{},
@@ -70,6 +79,10 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		namedModels:   map[*types.Named]*namedModel{}, structModels: map[*types.Named]*structModel{},
 		opaqueModels: map[*types.Named]*opaqueModel{},
 	}
+	if module := api.Package.Module; module != nil {
+		b.supportImportPath = supportPackageImportPath(module.Path, module.Dir, SupportPackageDir(resolved))
+	}
+	result.SupportPackagePath = b.supportImportPath
 	for _, callable := range api.Callables {
 		call, err := b.mapCallable(callable)
 		if err != nil {
@@ -113,7 +126,7 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 	}
 	call := &callModel{
 		GoName: source.Func.Name(), DartName: source.DartName, Mode: source.Mode, Docs: source.Docs, SourceFile: source.SourceFile,
-		PointerRecv: source.PointerRecv,
+		PointerRecv: source.PointerRecv, ContextIndex: -1,
 	}
 	if source.Receiver == nil {
 		call.WireName = source.Func.Name()
@@ -149,10 +162,24 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		variable := sig.Params().At(i)
 		var mapped *wireType
 		var err error
-		if signature, isFunc := types.Unalias(variable.Type()).(*types.Signature); isFunc {
+		unaliased := types.Unalias(variable.Type())
+		switch typed := unaliased.(type) {
+		case *types.Signature:
 			hasCallbackParam = true
-			mapped, err = b.mapCallback(variable.Type(), signature)
-		} else {
+			mapped, err = b.mapCallback(variable.Type(), typed)
+		case *types.Chan:
+			mapped, err = b.mapChannelStream(variable.Type(), typed)
+		default:
+			if isContextType(unaliased) {
+				// The bridge owns the context: it never reaches Dart, so it
+				// stays out of call.Params and is spliced back in when the Go
+				// call expression is rendered.
+				if call.ContextIndex >= 0 {
+					return nil, errors.New("only one context.Context parameter is supported")
+				}
+				call.ContextIndex = i
+				continue
+			}
 			mapped, err = b.mapType(variable.Type())
 		}
 		if err != nil {
@@ -199,11 +226,38 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		if err != nil {
 			return nil, fmt.Errorf("result: %w", err)
 		}
+		if containsStreamSink(mapped, map[int]bool{}) {
+			return nil, errors.New("a stream sink cannot be returned to Dart; take it as a parameter instead")
+		}
 		call.Result = mapped
 		call.ResultGoName = results.At(0).Name()
 	}
 	if results.Len() > nonError+btoi(call.HasError) {
 		return nil, errors.New("error must be the final result")
+	}
+
+	// A call that only produces a stream owns it: exactly one sink and no
+	// value to return means the Dart function can hand back Stream<T>
+	// directly. Everything else keeps the sink as a parameter, so the Dart
+	// side creates - and disposes - the StreamController itself.
+	var sinkParams []*paramModel
+	for _, param := range call.Params {
+		if param.Type.Kind == kindStreamSink {
+			sinkParams = append(sinkParams, param)
+		}
+	}
+	if len(sinkParams) != 0 {
+		if call.Mode != model.CallModeAsync {
+			return nil, errors.New("stream sink parameters require //fgb:async: the Dart side must receive the stream while Go keeps producing")
+		}
+		for _, param := range sinkParams {
+			if param.Nullable {
+				return nil, fmt.Errorf("//fgb:nullable cannot be applied to the stream sink parameter %q", param.GoName)
+			}
+		}
+		if len(sinkParams) == 1 && call.Result == nil {
+			call.StreamParam = sinkParams[0]
+		}
 	}
 	return call, nil
 }
@@ -227,7 +281,7 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 				b.unit.UsesBigInt = true
 				return b.newSimpleType(original, kindBigInt, "BigInt?"), nil
 			}
-			if _, ok := named.Underlying().(*types.Struct); ok && !isDartOpaque(named) && !isTime(named) {
+			if _, ok := named.Underlying().(*types.Struct); ok && !b.isDartOpaque(named) && !isTime(named) {
 				if err := b.ensureNamedFromInput(named); err != nil {
 					return nil, err
 				}
@@ -304,9 +358,13 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			b.unit.UsesBigInt = true
 			return b.newSimpleType(original, kindBigInt, "BigInt"), nil
 		}
-		if isDartOpaque(typ) {
+		if b.isDartOpaque(typ) {
 			b.unit.UsesDartOpaque = true
+			b.unit.UsesRuntimePackage = true
 			return b.newSimpleType(original, kindDartOpaque, "Object"), nil
+		}
+		if b.isStreamSink(typ) {
+			return b.mapStreamSink(original, typ)
 		}
 		if err := b.ensureNamedFromInput(typ); err != nil {
 			return nil, err
@@ -477,7 +535,7 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		if _, nested := elem.(*types.Pointer); nested {
 			return "has a nested pointer type"
 		}
-		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isBigInt(named) && !isDartOpaque(named) {
+		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isBigInt(named) && !b.isDartOpaque(named) && !b.isStreamSink(named) {
 			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 				if external := b.externalTypeBlocker(named); external != "" {
 					return external
@@ -503,7 +561,7 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		}
 		return "has a non-empty interface type"
 	case *types.Named:
-		if isTime(typ) || isBigInt(typ) || isDartOpaque(typ) {
+		if isTime(typ) || isBigInt(typ) || b.isDartOpaque(typ) || b.isStreamSink(typ) {
 			return ""
 		}
 		if external := b.externalTypeBlocker(typ); external != "" {
@@ -654,6 +712,53 @@ func (b *builder) mapCallback(original types.Type, signature *types.Signature) (
 	return result, nil
 }
 
+// mapChannelStream bridges a `chan<- T` parameter - the simple stream form.
+// The bridge owns the channel: it creates it, drains it into the Dart stream,
+// and closes it once the call returns. User code only ever sends, so there is
+// no sink API, no error channel and nothing to close by hand.
+func (b *builder) mapChannelStream(original types.Type, channel *types.Chan) (*wireType, error) {
+	if cached := b.cachedType(original); cached != nil {
+		return cached, nil
+	}
+	if channel.Dir() != types.SendOnly {
+		return nil, errors.New("only send-only channels (chan<- T) can be bridged as a stream")
+	}
+	elem, err := b.mapType(channel.Elem())
+	if err != nil {
+		return nil, fmt.Errorf("stream element: %w", err)
+	}
+	if containsStreamSink(elem, map[int]bool{}) {
+		return nil, errors.New("a stream of stream sinks is not supported")
+	}
+	b.unit.UsesStreamSink = true
+	result := b.newType(original, kindStreamSink, "StreamSink<"+elem.DartType+">")
+	result.Stream = elem
+	result.ChannelStream = true
+	return result, nil
+}
+
+// mapStreamSink bridges fgb.StreamSink[T]: Dart passes a StreamSink<T> (the
+// sink of a StreamController it owns and disposes) and Go pushes values into
+// it. Only the handle crosses the wire; items travel over the shared stream
+// port using the standard codec.
+func (b *builder) mapStreamSink(original types.Type, named *types.Named) (*wireType, error) {
+	if cached := b.cachedType(original); cached != nil {
+		return cached, nil
+	}
+	elem, err := b.mapType(named.TypeArgs().At(0))
+	if err != nil {
+		return nil, fmt.Errorf("stream element: %w", err)
+	}
+	if containsStreamSink(elem, map[int]bool{}) {
+		return nil, errors.New("a stream of stream sinks is not supported")
+	}
+	b.unit.UsesStreamSink = true
+	b.unit.UsesRuntimePackage = true
+	result := b.newType(original, kindStreamSink, "StreamSink<"+elem.DartType+">")
+	result.Stream = elem
+	return result, nil
+}
+
 func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType, error) {
 	if existing := b.structModels[named]; existing != nil {
 		return existing.Type, nil
@@ -798,6 +903,16 @@ func isErrorType(typ types.Type) bool {
 	return errorObject != nil && types.Identical(types.Unalias(typ), errorObject.Type())
 }
 
+// isContextType matches context.Context, which the bridge supplies rather than
+// taking from Dart.
+func isContextType(typ types.Type) bool {
+	named, ok := typ.(*types.Named)
+	if !ok {
+		return false
+	}
+	return isNamed(named, "context", "Context")
+}
+
 func isTime(named *types.Named) bool {
 	return isNamed(named, "time", "Time")
 }
@@ -806,12 +921,48 @@ func isBigInt(named *types.Named) bool {
 	return isNamed(named, "math/big", "Int")
 }
 
-// dartOpaquePackagePath is the runtime module holding fgb.DartOpaque; the
-// generated bridge imports it only when the API actually uses DartOpaque.
-const dartOpaquePackagePath = "github.com/star4277/flutter-go-bridge-gokit/fgb"
+// isSupportType matches a type from the generated support package, whose
+// import path depends on the module that owns it.
+func (b *builder) isSupportType(named *types.Named, name string) bool {
+	return b.supportImportPath != "" && isNamed(named, b.supportImportPath, name)
+}
 
-func isDartOpaque(named *types.Named) bool {
-	return isNamed(named, dartOpaquePackagePath, "DartOpaque")
+func (b *builder) isDartOpaque(named *types.Named) bool {
+	return b.isSupportType(named, "DartOpaque")
+}
+
+func (b *builder) isStreamSink(named *types.Named) bool {
+	return b.isSupportType(named, "StreamSink") &&
+		named.TypeArgs() != nil && named.TypeArgs().Len() == 1
+}
+
+// containsStreamSink reports whether a stream sink is reachable from typ.
+// Sinks only travel Dart -> Go, so a result carrying one is a generation
+// error rather than a runtime surprise.
+func containsStreamSink(typ *wireType, seen map[int]bool) bool {
+	if typ == nil || seen[typ.ID] {
+		return false
+	}
+	seen[typ.ID] = true
+	switch typ.Kind {
+	case kindStreamSink:
+		return true
+	case kindPointer, kindSlice, kindArray, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
+		return containsStreamSink(typ.Elem, seen)
+	case kindMap:
+		return containsStreamSink(typ.Key, seen) || containsStreamSink(typ.Elem, seen)
+	case kindStruct:
+		for _, field := range typ.Struct.Fields {
+			if containsStreamSink(field.Type, seen) {
+				return true
+			}
+		}
+		return false
+	case kindNamed:
+		return containsStreamSink(typ.Named.Underlying, seen)
+	default:
+		return false
+	}
 }
 
 func isNamed(named *types.Named, packagePath, name string) bool {

@@ -89,15 +89,23 @@ dart_format: true
 go/
 ├── go.mod
 ├── bridge_generated.go       # package main、cgo ABI、codec、dispatcher
+├── internal/
+│   └── fgb/
+│       └── fgb_generated.go  # 支持包（StreamSink / DartOpaque）
 └── api/
     ├── api.go
     └── account.go
 
 lib/src/
 ├── bridge_generated.dart     # 唯一的 FFI/runtime/codec 整合文件
-├── api.dart                  # api.go 中的类型、函数和方法
-└── account.dart              # account.go 中的类型、函数和方法
+└── api/                      # 与 Go 包目录同名，和 bridge 同级
+    ├── api.dart              # api.go 中的类型、函数和方法
+    └── account.dart          # account.go 中的类型、函数和方法
 ```
+
+Dart 侧的目录结构**镜像 Go 的包结构**，锚点是 Go 模块根：`go/api/api.go` → `lib/src/api/api.dart`，
+`api/` 目录与 `bridge_generated.dart` 同级。若输入包就是模块根（`package main` 直连模式），
+文件直接落在输出根。
 
 如果 `go_output` 省略，生成器会从本地 `go_input` 向上查找最近的 `go.mod`，并在其同级生成
 `bridge_generated.go`。如果 `dart_output` 指向目录，整合文件名默认为 `bridge_generated.dart`。
@@ -227,6 +235,8 @@ void main() async {
 | `fgb_dart_opaque_port` | 注册 DartOpaque 释放通知端口 |
 | `fgb_callback_port` | 注册 Dart 闭包回调的常驻请求端口 |
 | `fgb_callback_result` | Dart 闭包执行完毕后回传结果 |
+| `fgb_stream_port` | 注册 Stream 事件的常驻投递端口 |
+| `fgb_stream_cancel` | Dart 停止监听后通知 Go 停止生产 |
 
 这些符号由 `bridge_generated.go` 中的 cgo 导出声明生成；代码生成器本身不会创建 C 源文件或头文件。
 
@@ -263,6 +273,8 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | 普通 `*struct` 值 | 可空 Dart value class，字段继续参与 CST/DCO 序列化 |
 | GoOpaque 结构体 | `extends GoOpaque` 的句柄类 + `NativeFinalizer` 自动释放 |
 | `fgb.DartOpaque` / `*fgb.DartOpaque` | `Object` / `Object?`（Dart 对象按句柄穿透 Go） |
+| `fgb.StreamSink[T]` / `chan<- T` | `Stream<T>` 或 `StreamSink<T>`，见「Stream」，需 `//fgb:async` |
+| `context.Context` 参数 | 不出现在 Dart 签名；由生成代码创建，取消订阅时自动 cancel |
 | 函数类型参数 | `FutureOr<R> Function(...)`，见「Dart 闭包回调」，需 `//fgb:async` |
 | `time.Time` | `DateTime` |
 | `math/big.Int` | `BigInt` |
@@ -275,12 +287,128 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 语义——需要在 Go 侧保存内部状态、或私有字段承载状态的类型建议显式标记。GoOpaque 类型必须
 以 `*T` 出现在签名中。小写开头的私有类型、字段、方法、函数、常量一律不参与生成。
 
-`fgb.DartOpaque`（来自 `github.com/star4277/flutter-go-bridge-gokit/fgb` 运行时包）把任意
-Dart 对象按句柄交给 Go 保存、之后原样传回；Go 侧最后一份拷贝被 GC 后会自动通知 Dart 释放。
-只有 API 用到它时 go.mod 才需要这一个依赖。
+`fgb.DartOpaque`（来自生成的支持包，见下）把任意 Dart 对象按句柄交给 Go 保存、之后原样传回；
+Go 侧最后一份拷贝被 GC 后会自动通知 Dart 释放。
+
+## 生成的支持包
+
+`DartOpaque`、`StreamSink` 这类必须出现在 Go API 签名里的类型，由生成器写进**你自己的模块**：
+
+```text
+go/
+├── go.mod                      # 始终零依赖
+├── bridge_generated.go
+├── internal/
+│   └── fgb/
+│       └── fgb_generated.go    # 支持包，DO NOT EDIT
+└── api/
+    └── api.go                  # import "<你的模块>/internal/fgb"
+```
+
+- **不需要任何外部依赖**：`go.mod` 里一行 require 都不会多。
+- 放在 `internal` 下，Go 的 internal 规则保证它不会成为你对外 API 的一部分。
+- 每次 `generate` 都会重写它，因此支持包与生成的 bridge 永远同版本，不存在版本错配。
+- 它在**解析 Go 输入之前**写出，所以第一次使用时不会出现「先 import 才能生成、先生成才能 import」的死锁。
+- `internal` 包一律不参与代码生成：把 `go_input` 指向 `internal/...` 会直接报错。
 
 当前支持零个或一个非 `error` 返回值；`error` 必须位于最后。泛型函数、可变参数、多非 error 返回值、
 非空接口和复杂外部命名类型暂未支持。
+
+## Stream
+
+Go 通过 `fgb.StreamSink[T]` 或一个 `chan<- T` 参数向 Dart 推送一串值。与 FRB 不同，
+**返回类型不会被无条件改写成 `Stream`**：只有签名里出现 sink 或 channel 才有 Stream，
+且分两种归属。
+
+### 最简形式：`chan<- T`（推荐先用这个）
+
+```go
+//fgb:async
+func Ticks(count int, out chan<- int) error {
+	for i := 0; i < count; i++ {
+		out <- i          // 不需要 close，不需要处理错误
+	}
+	return nil
+}
+```
+
+**channel 完全由生成代码托管**：它创建 channel、起 goroutine 抽干并投递给 Dart、
+**在你的函数返回后自动关闭**（你自己 `close(out)` 也容忍）。零额外类型、零依赖，
+就是普通 Go 写法。
+
+想响应取消就再加一个 `context.Context` 参数——同样**不用你自己接线**，生成代码创建它，
+并在 Dart 取消订阅时自动 cancel：
+
+```go
+//fgb:async
+func Watch(ctx context.Context, out chan<- string) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil          // Dart 不再监听了
+		case out <- next():
+		}
+	}
+}
+```
+
+`ctx` 和 `out` 都不会出现在 Dart 签名里：`Stream<String> watch()`。即使你完全忽略
+`ctx`，抽干 goroutine 在取消后也会继续丢弃数据，所以 `out <-` 永远不会永久阻塞。
+
+### 完整形式：`fgb.StreamSink[T]`
+
+需要 `AddError`、需要在函数返回后由后台 goroutine 继续推送、或者要把 sink 放进结构体字段时用它：
+
+```go
+//fgb:async
+func Ticks(count int, sink fgb.StreamSink[int]) error {
+	defer sink.Close()
+	for i := 0; i < count; i++ {
+		if err := sink.Add(i); err != nil {
+			return nil // Dart 取消了订阅，停止生产
+		}
+	}
+	return nil
+}
+```
+
+### 两种归属（对 sink 和 channel 一致）
+
+**Go 拥有 Stream**（恰好一个 sink/channel + 没有非 error 返回值）：
+
+```dart
+await for (final tick in ticks(count: 5)) { print(tick); }
+```
+
+生成 `Stream<int> ticks({required int count})`——sink/channel 参数从 Dart 签名中消失，
+`StreamController` 由生成代码创建并持有，**dispose 由取消订阅驱动**。
+
+**Dart 拥有 Stream**（有非 error 返回值、多个 sink，或 sink 是结构体字段）：
+
+```dart
+final controller = StreamController<String>();
+controller.stream.listen(print);
+final id = await subscribe(name: 'abc', out: controller.sink);
+await controller.close(); // 由你 dispose
+```
+
+返回值原样保留，Stream 的创建与销毁完全由 Dart 掌握。结构体字段同理（仅 `StreamSink`，
+channel 不支持作为字段）。
+
+### 语义与限制
+
+- **Stream 是冷的**：`Stream<T>` 形式在**被 listen 时才**发起 Go 调用。拿到 Stream 却不监听，
+  Go 什么都不会做，也不会有数据堆在 controller 里。
+- 关闭时机：channel 形式在函数返回时自动关闭；sink 形式由 `sink.Close()`（推荐
+  `defer sink.Close()`）、Go 侧最后一份 sink 被 GC、或调用返回 error 触发。
+- **取消订阅**会释放 sink 注册（Go 侧随即得到 `ErrStreamClosed` / ctx cancel）并关闭生成代码
+  持有的 controller，它的 `done` 会正常完成，不会留下一个开着的 controller。
+  Dart 拥有的那种（Mode B）controller 由你自己 `close()`。
+- `sink.AddError(err)` 投递一个 stream error 但**不关闭**流；channel 形式没有这个能力
+  （这正是它「不会出错」的简单之处）。
+- `Add` / `out <-` 都不会因为 Dart 侧不监听而永久阻塞。
+- 只能 Dart→Go：作为返回值会在生成期报错；`//fgb:async` 是必需的；
+  `//fgb:nullable` 不适用；只接受 `chan<- T`（双向或只读 channel 会报错）。
 
 ## 指令与字段 tag
 

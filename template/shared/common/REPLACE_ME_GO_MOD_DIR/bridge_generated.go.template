@@ -334,6 +334,7 @@ import "C"
 import (
 	"bytes"
 	api "com.flutter_go_bridge/REPLACE_ME_GO_MOD_NAME/api"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -377,6 +378,9 @@ var fgbDartOpaquePort atomic.Int64
 var fgbCallbackPort atomic.Int64
 var fgbCallbackWaiters sync.Map
 var fgbNextCallbackCall atomic.Int64
+var fgbStreamPort atomic.Int64
+var fgbCancelledStreams sync.Map
+var fgbStreamCancels sync.Map
 
 func init() {
 	var marker uint16 = 0x1
@@ -1452,6 +1456,72 @@ func fgbInvokeCallback(handle int64, arguments []any) (any, error) {
 	default:
 		return nil, fmt.Errorf("invalid callback reply envelope")
 	}
+}
+
+//export fgb_stream_port
+func fgb_stream_port(port C.int64_t) {
+	fgbStreamPort.Store(int64(port))
+}
+
+//export fgb_stream_cancel
+func fgb_stream_cancel(handle C.int64_t) {
+	fgbCancelledStreams.Store(int64(handle), true)
+	if cancel, ok := fgbStreamCancels.LoadAndDelete(int64(handle)); ok {
+		cancel.(context.CancelFunc)()
+	}
+}
+
+// fgbRegisterStreamCancel ties a call-scoped context to a stream: when Dart
+// stops listening the context is cancelled, which is how a cooperative Go
+// producer learns to stop early.
+func fgbRegisterStreamCancel(handle int64, cancel context.CancelFunc) {
+	if _, cancelled := fgbCancelledStreams.Load(handle); cancelled {
+		cancel()
+		return
+	}
+	fgbStreamCancels.Store(handle, cancel)
+}
+
+func fgbUnregisterStreamCancel(handle int64) {
+	fgbStreamCancels.Delete(handle)
+}
+
+// fgbMustStreamHandle reads a stream handle from a decoded argument; an
+// invalid handle yields 0, which simply produces a stream nobody listens to.
+func fgbMustStreamHandle(value any) int64 {
+	handle, err := fgbAsInt64(value, "stream")
+	if err != nil {
+		return 0
+	}
+	return handle
+}
+
+// fgbPostStreamEvent hands one stream event to the Dart event loop without
+// waiting for it to be processed. It reports false once the Dart side stopped
+// listening, which the sink turns into fgb.ErrStreamClosed.
+func fgbPostStreamEvent(handle int64, kind int32, payload any) bool {
+	if _, cancelled := fgbCancelledStreams.Load(handle); cancelled {
+		return false
+	}
+	port := fgbStreamPort.Load()
+	if port == 0 {
+		return false
+	}
+	var buffer bytes.Buffer
+	if err := (fgbStandardMethodCodec{}).writeValue(&buffer, []any{handle, int64(kind), payload}); err != nil {
+		return false
+	}
+	fgbPost(port, buffer.Bytes())
+	return true
+}
+
+// fgbReleaseStreamSink runs after Go drops its last copy of a sink: the Dart
+// stream is completed so listeners are not left hanging.
+func fgbReleaseStreamSink(handle int64) {
+	if _, cancelled := fgbCancelledStreams.LoadAndDelete(handle); cancelled {
+		return
+	}
+	fgbPostStreamEvent(handle, 1, nil)
 }
 
 // Required for c-shared and c-archive build modes.

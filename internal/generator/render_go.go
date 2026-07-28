@@ -36,16 +36,19 @@ func renderGo(unit *unit) ([]byte, error) {
 		"bytes", "encoding/binary", "fmt", "io", "math/big", "reflect",
 		"runtime", "runtime/debug", "sync", "sync/atomic", "unsafe",
 	}
+	// The stream runtime always carries the cancellation plumbing, so context
+	// is part of the fixed import set.
+	imports = append(imports, "context")
 	if unit.UsesTime {
 		imports = append(imports, "time")
 	}
 	for _, item := range imports {
 		r.line("\t%q", item)
 	}
-	if unit.UsesDartOpaque {
+	if unit.UsesRuntimePackage {
 		// The exported ABI already owns the identifier `fgb` (the sync
 		// entrypoint), so the runtime package needs an alias.
-		r.line("\tfgbrt %q", dartOpaquePackagePath)
+		r.line("\tfgbrt %q", unit.SupportPackagePath)
 	}
 	if !unit.Direct {
 		r.line("\tapi %q", unit.PackagePath)
@@ -77,6 +80,14 @@ func renderGo(unit *unit) ([]byte, error) {
 	for _, typ := range unit.Types {
 		if typ.Kind == kindCallback {
 			r.renderCallbackFactory(typ)
+			r.line("")
+		}
+		if typ.Kind == kindStreamSink {
+			if typ.ChannelStream {
+				r.renderStreamChannelHelpers(typ)
+			} else {
+				r.renderStreamSinkFactory(typ)
+			}
 			r.line("")
 		}
 	}
@@ -212,6 +223,18 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\traw, err := fgbAsInt64(value, path)")
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.line("\treturn fgbMakeCallback%d(raw), nil", typ.ID)
+	case kindStreamSink:
+		if typ.ChannelStream {
+			// Channel streams are wired up by the dispatcher, which owns the
+			// channel; there is nothing to decode from a value here.
+			r.line("\tvar zero %s", goType)
+			r.line("\treturn zero, fmt.Errorf(\"%%s: channel streams are only supported as direct call parameters\", path)")
+			break
+		}
+		r.line("\traw, err := fgbAsInt64(value, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tif raw == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid stream handle 0\", path) }", goType)
+		r.line("\treturn fgbMakeStreamSink%d(raw), nil", typ.ID)
 	case kindNamed:
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -304,6 +327,8 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\treturn value.Handle(), nil")
 	case kindCallback:
 		r.line("\treturn nil, fmt.Errorf(\"function values cannot be encoded\")")
+	case kindStreamSink:
+		r.line("\treturn nil, fmt.Errorf(\"stream sinks cannot be sent to Dart\")")
 	case kindNamed:
 		underlyingGo := r.goType(typ.Named.Underlying.Original)
 		r.line("\treturn fgbEncode%d(%s(value))", typ.Named.Underlying.ID, underlyingGo)
@@ -386,6 +411,16 @@ func (r *goRenderer) renderCallbackFactory(typ *wireType) {
 	r.line("}")
 }
 
+// renderStreamSinkFactory binds the generated element encoder to the runtime
+// sink so user code only sees fgb.StreamSink[T].
+func (r *goRenderer) renderStreamSinkFactory(typ *wireType) {
+	r.line("func fgbMakeStreamSink%d(handle int64) %s {", typ.ID, r.goType(typ.Original))
+	r.line("\treturn fgbrt.NewStreamSink(handle, func(value %s) (any, error) {", r.goType(typ.Stream.Original))
+	r.line("\t\treturn fgbEncode%d(value)", typ.Stream.ID)
+	r.line("\t}, fgbPostStreamEvent, fgbReleaseStreamSink)")
+	r.line("}")
+}
+
 func (r *goRenderer) renderDispatch() {
 	r.line("func fgbDispatch(call fgbMethodCall) (any, *fgbCallError) {")
 	r.line("\tswitch call.Method {")
@@ -408,9 +443,16 @@ func (r *goRenderer) renderDispatch() {
 			argOffset = 1
 		}
 		for index, param := range call.Params {
+			if param.Type.Kind == kindStreamSink && param.Type.ChannelStream {
+				// Handled by renderStreamChannelSetup below.
+				continue
+			}
 			r.line("\t\targ%d, err := fgbDecode%d(args[%d], %s)", index, param.Type.ID, index+argOffset, strconv.Quote(param.DartName))
 			r.line("\t\tif err != nil { return nil, fgbInvalidArguments(call.Method, err) }")
 		}
+		r.renderStreamChannelSetup(call, "\t\t", func(index int) string {
+			return fmt.Sprintf("fgbMustStreamHandle(args[%d])", index+argOffset)
+		})
 		callExpr := r.goCallExpression(call)
 		switch {
 		case call.Result != nil && call.HasError:
@@ -445,11 +487,87 @@ func (r *goRenderer) goCallExpression(call *callModel) string {
 	} else {
 		target = "receiver." + call.GoTarget
 	}
-	args := make([]string, len(call.Params))
-	for index := range call.Params {
-		args[index] = fmt.Sprintf("arg%d", index)
+	// call.Params holds only the parameters that cross the wire; a
+	// context.Context is supplied by the bridge and spliced back in here.
+	total := len(call.Params)
+	if call.ContextIndex >= 0 {
+		total++
+	}
+	args := make([]string, 0, total)
+	next := 0
+	for position := 0; position < total; position++ {
+		if position == call.ContextIndex {
+			args = append(args, "fgbCtx")
+			continue
+		}
+		args = append(args, fmt.Sprintf("arg%d", next))
+		next++
 	}
 	return target + "(" + strings.Join(args, ", ") + ")"
+}
+
+// renderStreamChannelSetup emits the bridge-owned plumbing for `chan<- T`
+// parameters and for a context.Context: the channel is created and drained
+// here and closed once the call returns, and the context is cancelled as soon
+// as the Dart side stops listening.
+func (r *goRenderer) renderStreamChannelSetup(call *callModel, indent string, handleExpr func(index int) string) {
+	streamHandle := ""
+	for index, param := range call.Params {
+		if param.Type.Kind != kindStreamSink {
+			continue
+		}
+		// The handle is needed for the channel plumbing, and for tying a
+		// context to the stream's lifetime.
+		needsHandle := param.Type.ChannelStream || call.ContextIndex >= 0
+		if needsHandle {
+			r.line("%shandle%d := %s", indent, index, handleExpr(index))
+			if streamHandle == "" {
+				streamHandle = fmt.Sprintf("handle%d", index)
+			}
+		}
+		if param.Type.ChannelStream {
+			r.line("%sarg%d := fgbMakeStreamChannel%d(handle%d)", indent, index, param.Type.ID, index)
+			r.line("%sdefer fgbCloseStreamChannel%d(arg%d)", indent, param.Type.ID, index)
+		}
+	}
+	if call.ContextIndex < 0 {
+		return
+	}
+	r.line("%sfgbCtx, fgbCancel := context.WithCancel(context.Background())", indent)
+	r.line("%sdefer fgbCancel()", indent)
+	if streamHandle != "" {
+		// Cancelling the Dart subscription cancels the Go context, which is
+		// how a cooperative producer learns to stop early.
+		r.line("%sfgbRegisterStreamCancel(%s, fgbCancel)", indent, streamHandle)
+		r.line("%sdefer fgbUnregisterStreamCancel(%s)", indent, streamHandle)
+	}
+}
+
+// renderStreamChannelHelpers emits the typed drain/close pair for one channel
+// stream type.
+func (r *goRenderer) renderStreamChannelHelpers(typ *wireType) {
+	elemGo := r.goType(typ.Stream.Original)
+	r.line("func fgbMakeStreamChannel%d(handle int64) chan %s {", typ.ID, elemGo)
+	r.line("\tch := make(chan %s, 16)", elemGo)
+	r.line("\tgo func() {")
+	r.line("\t\t// Keep draining even after the Dart side stopped listening, so a")
+	r.line("\t\t// producer that ignores ctx.Done() never blocks forever.")
+	r.line("\t\tfor value := range ch {")
+	r.line("\t\t\tencoded, err := fgbEncode%d(value)", typ.Stream.ID)
+	r.line("\t\t\tif err != nil { continue }")
+	r.line("\t\t\tfgbPostStreamEvent(handle, 0, encoded)")
+	r.line("\t\t}")
+	r.line("\t\tfgbReleaseStreamSink(handle)")
+	r.line("\t}()")
+	r.line("\treturn ch")
+	r.line("}")
+	r.line("")
+	r.line("// fgbCloseStreamChannel%d ends the stream once the call returns; a user", typ.ID)
+	r.line("// function that closed the channel itself is tolerated.")
+	r.line("func fgbCloseStreamChannel%d(ch chan %s) {", typ.ID, elemGo)
+	r.line("\tdefer func() { _ = recover() }()")
+	r.line("\tclose(ch)")
+	r.line("}")
 }
 
 func (r *goRenderer) renderSignedRangeCheck(typ *wireType, goType string) {
@@ -527,7 +645,7 @@ func (r *goRenderer) goType(typ types.Type) string {
 			return "time"
 		case "math/big":
 			return "big"
-		case dartOpaquePackagePath:
+		case r.unit.SupportPackagePath:
 			return "fgbrt"
 		default:
 			return pkg.Name()

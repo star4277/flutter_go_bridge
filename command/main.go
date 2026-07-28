@@ -225,6 +225,13 @@ func runGenerate(command *cobra.Command, flags *generateFlags) error {
 	if err != nil {
 		return err
 	}
+	// The support package must exist before the Go input is loaded: an API
+	// that references it cannot be type-checked until the package is on disk.
+	supportPath, err := generator.WriteSupportPackage(resolved)
+	if err != nil {
+		return err
+	}
+	log.Printf("generated %s", supportPath)
 	log.Printf("loading Go package %s", resolved.GoInput)
 	api, err := parser.Parse(parser.Options{
 		Input: resolved.GoInput, BaseDir: resolved.BaseDir,

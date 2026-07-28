@@ -32,6 +32,15 @@ final class _FgbCallbackInvoker {
   final Future<Object?> Function(List<Object?> args) invoke;
 }
 
+/// A Dart sink Go pushes values into, together with the typed add closure the
+/// generated encoder built for it.
+final class _FgbStreamTarget {
+  _FgbStreamTarget(this.sink, this.add);
+
+  final StreamSink<dynamic> sink;
+  final void Function(Object? raw) add;
+}
+
 final class _FgbWriter {
   final List<int> _bytes = <int>[];
 
@@ -323,6 +332,10 @@ typedef _FgbCallbackPortNative = ffi.Void Function(ffi.Int64);
 typedef _FgbCallbackPortDart = void Function(int);
 typedef _FgbCallbackResultNative = ffi.Void Function(ffi.Int64, ffi.Pointer<ffi.Void>, ffi.Int64);
 typedef _FgbCallbackResultDart = void Function(int, ffi.Pointer<ffi.Void>, int);
+typedef _FgbStreamPortNative = ffi.Void Function(ffi.Int64);
+typedef _FgbStreamPortDart = void Function(int);
+typedef _FgbStreamCancelNative = ffi.Void Function(ffi.Int64);
+typedef _FgbStreamCancelDart = void Function(int);
 
 final class _FgbBindings {
   _FgbBindings(this.library)
@@ -338,6 +351,8 @@ final class _FgbBindings {
         dartOpaquePort = library.lookupFunction<_FgbDartOpaquePortNative, _FgbDartOpaquePortDart>('fgb_dart_opaque_port'),
         callbackPort = library.lookupFunction<_FgbCallbackPortNative, _FgbCallbackPortDart>('fgb_callback_port'),
         callbackResult = library.lookupFunction<_FgbCallbackResultNative, _FgbCallbackResultDart>('fgb_callback_result'),
+        streamPort = library.lookupFunction<_FgbStreamPortNative, _FgbStreamPortDart>('fgb_stream_port'),
+        streamCancel = library.lookupFunction<_FgbStreamCancelNative, _FgbStreamCancelDart>('fgb_stream_cancel'),
         dropAddress = library.lookup<ffi.NativeFunction<_FgbDropNative>>('fgb_drop');
 
   final ffi.DynamicLibrary library;
@@ -353,6 +368,8 @@ final class _FgbBindings {
   final void Function(int) dartOpaquePort;
   final void Function(int) callbackPort;
   final void Function(int, ffi.Pointer<ffi.Void>, int) callbackResult;
+  final void Function(int) streamPort;
+  final void Function(int) streamCancel;
   final ffi.Pointer<ffi.NativeFunction<_FgbDropNative>> dropAddress;
 }
 
@@ -475,6 +492,11 @@ final class __FGB_BRIDGE_CLASS__ {
     _callbackRequests.keepIsolateAlive = false;
     _callbackRequests.handler = _handleCallbackRequest;
     _bindings.callbackPort(_callbackRequests.sendPort.nativePort);
+    // Go posts stream items, errors and completion for every registered
+    // StreamSink here.
+    _streamEvents.keepIsolateAlive = false;
+    _streamEvents.handler = _handleStreamEvent;
+    _bindings.streamPort(_streamEvents.sendPort.nativePort);
   }
 
   static __FGB_BRIDGE_CLASS__? _instance;
@@ -513,9 +535,96 @@ final class __FGB_BRIDGE_CLASS__ {
   final ffi.NativeFinalizer _handleFinalizer;
   final RawReceivePort _dartOpaqueReleases = RawReceivePort();
   final RawReceivePort _callbackRequests = RawReceivePort();
+  final RawReceivePort _streamEvents = RawReceivePort();
   final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
+  final Map<int, _FgbStreamTarget> _streamTargets = <int, _FgbStreamTarget>{};
+  final Map<Object, int> _streamHandles = <Object, int>{};
   int _dartOpaqueNextHandle = 0;
+  int _streamNextHandle = 0;
   static const _FgbCodec _codec = _FgbCodec();
+
+  /// Internal: registers a Dart sink Go may push values into, and returns the
+  /// handle Go uses to address it. Registering the same sink twice reuses the
+  /// handle, so a call may pass one sink through several parameters.
+  int fgbInternalRegisterStreamSink(StreamSink<dynamic> sink, void Function(Object? raw) add) {
+    final existing = _streamHandles[sink];
+    if (existing != null) return existing;
+    final handle = ++_streamNextHandle;
+    _streamTargets[handle] = _FgbStreamTarget(sink, add);
+    _streamHandles[sink] = handle;
+    // Closing the sink (the owner disposing its StreamController) retires the
+    // registration and tells Go to stop producing.
+    sink.done.then(
+      (_) => fgbInternalReleaseStreamSink(handle),
+      onError: (Object _) => fgbInternalReleaseStreamSink(handle),
+    );
+    return handle;
+  }
+
+  /// Internal: retires a stream registration and notifies Go, which then
+  /// reports fgb.ErrStreamClosed to whoever keeps adding values.
+  void fgbInternalReleaseStreamSink(int handle) {
+    final target = _streamTargets.remove(handle);
+    if (target == null) return;
+    _streamHandles.remove(target.sink);
+    _bindings.streamCancel(handle);
+  }
+
+  /// Internal: wires a call that owns its stream. Cancelling the subscription
+  /// releases the sink and retires the controller; a failing call surfaces as
+  /// a stream error.
+  void fgbInternalStartStream<T>(StreamController<T> controller, Future<void> call) {
+    final handle = _streamHandles[controller.sink];
+    controller.onCancel = () {
+      if (handle != null) fgbInternalReleaseStreamSink(handle);
+      // The subscription is gone, so nothing will ever read from this
+      // controller again: close it so its "done" future completes instead of
+      // leaving an open controller behind. Closing from inside onCancel is
+      // deferred to a microtask - returning close()'s future here would wait
+      // on the very cancellation that is still in progress.
+      scheduleMicrotask(() {
+        if (!controller.isClosed) controller.close();
+      });
+    };
+    call.then((_) {}, onError: (Object error, StackTrace stack) {
+      if (handle != null) fgbInternalReleaseStreamSink(handle);
+      if (!controller.isClosed) {
+        controller.addError(error, stack);
+        controller.close();
+      }
+    });
+  }
+
+  void _handleStreamEvent(Object? message) {
+    Uint8List? raw;
+    if (message is Uint8List) {
+      raw = message;
+    } else if (message is List<int>) {
+      raw = Uint8List.fromList(message);
+    }
+    if (raw == null) return;
+    final decoded = _FgbReader(raw).value();
+    if (decoded is! List || decoded.length != 3) return;
+    final handle = decoded[0];
+    final kind = decoded[1];
+    if (handle is! int || kind is! int) return;
+    final target = _streamTargets[handle];
+    if (target == null) return;
+    switch (kind) {
+      case 0:
+        target.add(decoded[2]);
+        break;
+      case 1:
+        fgbInternalReleaseStreamSink(handle);
+        target.sink.close();
+        break;
+      case 2:
+        target.sink.addError(
+          FgbPlatformException('stream_error', decoded[2] as String?, null),
+        );
+        break;
+    }
+  }
 
   /// Internal: registers a Dart object crossing into Go as a DartOpaque
   /// handle. The registry entry keeps the object alive while Go holds it.

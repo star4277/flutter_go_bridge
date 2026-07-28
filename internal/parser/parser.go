@@ -71,6 +71,9 @@ func Parse(options Options) (*model.API, error) {
 	if pkg.Types == nil || pkg.TypesInfo == nil {
 		return nil, errors.New("Go package loader did not provide type information")
 	}
+	if element := internalPathElement(pkg.PkgPath); element != "" {
+		return nil, fmt.Errorf("go_input resolves to %s, which is inside an %q package; internal packages are excluded from generation", pkg.PkgPath, element)
+	}
 
 	api := &model.API{
 		Package:      pkg,
@@ -307,6 +310,19 @@ func loadTarget(baseDir, input string) (dir, pattern string, err error) {
 		return "", "", statErr
 	}
 	return absBase, input, nil
+}
+
+// internalPathElement reports the `internal` element of an import path, if
+// any. Go already restricts who may import such a package, so bridging one to
+// Dart would export something the module deliberately keeps private - and it
+// is where the generated support package lives.
+func internalPathElement(importPath string) string {
+	for element := range strings.SplitSeq(importPath, "/") {
+		if element == "internal" {
+			return element
+		}
+	}
+	return ""
 }
 
 func packageDir(pkg *packages.Package, fallback string) string {

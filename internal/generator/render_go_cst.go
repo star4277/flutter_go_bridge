@@ -110,6 +110,14 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\treturn fgbrt.NewDartOpaque(int64(value), fgbReleaseDartOpaque), nil")
 	case kindCallback:
 		r.line("\treturn fgbMakeCallback%d(int64(value)), nil", typ.ID)
+	case kindStreamSink:
+		if typ.ChannelStream {
+			r.line("\tvar zero %s", goType)
+			r.line("\treturn zero, fmt.Errorf(\"%%s: channel streams are only supported as direct call parameters\", path)")
+			break
+		}
+		r.line("\tif value == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid stream handle 0\", path) }", goType)
+		r.line("\treturn fgbMakeStreamSink%d(int64(value)), nil", typ.ID)
 	case kindNamed:
 		r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -260,6 +268,8 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\treturn fgbDcoInt64(value.Handle())")
 	case kindCallback:
 		r.line("\treturn nil, fmt.Errorf(\"function values cannot be encoded\")")
+	case kindStreamSink:
+		r.line("\treturn nil, fmt.Errorf(\"stream sinks cannot be sent to Dart\")")
 	case kindNamed:
 		r.line("return fgbDcoEncode%d(%s(value))", typ.Named.Underlying.ID, r.goType(typ.Named.Underlying.Original))
 	default:
@@ -311,9 +321,15 @@ func (r *goRenderer) renderCstDispatch() {
 			argOffset++
 		}
 		for index, param := range call.Params {
+			if param.Type.Kind == kindStreamSink && param.Type.ChannelStream {
+				continue
+			}
 			r.line("\t\targ%d, err := fgbCstDecode%d(args.%s, %s)", index, param.Type.ID, param.CName, strconv.Quote(param.DartName))
 			r.line("\t\tif err != nil { return nil, fgbInvalidArguments(%s, err) }", strconv.Quote(call.WireName))
 		}
+		r.renderStreamChannelSetup(call, "\t\t", func(index int) string {
+			return fmt.Sprintf("int64(args.%s)", call.Params[index].CName)
+		})
 		_ = argOffset
 		callExpr := r.goCallExpression(call)
 		switch {

@@ -82,6 +82,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.line("  return value.fgbHandle;")
 	case kindDartOpaque:
 		r.line("  return arena.bridge.fgbInternalRegisterDartOpaque(value);")
+	case kindStreamSink:
+		r.renderStreamSinkRegistration(typ, "arena.bridge")
 	case kindCallback:
 		r.renderCallbackRegistration(typ, "arena.bridge")
 	case kindNamed:
@@ -109,7 +111,7 @@ func cstDartEncoderReturnType(typ *wireType) string {
 		return storage.DartType
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindOpaque, kindDartOpaque, kindCallback:
+	case kindBool, kindSigned, kindUnsigned, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		return "int"
 	case kindFloat:
 		return "double"
