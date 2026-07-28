@@ -24,6 +24,7 @@ const (
 	kindStruct      typeKind = "struct"
 	kindOpaque      typeKind = "opaque"
 	kindDartOpaque  typeKind = "dart_opaque"
+	kindCallback    typeKind = "callback"
 	kindNamed       typeKind = "named"
 	kindBytes       typeKind = "bytes"
 	kindInt32List   typeKind = "int32_list"
@@ -94,6 +95,9 @@ type paramModel struct {
 	DartName string
 	CName    string
 	Type     *wireType
+	// Nullable marks a callback parameter listed in `//fgb:nullable`: the Dart
+	// signature accepts null and Go receives a nil func value.
+	Nullable bool
 }
 
 // wireType is the generator's typed IR, analogous to flutter_rust_bridge's
@@ -111,9 +115,27 @@ type wireType struct {
 	Named     *namedModel
 	Struct    *structModel
 	Opaque    *opaqueModel
+	Callback  *callbackModel
 	BasicKind types.BasicKind
 	BitSize   int
 	Signed    bool
+}
+
+// nilableWithoutPointer reports whether the Go type can be nil on its own,
+// without being wrapped in a pointer: closures, slices, maps and the typed
+// list shapes. These are exactly the types `//fgb:nullable` may mark - every
+// other type expresses optionality through a Go pointer.
+func (t *wireType) nilableWithoutPointer() bool {
+	if t == nil {
+		return false
+	}
+	switch t.Kind {
+	case kindCallback, kindSlice, kindMap, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
+		return true
+	default:
+		// Arrays are fixed-size values in Go and can never be nil.
+		return false
+	}
 }
 
 type namedModel struct {
@@ -166,4 +188,17 @@ type opaqueModel struct {
 	SourceFile string
 	Type       *wireType
 	Methods    []*callModel
+}
+
+// callbackModel describes a Go function-type parameter: Dart supplies a
+// closure (sync or async), Go receives a synthesized func value that parks
+// its goroutine until the Dart side replies.
+type callbackModel struct {
+	// Params travel Go -> Dart when the callback is invoked.
+	Params []*wireType
+	// Result (nil for void) travels Dart -> Go in the reply.
+	Result *wireType
+	// HasError marks a trailing `error` result: Dart exceptions surface as a
+	// returned error instead of a panic.
+	HasError bool
 }

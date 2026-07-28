@@ -377,3 +377,170 @@ func Bad(callback func()) {}
 		t.Fatal("expected a warning for the unsupported function type parameter")
 	}
 }
+
+func TestGenerateCallbackParameter(t *testing.T) {
+	apiDart, central, goSource, _, err := generateFixture(t, `package api
+
+//fgb:async
+func Transform(input string, mapper func(s string) string) string {
+	return mapper(input)
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "required FutureOr<String> Function(String) mapper") {
+		t.Fatalf("callback should surface as a FutureOr function type:\n%s", apiDart)
+	}
+	for _, expected := range []string{
+		"fgbInternalRegisterCallback",
+		"await Future.sync(() => value(a0));",
+		"'callback result'",
+	} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("central bridge missing %q:\n%s", expected, central)
+		}
+	}
+	for _, expected := range []string{
+		"func fgbMakeCallback", "fgbInvokeCallback(handle", "runtime.KeepAlive(ref)",
+		"//export fgb_callback_port", "//export fgb_callback_result",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing %q", expected)
+		}
+	}
+}
+
+func TestGenerateCallbackRequiresAsync(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+func Broken(callback func(value int)) {
+	callback(1)
+}
+`)
+	if err == nil || !strings.Contains(err.Error(), "//fgb:async") {
+		t.Fatalf("callbacks in sync calls must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateCallbackWithErrorResult(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+//fgb:async
+func Guarded(callback func() (string, error)) (string, error) {
+	return callback()
+}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(goSource, "func() (string, error) {") {
+		t.Fatalf("callback factory should return (string, error):\n%s", goSource)
+	}
+	if !strings.Contains(goSource, "var zero string") || !strings.Contains(goSource, "return zero, err") {
+		t.Fatal("transport failures should surface through the error result, not a panic")
+	}
+}
+
+func TestGenerateCallbackRejectedOutsideDirectParams(t *testing.T) {
+	if _, _, _, _, err := generateFixture(t, `package api
+
+//fgb:async
+func Bad() func() { return nil }
+`); err == nil || !strings.Contains(err.Error(), "direct parameters") {
+		t.Fatalf("function results must be rejected, got %v", err)
+	}
+	if _, _, _, _, err := generateFixture(t, `package api
+
+//fgb:async
+func AlsoBad(callbacks []func()) {}
+`); err == nil || !strings.Contains(err.Error(), "direct parameters") {
+		t.Fatalf("function slices must be rejected, got %v", err)
+	}
+	if _, _, _, _, err := generateFixture(t, `package api
+
+//fgb:async
+func Nested(callback func(inner func())) {}
+`); err == nil || !strings.Contains(err.Error(), "nested function types") {
+		t.Fatalf("nested function types must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateNullableCallback(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+//fgb:async, nullable = "onEvent"
+func WithOptional(value int, onEvent func(message string)) int { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "required int value, FutureOr<void> Function(String)? onEvent") {
+		t.Fatalf("nullable callback should be optional and nullable:\n%s", apiDart)
+	}
+	if !strings.Contains(goSource, "if handle == 0 {") {
+		t.Fatal("callback factory should map handle 0 to a nil func")
+	}
+}
+
+func TestGenerateNullableRejectsNonCallbackParameters(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+//fgb:sync, rename = "fetchValue", nullable = "a,b,c"
+func Values(a, b string, c func(string) (string, error)) string { return a }
+`)
+	if err == nil || !strings.Contains(err.Error(), `nullable lists parameter "a"`) {
+		t.Fatalf("nullable on a non-callback parameter must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateNullableRejectsUnknownParameter(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+//fgb:async, nullable = "missing"
+func Run(callback func()) {}
+`)
+	if err == nil || !strings.Contains(err.Error(), "unknown parameter") {
+		t.Fatalf("nullable with an unknown name must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateNullableCollections(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+//fgb:async, nullable = "tags,scores,blob"
+func Store(id int, tags []string, scores map[string]int, blob []byte) int { return id }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"required int id",
+		"List<String>? tags",
+		"Map<String, int>? scores",
+		"Uint8List? blob",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("api.dart missing %q:\n%s", expected, apiDart)
+		}
+	}
+	for _, forbidden := range []string{"required List<String>?", "required Map<String, int>?", "required Uint8List?"} {
+		if strings.Contains(apiDart, forbidden) {
+			t.Fatalf("nullable parameters must not be required:\n%s", apiDart)
+		}
+	}
+	if !strings.Contains(goSource, "if value == nil {") {
+		t.Fatal("Go decoders should accept a null wire value for nilable types")
+	}
+}
+
+func TestGenerateNullableRejectsArray(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+//fgb:async, nullable = "values"
+func Fixed(values [3]int) int { return values[0] }
+`)
+	if err == nil || !strings.Contains(err.Error(), "nil without a pointer") {
+		t.Fatalf("arrays cannot be nil and must be rejected, got %v", err)
+	}
+}

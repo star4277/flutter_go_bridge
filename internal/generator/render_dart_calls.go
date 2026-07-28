@@ -31,7 +31,7 @@ func (r *splitDartRenderer) renderCentralCall(call *callModel) {
 		arguments = append(arguments, "receiver")
 	}
 	for _, param := range call.Params {
-		params = append(params, fmt.Sprintf("%s %s", param.Type.DartType, param.DartName))
+		params = append(params, fmt.Sprintf("%s %s", dartParamType(param), param.DartName))
 		arguments = append(arguments, param.DartName)
 	}
 	paramText := strings.Join(params, ", ")

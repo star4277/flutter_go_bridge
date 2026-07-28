@@ -48,6 +48,10 @@ type Callable struct {
 	Mode        CallMode
 	Receiver    *types.Named
 	PointerRecv bool
+	// NullableParams lists Go parameter names marked by
+	// `//fgb:nullable = "a,b"`. Only callback (function-typed) parameters may
+	// appear here; the generator rejects anything else.
+	NullableParams []string
 }
 
 func (c *Callable) IsMethod() bool { return c.Receiver != nil }

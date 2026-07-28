@@ -23,7 +23,13 @@ func (r *splitDartRenderer) renderCstEncoders() {
 }
 
 func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
-	r.line("%s fgbCstEncode%d(%s value, _FgbArena arena, String path) {", cstDartEncoderReturnType(typ), typ.ID, typ.DartType)
+	r.line("%s fgbCstEncode%d(%s value, _FgbArena arena, String path) {", cstDartEncoderReturnType(typ), typ.ID, dartEncoderValueType(typ))
+	// Nilable compound values (slices and the typed lists) travel as arena
+	// pointers, so a null value is simply a null pointer. Closures encode
+	// their own null case as handle 0.
+	if typ.Kind != kindCallback && typ.nilableWithoutPointer() {
+		r.line("  if (value == null) return ffi.nullptr;")
+	}
 	switch typ.Kind {
 	case kindBool:
 		r.line("  return value ? 1 : 0;")
@@ -76,6 +82,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.line("  return value.fgbHandle;")
 	case kindDartOpaque:
 		r.line("  return arena.bridge.fgbInternalRegisterDartOpaque(value);")
+	case kindCallback:
+		r.renderCallbackRegistration(typ, "arena.bridge")
 	case kindNamed:
 		r.line("  return fgbCstEncode%d(value.value, arena, path);", typ.Named.Underlying.ID)
 	default:
@@ -101,7 +109,7 @@ func cstDartEncoderReturnType(typ *wireType) string {
 		return storage.DartType
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindOpaque, kindDartOpaque:
+	case kindBool, kindSigned, kindUnsigned, kindOpaque, kindDartOpaque, kindCallback:
 		return "int"
 	case kindFloat:
 		return "double"

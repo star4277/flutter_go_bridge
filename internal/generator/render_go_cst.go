@@ -108,6 +108,8 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 	case kindDartOpaque:
 		r.line("\tif value == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid DartOpaque handle 0\", path) }", goType)
 		r.line("\treturn fgbrt.NewDartOpaque(int64(value), fgbReleaseDartOpaque), nil")
+	case kindCallback:
+		r.line("\treturn fgbMakeCallback%d(int64(value)), nil", typ.ID)
 	case kindNamed:
 		r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -157,7 +159,12 @@ func (r *goRenderer) renderCstTypedListDecoder(typ *wireType, cElement, goElemen
 
 func (r *goRenderer) renderCstSliceDecoder(typ *wireType, array bool) {
 	goType := r.goType(typ.Original)
-	r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null list\", path) }", goType)
+	if array {
+		// A Go array is a fixed-size value and can never be nil.
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null list\", path) }", goType)
+	} else {
+		r.line("\tif value == nil { return nil, nil }")
+	}
 	r.line("\tlength, err := fgbCstLength(value.len, path)")
 	r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 	if array {
@@ -251,6 +258,8 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 	case kindDartOpaque:
 		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
 		r.line("\treturn fgbDcoInt64(value.Handle())")
+	case kindCallback:
+		r.line("\treturn nil, fmt.Errorf(\"function values cannot be encoded\")")
 	case kindNamed:
 		r.line("return fgbDcoEncode%d(%s(value))", typ.Named.Underlying.ID, r.goType(typ.Named.Underlying.Original))
 	default:

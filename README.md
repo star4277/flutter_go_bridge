@@ -225,6 +225,8 @@ void main() async {
 | `fgb_alloc` / `fgb_free` | FFI 请求与响应缓冲区管理 |
 | `fgb_drop` | `NativeFinalizer` 自动释放 GoOpaque 句柄 |
 | `fgb_dart_opaque_port` | 注册 DartOpaque 释放通知端口 |
+| `fgb_callback_port` | 注册 Dart 闭包回调的常驻请求端口 |
+| `fgb_callback_result` | Dart 闭包执行完毕后回传结果 |
 
 这些符号由 `bridge_generated.go` 中的 cgo 导出声明生成；代码生成器本身不会创建 C 源文件或头文件。
 
@@ -261,6 +263,7 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | 普通 `*struct` 值 | 可空 Dart value class，字段继续参与 CST/DCO 序列化 |
 | GoOpaque 结构体 | `extends GoOpaque` 的句柄类 + `NativeFinalizer` 自动释放 |
 | `fgb.DartOpaque` / `*fgb.DartOpaque` | `Object` / `Object?`（Dart 对象按句柄穿透 Go） |
+| 函数类型参数 | `FutureOr<R> Function(...)`，见「Dart 闭包回调」，需 `//fgb:async` |
 | `time.Time` | `DateTime` |
 | `math/big.Int` | `BigInt` |
 | 最后一个 `error` 返回值 | `FgbPlatformException` |
@@ -277,7 +280,7 @@ Dart 对象按句柄交给 Go 保存、之后原样传回；Go 侧最后一份�
 只有 API 用到它时 go.mod 才需要这一个依赖。
 
 当前支持零个或一个非 `error` 返回值；`error` 必须位于最后。泛型函数、可变参数、多非 error 返回值、
-非空接口、函数类型（回调）和复杂外部命名类型暂未支持。
+非空接口和复杂外部命名类型暂未支持。
 
 ## 指令与字段 tag
 
@@ -293,7 +296,51 @@ func LoadValue() Value { /* ... */ }
 
 //fgb:opaque                       // 强制 GoOpaque 句柄语义
 type Counter struct{ total int }
+
+//fgb:async, nullable = "onEvent"  // 指定参数在 Dart 侧可空（仅限自身可 nil 的类型）
+func Watch(id int, onEvent func(message string)) {}
 ```
+
+`nullable = "a,b"` 按 **Go 参数名**列出可为空的参数：生成的 Dart 签名带 `?` 且不加 `required`，
+Dart 传 `null` 或省略时 Go 侧收到 `nil`。它只适用于**在 Go 中不用指针也能为 nil 的类型**：
+
+| 可标记 | Dart 签名 |
+| --- | --- |
+| 回调 `func(...)` | `FutureOr<R> Function(...)?` |
+| slice `[]T` | `List<T>?` |
+| map `map[K]V` | `Map<K, V>?` |
+| `[]byte` / `[]int32` / `[]int64` / `[]float64` | `Uint8List?` / `Int32List?` / … |
+
+`nil` 与空集合是两个不同的值，会如实传到 Go 侧（`nil` vs `len == 0`）。其他类型的可空性由
+Go 指针表达：把非上述类型的参数写进 `nullable` 会直接报错（数组 `[N]T` 是定长值，同样不能为
+nil），列了不存在的参数名也报错。
+
+## Dart 闭包回调
+
+Go 函数可以直接接收原生函数类型参数，Dart 侧传入闭包：
+
+```go
+//fgb:async
+func Transform(input string, mapper func(s string) string) string {
+	return mapper(input) + "!"
+}
+```
+
+```dart
+await transform(input: 'go', mapper: (s) => s.toUpperCase());          // 同步闭包
+await transform(input: 'go', mapper: (s) async => await load(s));      // async 闭包
+```
+
+- Dart 参数类型是 `FutureOr<R> Function(...)`，**同步闭包和 async 闭包都能传**；
+  runtime 统一 `await`，async 闭包会等它完成后才把结果回传给 Go。
+- Go 侧拿到的是普通函数值，调用时会阻塞当前 goroutine 直到 Dart 返回，用起来与同步函数无异。
+- 因此**回调参数强制要求 `//fgb:async`**：同步调用期间 Dart 事件循环停转，闭包永远不会被执行，
+  生成期直接报错。
+- Dart 闭包抛异常时：回调签名最后一个返回值是 `error` 就转成该 error，否则整个调用以
+  `FgbPlatformException` 失败。
+- 闭包句柄与 DartOpaque 共用注册表，Go 侧最后一份引用被 GC 后自动通知 Dart 释放。
+- 当前限制：回调只能作为**函数的直接参数**出现（不能是返回值、slice/map 元素或结构体字段），
+  不支持嵌套函数类型、可变参数和泛型。
 
 结构体字段的 `fgb` tag（逗号组合；`defaultValue` 会吞掉其后的所有内容，须放最后）：
 

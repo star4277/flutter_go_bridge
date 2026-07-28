@@ -171,13 +171,14 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 				continue
 			}
 			callable := &model.Callable{
-				Func:       object,
-				Signature:  signature,
-				Position:   declaration.Pos(),
-				SourceFile: sourceFile,
-				Docs:       cleanDocs(declaration.Doc),
-				DartName:   directives.Rename,
-				Mode:       directives.Mode,
+				Func:           object,
+				Signature:      signature,
+				Position:       declaration.Pos(),
+				SourceFile:     sourceFile,
+				Docs:           cleanDocs(declaration.Doc),
+				DartName:       directives.Rename,
+				Mode:           directives.Mode,
+				NullableParams: directives.Nullable,
 			}
 			if callable.DartName == "" {
 				callable.DartName = names.LowerCamel(object.Name())
@@ -369,17 +370,59 @@ func packageErrors(pkgs []*packages.Package) error {
 
 var renameDirectivePattern = regexp.MustCompile(`^rename\s*=\s*(.+)$`)
 
+var nullableDirectivePattern = regexp.MustCompile(`^nullable\s*=\s*(.+)$`)
+
 // directiveSet is everything an `//fgb:` directive can request for one
 // declaration.
 type directiveSet struct {
-	Mode   model.CallMode
-	Ignore bool
-	Opaque bool
-	Rename string
+	Mode     model.CallMode
+	Ignore   bool
+	Opaque   bool
+	Rename   string
+	Nullable []string
+}
+
+// splitDirectiveTokens splits a directive body on commas, ignoring commas
+// inside quotes so `nullable = "a,b"` stays one token.
+func splitDirectiveTokens(body string) []string {
+	var tokens []string
+	var current strings.Builder
+	quote := rune(0)
+	for _, character := range body {
+		switch {
+		case quote != 0:
+			if character == quote {
+				quote = 0
+			}
+			current.WriteRune(character)
+		case character == '"' || character == '\'':
+			quote = character
+			current.WriteRune(character)
+		case character == ',':
+			tokens = append(tokens, strings.TrimSpace(current.String()))
+			current.Reset()
+		default:
+			current.WriteRune(character)
+		}
+	}
+	if trailing := strings.TrimSpace(current.String()); trailing != "" || len(tokens) == 0 {
+		tokens = append(tokens, trailing)
+	}
+	return tokens
+}
+
+// directiveStringValue unquotes a directive value when it is quoted.
+func directiveStringValue(raw string) string {
+	value := strings.TrimSpace(raw)
+	if unquoted, err := strconv.Unquote(value); err == nil {
+		return unquoted
+	}
+	return value
 }
 
 // parseDirectives understands `//fgb:sync`, `//fgb:async`, `//fgb:ignore`,
-// `//fgb:opaque`, and `//fgb:rename = "name"` - either as separate lines or
+// `//fgb:opaque`, `//fgb:rename = "name"`, and
+// `//fgb:nullable = "param1,param2"` - either as separate lines or
 // comma-combined like `//fgb:async, rename = "name"`. The spelling follows
 // the Go directive convention (`//tool:directive`, no space after `//`), so
 // gofmt leaves the line alone and it never leaks into doc comments. Unmarked
@@ -408,17 +451,27 @@ func parseDirectives(group *ast.CommentGroup) (directiveSet, error) {
 			return nil
 		}
 		if match := renameDirectivePattern.FindStringSubmatch(token); match != nil {
-			value := strings.TrimSpace(match[1])
-			if unquoted, err := strconv.Unquote(value); err == nil {
-				value = unquoted
-			}
+			value := directiveStringValue(match[1])
 			if value == "" {
 				return fmt.Errorf("invalid empty fgb rename")
 			}
 			result.Rename = value
 			return nil
 		}
-		return fmt.Errorf("invalid //fgb: directive %q (want sync, async, ignore, opaque, or rename = \"name\")", token)
+		if match := nullableDirectivePattern.FindStringSubmatch(token); match != nil {
+			for name := range strings.SplitSeq(directiveStringValue(match[1]), ",") {
+				name = strings.TrimSpace(name)
+				if name == "" {
+					return fmt.Errorf("invalid empty parameter name in fgb nullable")
+				}
+				result.Nullable = append(result.Nullable, name)
+			}
+			if len(result.Nullable) == 0 {
+				return fmt.Errorf("invalid empty fgb nullable")
+			}
+			return nil
+		}
+		return fmt.Errorf("invalid //fgb: directive %q (want sync, async, ignore, opaque, rename = \"name\", or nullable = \"a,b\")", token)
 	}
 
 	if group == nil {
@@ -438,8 +491,8 @@ func parseDirectives(group *ast.CommentGroup) (directiveSet, error) {
 		if inner == "" {
 			return result, fmt.Errorf("invalid empty //fgb: directive")
 		}
-		for token := range strings.SplitSeq(inner, ",") {
-			if err := applyToken(strings.TrimSpace(token)); err != nil {
+		for _, token := range splitDirectiveTokens(inner) {
+			if err := applyToken(token); err != nil {
 				return result, err
 			}
 		}

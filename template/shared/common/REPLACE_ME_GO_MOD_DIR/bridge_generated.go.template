@@ -374,6 +374,9 @@ var fgbHandles sync.Map
 var fgbNextHandle atomic.Uintptr
 var fgbDartAPIData unsafe.Pointer
 var fgbDartOpaquePort atomic.Int64
+var fgbCallbackPort atomic.Int64
+var fgbCallbackWaiters sync.Map
+var fgbNextCallbackCall atomic.Int64
 
 func init() {
 	var marker uint16 = 0x1
@@ -1284,7 +1287,12 @@ func fgb_async(data unsafe.Pointer, length C.int64_t, port C.int64_t) {
 		go fgbPost(int64(port), fgbErrorResponse(err))
 		return
 	}
-	go fgbPost(int64(port), fgbHandle(request))
+	// The dispatch must run inside the goroutine: "go f(g(x))" would evaluate
+	// g(x) on this thread, keeping the Dart isolate blocked inside the FFI
+	// call for the whole computation (and deadlocking any Dart callback).
+	go func() {
+		fgbPost(int64(port), fgbHandle(request))
+	}()
 }
 
 func fgbHandleCst(callID int32, args unsafe.Pointer) (response *C.FgbDartCObject) {
@@ -1319,7 +1327,13 @@ func fgb_cst(callID C.int32_t, args unsafe.Pointer) unsafe.Pointer {
 
 //export fgb_cst_async
 func fgb_cst_async(callID C.int32_t, args unsafe.Pointer, port C.int64_t) {
-	go fgbPostDco(int64(port), fgbHandleCst(int32(callID), args))
+	// Same argument-evaluation caveat as fgb_async: the dispatch itself has to
+	// happen inside the goroutine, otherwise the calling Dart isolate stays
+	// blocked until the Go function returns. The CST arena stays alive on the
+	// Dart side until the reply lands on the port, so reading args here is safe.
+	go func() {
+		fgbPostDco(int64(port), fgbHandleCst(int32(callID), args))
+	}()
 }
 
 //export fgb_dco_free
@@ -1360,6 +1374,84 @@ func fgbReleaseDartOpaque(handle int64) {
 		return
 	}
 	fgbPostDco(port, object)
+}
+
+//export fgb_callback_port
+func fgb_callback_port(port C.int64_t) {
+	fgbCallbackPort.Store(int64(port))
+}
+
+//export fgb_callback_result
+func fgb_callback_result(id C.int64_t, data unsafe.Pointer, length C.int64_t) {
+	payload, err := fgbCopyInput(data, int64(length))
+	if err != nil {
+		payload = nil
+	}
+	if waiter, ok := fgbCallbackWaiters.LoadAndDelete(int64(id)); ok {
+		waiter.(chan []byte) <- payload
+	}
+}
+
+// fgbCallbackRef keeps the Dart-side closure registered for as long as the
+// synthesized Go func value is reachable; afterwards the shared DartOpaque
+// release path drops the registry entry.
+type fgbCallbackRef struct {
+	handle int64
+}
+
+func fgbNewCallbackRef(handle int64) *fgbCallbackRef {
+	ref := &fgbCallbackRef{handle: handle}
+	runtime.AddCleanup(ref, fgbReleaseDartOpaque, handle)
+	return ref
+}
+
+// fgbInvokeCallback posts one callback request to the Dart event loop and
+// parks the calling goroutine until the reply arrives. It must therefore only
+// run inside //fgb:async calls: during a synchronous call the Dart thread is
+// blocked inside the FFI call and could never execute the closure. Arguments
+// are pre-encoded standard-codec values; the decoded reply value is returned.
+func fgbInvokeCallback(handle int64, arguments []any) (any, error) {
+	port := fgbCallbackPort.Load()
+	if port == 0 {
+		return nil, fmt.Errorf("callback port is not initialized; was the bridge opened via initialize()?")
+	}
+	id := fgbNextCallbackCall.Add(1)
+	waiter := make(chan []byte, 1)
+	fgbCallbackWaiters.Store(id, waiter)
+
+	codec := fgbStandardMethodCodec{}
+	var buffer bytes.Buffer
+	if err := codec.writeValue(&buffer, []any{id, handle, arguments}); err != nil {
+		fgbCallbackWaiters.Delete(id)
+		return nil, fmt.Errorf("encode callback request: %w", err)
+	}
+	fgbPost(port, buffer.Bytes())
+
+	payload := <-waiter
+	if payload == nil {
+		return nil, fmt.Errorf("callback reply was empty")
+	}
+	replyBuffer := bytes.NewBuffer(payload)
+	decoded, err := codec.readValue(replyBuffer, len(payload))
+	if err != nil {
+		return nil, fmt.Errorf("decode callback reply: %w", err)
+	}
+	envelope, ok := decoded.([]any)
+	if !ok || len(envelope) == 0 {
+		return nil, fmt.Errorf("invalid callback reply envelope")
+	}
+	flag, err := fgbAsInt64(envelope[0], "callback envelope")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case flag == 0 && len(envelope) == 2:
+		return envelope[1], nil
+	case flag == 1 && len(envelope) >= 3:
+		return nil, fmt.Errorf("dart callback failed: %v", envelope[2])
+	default:
+		return nil, fmt.Errorf("invalid callback reply envelope")
+	}
 }
 
 // Required for c-shared and c-archive build modes.

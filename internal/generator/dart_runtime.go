@@ -24,6 +24,14 @@ abstract base class GoOpaque implements ffi.Finalizable {
   final int fgbHandle;
 }
 
+/// Wraps a registered Dart closure so the callback dispatcher can tell it
+/// apart from plain DartOpaque objects sharing the same registry.
+final class _FgbCallbackInvoker {
+  _FgbCallbackInvoker(this.invoke);
+
+  final Future<Object?> Function(List<Object?> args) invoke;
+}
+
 final class _FgbWriter {
   final List<int> _bytes = <int>[];
 
@@ -311,6 +319,10 @@ typedef _FgbDcoFreeNative = ffi.Void Function(ffi.Pointer<ffi.Void>);
 typedef _FgbDcoFreeDart = void Function(ffi.Pointer<ffi.Void>);
 typedef _FgbDartOpaquePortNative = ffi.Void Function(ffi.Int64);
 typedef _FgbDartOpaquePortDart = void Function(int);
+typedef _FgbCallbackPortNative = ffi.Void Function(ffi.Int64);
+typedef _FgbCallbackPortDart = void Function(int);
+typedef _FgbCallbackResultNative = ffi.Void Function(ffi.Int64, ffi.Pointer<ffi.Void>, ffi.Int64);
+typedef _FgbCallbackResultDart = void Function(int, ffi.Pointer<ffi.Void>, int);
 
 final class _FgbBindings {
   _FgbBindings(this.library)
@@ -324,6 +336,8 @@ final class _FgbBindings {
         cstAsync = library.lookupFunction<_FgbCstAsyncNative, _FgbCstAsyncDart>('fgb_cst_async'),
         dcoFree = library.lookupFunction<_FgbDcoFreeNative, _FgbDcoFreeDart>('fgb_dco_free'),
         dartOpaquePort = library.lookupFunction<_FgbDartOpaquePortNative, _FgbDartOpaquePortDart>('fgb_dart_opaque_port'),
+        callbackPort = library.lookupFunction<_FgbCallbackPortNative, _FgbCallbackPortDart>('fgb_callback_port'),
+        callbackResult = library.lookupFunction<_FgbCallbackResultNative, _FgbCallbackResultDart>('fgb_callback_result'),
         dropAddress = library.lookup<ffi.NativeFunction<_FgbDropNative>>('fgb_drop');
 
   final ffi.DynamicLibrary library;
@@ -337,6 +351,8 @@ final class _FgbBindings {
   final void Function(int, ffi.Pointer<ffi.Void>, int) cstAsync;
   final void Function(ffi.Pointer<ffi.Void>) dcoFree;
   final void Function(int) dartOpaquePort;
+  final void Function(int) callbackPort;
+  final void Function(int, ffi.Pointer<ffi.Void>, int) callbackResult;
   final ffi.Pointer<ffi.NativeFunction<_FgbDropNative>> dropAddress;
 }
 
@@ -453,6 +469,12 @@ final class __FGB_BRIDGE_CLASS__ {
       if (message is int) _dartOpaqueObjects.remove(message);
     };
     _bindings.dartOpaquePort(_dartOpaqueReleases.sendPort.nativePort);
+    // Go posts callback invocation requests here whenever an //fgb:async call
+    // invokes a Dart-supplied closure; the goroutine parks until the reply is
+    // delivered through fgb_callback_result.
+    _callbackRequests.keepIsolateAlive = false;
+    _callbackRequests.handler = _handleCallbackRequest;
+    _bindings.callbackPort(_callbackRequests.sendPort.nativePort);
   }
 
   static __FGB_BRIDGE_CLASS__? _instance;
@@ -489,7 +511,9 @@ final class __FGB_BRIDGE_CLASS__ {
   final _FgbBindings _bindings;
   final String? _libraryPath;
   final ffi.NativeFinalizer _handleFinalizer;
-  final RawReceivePort _dartOpaqueReleases = RawReceivePort();  final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
+  final RawReceivePort _dartOpaqueReleases = RawReceivePort();
+  final RawReceivePort _callbackRequests = RawReceivePort();
+  final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
   int _dartOpaqueNextHandle = 0;
   static const _FgbCodec _codec = _FgbCodec();
 
@@ -508,6 +532,60 @@ final class __FGB_BRIDGE_CLASS__ {
       throw StateError('$path: unknown or released DartOpaque handle $handle');
     }
     return value;
+  }
+
+  /// Internal: registers a Dart closure for invocation from Go. The stored
+  /// invoker decodes the wire arguments, runs the user closure - awaiting it
+  /// when the closure is async - and returns the wire-encoded result. It
+  /// shares the DartOpaque registry, so Go dropping its last reference
+  /// releases the closure.
+  int fgbInternalRegisterCallback(Future<Object?> Function(List<Object?> args) invoker) {
+    return fgbInternalRegisterDartOpaque(_FgbCallbackInvoker(invoker));
+  }
+
+  void _handleCallbackRequest(Object? message) {
+    Uint8List? request;
+    if (message is Uint8List) {
+      request = message;
+    } else if (message is List<int>) {
+      request = Uint8List.fromList(message);
+    }
+    if (request == null) return;
+    final decoded = _FgbReader(request).value();
+    if (decoded is! List || decoded.length != 3) return;
+    final id = decoded[0];
+    final handle = decoded[1];
+    final arguments = decoded[2];
+    if (id is! int || handle is! int || arguments is! List) return;
+    Future<Uint8List>(() async {
+      final entry = _dartOpaqueObjects[handle];
+      if (entry is! _FgbCallbackInvoker) {
+        throw StateError('unknown or released callback handle $handle');
+      }
+      final result = await entry.invoke(List<Object?>.of(arguments));
+      return _encodeCallbackReply(<Object?>[0, result]);
+    }).catchError((Object error) {
+      return _encodeCallbackReply(<Object?>[1, 'callback_error', error.toString()]);
+    }).then(_deliverCallbackReply(id));
+  }
+
+  Uint8List _encodeCallbackReply(List<Object?> envelope) {
+    final writer = _FgbWriter();
+    _codec._writeValue(writer, envelope);
+    return writer.finish();
+  }
+
+  void Function(Uint8List) _deliverCallbackReply(int id) {
+    return (Uint8List reply) {
+      final pointer = _bindings.alloc(reply.length);
+      if (pointer == ffi.nullptr) return;
+      try {
+        pointer.cast<ffi.Uint8>().asTypedList(reply.length).setAll(0, reply);
+        _bindings.callbackResult(id, pointer, reply.length);
+      } finally {
+        _bindings.free(pointer);
+      }
+    };
   }
 
   /// Internal entrypoint used by generated per-source Dart API files.

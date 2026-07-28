@@ -74,6 +74,12 @@ func renderGo(unit *unit) ([]byte, error) {
 		}
 		r.line("")
 	}
+	for _, typ := range unit.Types {
+		if typ.Kind == kindCallback {
+			r.renderCallbackFactory(typ)
+			r.line("")
+		}
+	}
 	r.renderDispatch()
 	// Keep the CST ABI present even for a package whose current API only uses
 	// the Standard fallback; the Dart runtime can then use one stable binding
@@ -124,18 +130,22 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif err != nil { return nil, err }")
 		r.line("\treturn &decoded, nil")
 	case kindBytes:
+		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]byte)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Uint8List\", value) }", goType)
 		r.line("\treturn append(%s(nil), raw...), nil", goType)
 	case kindInt32List:
+		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]int32)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Int32List\", value) }", goType)
 		r.line("\treturn append(%s(nil), raw...), nil", goType)
 	case kindInt64List:
+		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]int64)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Int64List\", value) }", goType)
 		r.line("\treturn append(%s(nil), raw...), nil", goType)
 	case kindFloat64List:
+		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]float64)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Float64List\", value) }", goType)
 		r.line("\treturn append(%s(nil), raw...), nil", goType)
@@ -198,6 +208,10 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.line("\tif raw == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid DartOpaque handle 0\", path) }", goType)
 		r.line("\treturn fgbrt.NewDartOpaque(raw, fgbReleaseDartOpaque), nil")
+	case kindCallback:
+		r.line("\traw, err := fgbAsInt64(value, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\treturn fgbMakeCallback%d(raw), nil", typ.ID)
 	case kindNamed:
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -288,6 +302,8 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindDartOpaque:
 		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
 		r.line("\treturn value.Handle(), nil")
+	case kindCallback:
+		r.line("\treturn nil, fmt.Errorf(\"function values cannot be encoded\")")
 	case kindNamed:
 		underlyingGo := r.goType(typ.Named.Underlying.Original)
 		r.line("\treturn fgbEncode%d(%s(value))", typ.Named.Underlying.ID, underlyingGo)
@@ -296,6 +312,78 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	}
 	r.line("}")
 	return nil
+}
+
+// renderCallbackFactory synthesizes the Go func value handed to user code for
+// a Dart-supplied closure. Invoking it encodes the arguments, posts a request
+// to the Dart event loop, and parks the goroutine until Dart replies - which
+// is why callbacks are restricted to //fgb:async calls. Without a trailing
+// `error` result, transport and Dart-side failures panic; the dispatch
+// recover() then reports them to the original caller.
+func (r *goRenderer) renderCallbackFactory(typ *wireType) {
+	callback := typ.Callback
+	goType := r.goType(typ.Original)
+	r.line("func fgbMakeCallback%d(handle int64) %s {", typ.ID, goType)
+	r.line("\t// Handle 0 means Dart passed null for a //fgb:nullable callback.")
+	r.line("\tif handle == 0 { return nil }")
+	r.line("\tref := fgbNewCallbackRef(handle)")
+
+	params := make([]string, len(callback.Params))
+	for index, param := range callback.Params {
+		params[index] = fmt.Sprintf("a%d %s", index, r.goType(param.Original))
+	}
+	var results []string
+	if callback.Result != nil {
+		results = append(results, r.goType(callback.Result.Original))
+	}
+	if callback.HasError {
+		results = append(results, "error")
+	}
+	resultText := ""
+	switch len(results) {
+	case 1:
+		resultText = " " + results[0]
+	case 2:
+		resultText = " (" + strings.Join(results, ", ") + ")"
+	}
+	r.line("\treturn func(%s)%s {", strings.Join(params, ", "), resultText)
+
+	fail := func(wrap string) {
+		switch {
+		case callback.HasError && callback.Result != nil:
+			r.line("\t\tif err != nil { var zero %s; return zero, %s }", r.goType(callback.Result.Original), wrap)
+		case callback.HasError:
+			r.line("\t\tif err != nil { return %s }", wrap)
+		default:
+			r.line("\t\tif err != nil { panic(%s) }", wrap)
+		}
+	}
+
+	arguments := make([]string, len(callback.Params))
+	for index, param := range callback.Params {
+		r.line("\t\tencoded%d, err := fgbEncode%d(a%d)", index, param.ID, index)
+		fail(fmt.Sprintf("fmt.Errorf(\"callback argument %d: %%w\", err)", index))
+		arguments[index] = fmt.Sprintf("encoded%d", index)
+	}
+	r.line("\t\treply, err := fgbInvokeCallback(handle, []any{%s})", strings.Join(arguments, ", "))
+	r.line("\t\truntime.KeepAlive(ref)")
+	fail("err")
+	if callback.Result != nil {
+		r.line("\t\tresult, err := fgbDecode%d(reply, \"callback result\")", callback.Result.ID)
+		fail("fmt.Errorf(\"callback result: %w\", err)")
+		if callback.HasError {
+			r.line("\t\treturn result, nil")
+		} else {
+			r.line("\t\treturn result")
+		}
+	} else {
+		r.line("\t\t_ = reply")
+		if callback.HasError {
+			r.line("\t\treturn nil")
+		}
+	}
+	r.line("\t}")
+	r.line("}")
 }
 
 func (r *goRenderer) renderDispatch() {

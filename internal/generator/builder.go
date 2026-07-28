@@ -138,9 +138,23 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 	}
 
 	usedParamNames := map[string]int{}
+	hasCallbackParam := false
+	// `//fgb:nullable` only makes sense for callbacks: every other Go type
+	// already expresses optionality through a pointer.
+	nullableParams := map[string]bool{}
+	for _, name := range source.NullableParams {
+		nullableParams[name] = false
+	}
 	for i := 0; i < sig.Params().Len(); i++ {
 		variable := sig.Params().At(i)
-		mapped, err := b.mapType(variable.Type())
+		var mapped *wireType
+		var err error
+		if signature, isFunc := types.Unalias(variable.Type()).(*types.Signature); isFunc {
+			hasCallbackParam = true
+			mapped, err = b.mapCallback(variable.Type(), signature)
+		} else {
+			mapped, err = b.mapType(variable.Type())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("parameter %d (%s): %w", i, variable.Name(), err)
 		}
@@ -148,8 +162,27 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		if goName == "" || goName == "_" {
 			goName = fmt.Sprintf("arg%d", i)
 		}
+		nullable := false
+		if _, listed := nullableParams[variable.Name()]; listed && variable.Name() != "" {
+			if !mapped.nilableWithoutPointer() {
+				return nil, fmt.Errorf("//fgb:nullable lists parameter %q, but only callback, slice, map and byte/typed-list parameters can be nil without a pointer; use a Go pointer for other optional values", variable.Name())
+			}
+			nullableParams[variable.Name()] = true
+			nullable = true
+		}
 		dartName := uniqueName(names.LowerCamel(goName), usedParamNames)
-		call.Params = append(call.Params, &paramModel{GoName: goName, DartName: dartName, CName: names.CIdentifier(dartName), Type: mapped})
+		call.Params = append(call.Params, &paramModel{
+			GoName: goName, DartName: dartName, CName: names.CIdentifier(dartName),
+			Type: mapped, Nullable: nullable,
+		})
+	}
+	for _, name := range source.NullableParams {
+		if !nullableParams[name] {
+			return nil, fmt.Errorf("//fgb:nullable lists unknown parameter %q", name)
+		}
+	}
+	if hasCallbackParam && call.Mode != model.CallModeAsync {
+		return nil, errors.New("parameters of function type require //fgb:async: a synchronous call blocks the Dart event loop, so the callback could never run")
 	}
 
 	results := sig.Results()
@@ -260,6 +293,8 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			return b.newSimpleType(original, kindAny, "Object?"), nil
 		}
 		return nil, errors.New("non-empty interfaces are not supported yet")
+	case *types.Signature:
+		return nil, errors.New("function types are only supported as direct parameters of //fgb:async functions")
 	case *types.Named:
 		if isTime(typ) {
 			b.unit.UsesTime = true
@@ -553,6 +588,69 @@ func parseFieldTag(raw string) (fieldTagOptions, error) {
 			return result, fmt.Errorf("unknown fgb field tag option %q (want ignore, rename:name, non-final, or defaultValue: expr)", token)
 		}
 	}
+	return result, nil
+}
+
+// mapCallback bridges a Go function-type parameter. Dart supplies a closure
+// (`FutureOr<R> Function(...)`, so plain and async functions both fit); Go
+// receives a synthesized func value whose invocation posts the arguments to
+// the Dart event loop and parks the goroutine until the reply arrives.
+func (b *builder) mapCallback(original types.Type, signature *types.Signature) (*wireType, error) {
+	if cached := b.cachedType(original); cached != nil {
+		return cached, nil
+	}
+	if signature.TypeParams() != nil && signature.TypeParams().Len() != 0 {
+		return nil, errors.New("generic function types are not supported")
+	}
+	if signature.Variadic() {
+		return nil, errors.New("variadic function types are not supported")
+	}
+
+	callback := &callbackModel{}
+	for i := 0; i < signature.Params().Len(); i++ {
+		paramType := signature.Params().At(i).Type()
+		if _, nested := types.Unalias(paramType).(*types.Signature); nested {
+			return nil, errors.New("nested function types are not supported")
+		}
+		mapped, err := b.mapType(paramType)
+		if err != nil {
+			return nil, fmt.Errorf("callback parameter %d: %w", i, err)
+		}
+		callback.Params = append(callback.Params, mapped)
+	}
+
+	results := signature.Results()
+	nonError := results.Len()
+	if results.Len() != 0 && isErrorType(results.At(results.Len()-1).Type()) {
+		callback.HasError = true
+		nonError--
+	}
+	if nonError > 1 {
+		return nil, errors.New("callbacks support at most one non-error result")
+	}
+	if results.Len() > nonError+btoi(callback.HasError) {
+		return nil, errors.New("callback error must be the final result")
+	}
+	if nonError == 1 {
+		mapped, err := b.mapType(results.At(0).Type())
+		if err != nil {
+			return nil, fmt.Errorf("callback result: %w", err)
+		}
+		callback.Result = mapped
+	}
+
+	resultDart := "void"
+	if callback.Result != nil {
+		resultDart = callback.Result.DartType
+	}
+	paramDarts := make([]string, len(callback.Params))
+	for i, param := range callback.Params {
+		paramDarts[i] = param.DartType
+	}
+	dartType := fmt.Sprintf("FutureOr<%s> Function(%s)", resultDart, strings.Join(paramDarts, ", "))
+
+	result := b.newType(original, kindCallback, dartType)
+	result.Callback = callback
 	return result, nil
 }
 
