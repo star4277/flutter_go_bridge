@@ -468,7 +468,7 @@ func (r *goRenderer) renderStreamSinkFactory(typ *wireType) {
 	r.line("func fgbMakeStreamSink%d(handle int64) %s {", typ.ID, r.goType(typ.Original))
 	r.line("\t// Capture the isolate generation at creation time: a hot restart")
 	r.line("\t// retires this sink even if its producer goroutine keeps running.")
-	r.line("\tgeneration := fgbStreamGeneration.Load()")
+	r.line("\tgeneration := fgbCurrentStreamGeneration()")
 	r.line("\treturn fgbrt.NewStreamSink(handle, func(value %s) (any, error) {", r.goType(typ.Stream.Original))
 	r.line("\t\treturn fgbEncode%d(value)", typ.Stream.ID)
 	r.line("\t}, func(handle int64, kind int32, payload any) bool {")
@@ -629,9 +629,11 @@ func (r *goRenderer) renderStreamChannelSetup(call *callModel, indent string, ha
 	r.line("%sdefer fgbCancel()", indent)
 	if streamHandle != "" {
 		// Cancelling the Dart subscription cancels the Go context, which is
-		// how a cooperative producer learns to stop early.
-		r.line("%sfgbRegisterStreamCancel(%s, fgbCancel)", indent, streamHandle)
-		r.line("%sdefer fgbUnregisterStreamCancel(%s)", indent, streamHandle)
+		// how a cooperative producer learns to stop early. Capture the
+		// generation once so the deferred cleanup cannot target a later one.
+		r.line("%sfgbStreamGen := fgbCurrentStreamGeneration()", indent)
+		r.line("%sfgbRegisterStreamCancel(fgbStreamGen, %s, fgbCancel)", indent, streamHandle)
+		r.line("%sdefer fgbUnregisterStreamCancel(fgbStreamGen, %s)", indent, streamHandle)
 	}
 }
 
@@ -642,7 +644,7 @@ func (r *goRenderer) renderStreamChannelHelpers(typ *wireType) {
 	r.line("func fgbMakeStreamChannel%d(handle int64) chan %s {", typ.ID, elemGo)
 	r.line("\t// Same generation guard as the sink factory: a hot restart retires")
 	r.line("\t// this producer along with the isolate that started it.")
-	r.line("\tgeneration := fgbStreamGeneration.Load()")
+	r.line("\tgeneration := fgbCurrentStreamGeneration()")
 	r.line("\tch := make(chan %s, 16)", elemGo)
 	r.line("\tgo func() {")
 	r.line("\t\t// Keep draining even after the Dart side stopped listening, so a")

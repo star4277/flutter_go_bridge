@@ -651,26 +651,41 @@ func Make() (fgb.StreamSink[int], error) { var zero fgb.StreamSink[int]; return 
 func TestGenerateStreamGenerationGuard(t *testing.T) {
 	_, _, goSource, _, err := generateFixture(t, `package api
 
-import "example.com/fixture/internal/fgb"
+import (
+	"context"
+
+	"example.com/fixture/internal/fgb"
+)
 
 //fgb:async
-func Ticks(out chan<- int) error { return nil }
+func Ticks(ctx context.Context, out chan<- int) error { return nil }
 
 //fgb:async
-func Watch(sink fgb.StreamSink[string]) error { return nil }
+func Watch(ctx context.Context, sink fgb.StreamSink[string]) error { return nil }
 `)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []string{
-		// The generation is bumped where a new isolate attaches, and the old
-		// generation's producers are cancelled and their handles forgotten.
-		"var fgbStreamGeneration atomic.Int64",
-		"fgbStreamGeneration.Add(1)",
-		"func fgbPostStreamEvent(generation int64, handle int64, kind int32, payload any) bool",
-		"if generation != fgbStreamGeneration.Load()",
+		// Generation and port live in one value. Read separately, a producer
+		// could clear the generation check and then pick up the next isolate's
+		// port, which is the delivery the guard exists to stop.
+		"type fgbStreamTarget struct",
+		"var fgbStreamTargetRef atomic.Pointer[fgbStreamTarget]",
+		"target := fgbStreamTargetRef.Load()",
+		"target.generation != generation",
+		"fgbPost(target.port, buffer.Bytes())",
+		// Registrations are keyed by generation as well as handle, so a
+		// straggler's deferred cleanup cannot delete a live stream's entry.
+		"type fgbStreamKey struct",
+		"func fgbRegisterStreamCancel(generation int64, handle int64, cancel context.CancelFunc)",
+		"func fgbUnregisterStreamCancel(generation int64, handle int64)",
+		// Each call captures the generation once and reuses it for cleanup.
+		"fgbStreamGen := fgbCurrentStreamGeneration()",
+		"fgbRegisterStreamCancel(fgbStreamGen,",
+		"defer fgbUnregisterStreamCancel(fgbStreamGen,",
 		// Both producer shapes capture the generation when they are created.
-		"generation := fgbStreamGeneration.Load()",
+		"generation := fgbCurrentStreamGeneration()",
 		"fgbPostStreamEvent(generation, handle, kind, payload)",
 		"fgbPostStreamEvent(generation, handle, 0, encoded)",
 		"fgbReleaseStreamSink(generation, handle)",
@@ -678,6 +693,11 @@ func Watch(sink fgb.StreamSink[string]) error { return nil }
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
 		}
+	}
+	// The old single-value port must be gone: leaving it would mean two
+	// sources of truth for where events go.
+	if strings.Contains(goSource, "fgbStreamPort") {
+		t.Fatal("the standalone stream port must be replaced by fgbStreamTarget")
 	}
 }
 

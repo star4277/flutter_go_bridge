@@ -75,16 +75,22 @@ type harness struct {
 	generate  func() ([]string, error)
 	cancel    context.CancelFunc
 	done      chan error
+	// blockStartup makes the fake session hang until the context is cancelled,
+	// standing in for a cold build that takes minutes.
+	blockStartup bool
+	startBlocked chan struct{}
+	blockedOnce  sync.Once
 }
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{
-		goDir:   t.TempDir(),
-		dartDir: t.TempDir(),
-		starts:  make(chan *fakeApp, 8),
-		keys:    make(chan Key, 4),
-		done:    make(chan error, 1),
+		goDir:        t.TempDir(),
+		dartDir:      t.TempDir(),
+		starts:       make(chan *fakeApp, 8),
+		keys:         make(chan Key, 4),
+		done:         make(chan error, 1),
+		startBlocked: make(chan struct{}),
 	}
 	writeFile(t, filepath.Join(h.goDir, "api.go"), "package api\n")
 	writeFile(t, filepath.Join(h.dartDir, "main.dart"), "void main() {}\n")
@@ -110,7 +116,12 @@ func (h *harness) start(t *testing.T) {
 				h.generated.Add(1)
 				return generate()
 			},
-			startApp: func(context.Context, SessionOptions) (app, error) {
+			startApp: func(ctx context.Context, _ SessionOptions) (app, error) {
+				if h.blockStartup {
+					h.blockedOnce.Do(func() { close(h.startBlocked) })
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
 				session := newFakeApp()
 				h.starts <- session
 				return session, nil
@@ -283,6 +294,34 @@ func TestRunHandlesKeys(t *testing.T) {
 	if h.generated.Load() <= generatedBefore {
 		t.Fatal("g did not regenerate the bridge")
 	}
+}
+
+// TestRunQuitsWhileTheAppIsStartingUp covers a cold build. Raw mode takes
+// Ctrl+C away from the terminal -- it arrives as a keypress, not a signal --
+// and the main select does not run until the app is up, so quit has to reach
+// the context straight from the key pump or a multi-minute Android build is
+// uninterruptible.
+func TestRunQuitsWhileTheAppIsStartingUp(t *testing.T) {
+	h := newHarness(t)
+	h.blockStartup = true
+	h.start(t)
+
+	select {
+	case <-h.startBlocked:
+	case <-time.After(settleTimeout):
+		t.Fatal("startup never began")
+	}
+
+	h.keys <- KeyQuit
+	select {
+	case err := <-h.done:
+		if err != nil {
+			t.Fatalf("quitting during startup returned %v, want nil", err)
+		}
+	case <-time.After(settleTimeout):
+		t.Fatal("quit did not interrupt startup")
+	}
+	h.done <- nil // let the cleanup drain
 }
 
 func TestRunQuitsOnKeyQuit(t *testing.T) {

@@ -93,6 +93,9 @@ func Run(ctx context.Context, options Options) error {
 	}
 
 	// Tests inject their own key source; otherwise take over the terminal.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	keys := options.keys
 	if keys == nil {
 		keyboard := newKeyboard()
@@ -104,6 +107,31 @@ func Run(ctx context.Context, options Options) error {
 		}
 		keys = keyboard.Keys()
 	}
+
+	// Quitting has to work from the moment the keyboard exists, not from the
+	// moment the main loop starts reading. Raw mode takes Ctrl+C away from the
+	// terminal -- it arrives as a byte rather than a signal -- and the first
+	// generation and app launch run before the select below, which for a cold
+	// Android build is minutes of an otherwise uninterruptible wait.
+	incoming := make(chan Key, 16)
+	go func() {
+		defer close(incoming)
+		for key := range keys {
+			if key == KeyQuit {
+				cancel()
+				return
+			}
+			select {
+			case incoming <- key:
+			default:
+				// Startup is still running and nobody is reading. A hot reload
+				// requested against an app that is not up yet is not worth
+				// queueing.
+			}
+		}
+	}()
+	var pending <-chan Key = incoming
+
 
 	// The generator reports progress through the standard logger. Route it
 	// through the same writer so it picks up the newline translation, and drop
@@ -133,6 +161,13 @@ func Run(ctx context.Context, options Options) error {
 		return err
 	}
 	if err := runner.startSession(ctx); err != nil {
+		// Quitting during a long first build cancels the context, which
+		// surfaces here as a startup failure. The user asked for it, so it is
+		// not an error to report.
+		if ctx.Err() != nil {
+			runner.logf("stopping")
+			return nil
+		}
 		return err
 	}
 	defer runner.stopSession(context.WithoutCancel(ctx))
@@ -151,11 +186,11 @@ func Run(ctx context.Context, options Options) error {
 		case <-runner.ended:
 			runner.logf("flutter run exited")
 			return nil
-		case key, ok := <-keys:
+		case key, ok := <-pending:
 			if !ok {
 				// stdin closed; keep reacting to file changes alone. A nil
 				// channel blocks forever, so this arm stops being selected.
-				keys = nil
+				pending = nil
 				continue
 			}
 			done, err := runner.onKey(ctx, key)
@@ -367,9 +402,8 @@ func (l *loop) onKey(ctx context.Context, key Key) (bool, error) {
 		l.resetTrackers()
 	case KeyRegenerate:
 		return false, l.regenerateAndRestart(ctx, "requested")
-	case KeyQuit:
-		l.logf("quitting")
-		return true, nil
+	// KeyQuit never arrives here: the key pump intercepts it and cancels the
+	// context, so quitting works during startup too.
 	case KeyDetach:
 		l.logf("detaching, the app keeps running")
 		if l.session != nil {
