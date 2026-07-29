@@ -219,7 +219,7 @@ func cstCDefinition(typ *wireType) string {
 		}
 		lines = []string{fmt.Sprintf("%s* ptr;", storage.CType), "int64_t len;"}
 	case kindStruct:
-		for _, field := range base.Struct.Fields {
+		for _, field := range base.Struct.allFields() {
 			lines = append(lines, cstCFieldLines(field.CName, field.Type)...)
 		}
 	}
@@ -256,7 +256,7 @@ func cstDartDefinition(typ *wireType) string {
 		}
 		lines = []string{fmt.Sprintf("  external ffi.Pointer<%s> ptr;", storage.DartType), "  @ffi.Int64() external int len;"}
 	case kindStruct:
-		for _, field := range base.Struct.Fields {
+		for _, field := range base.Struct.allFields() {
 			lines = append(lines, cstDartFieldLines(field.CName, field.Type)...)
 		}
 	}

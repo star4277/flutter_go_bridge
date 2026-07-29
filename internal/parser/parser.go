@@ -237,6 +237,7 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 					api.Types[object] = &model.TypeDecl{
 						Object: object, Named: named, Position: typeSpec.Pos(), SourceFile: sourceFile, AST: typeSpec,
 						Docs: cleanDocs(docs), DartName: dartName,
+						Methods: interfaceMethods(typeSpec),
 					}
 				}
 			case token.CONST:
@@ -278,6 +279,40 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 		}
 	}
 	return nil
+}
+
+// interfaceMethods collects the //fgb: directives written on the methods of
+// an interface declaration. Interface methods have no bodies, so their doc
+// comments are the only place a directive can live.
+func interfaceMethods(spec *ast.TypeSpec) map[string]*model.InterfaceMethod {
+	declared, ok := spec.Type.(*ast.InterfaceType)
+	if !ok || declared.Methods == nil {
+		return nil
+	}
+	result := map[string]*model.InterfaceMethod{}
+	for _, field := range declared.Methods.List {
+		if len(field.Names) == 0 {
+			// An embedded interface; its own declaration carries the
+			// directives of the methods it contributes.
+			continue
+		}
+		directives, err := parseDirectives(field.Doc)
+		if err != nil {
+			// Reported by the type-level parse; keep the default shape here.
+			directives = directiveSet{Mode: model.CallModeSync}
+		}
+		for _, name := range field.Names {
+			method := &model.InterfaceMethod{
+				GoName: name.Name, DartName: directives.Rename,
+				Mode: directives.Mode, Docs: cleanDocs(field.Doc), Ignore: directives.Ignore,
+			}
+			if method.DartName == "" {
+				method.DartName = names.LowerCamel(name.Name)
+			}
+			result[name.Name] = method
+		}
+	}
+	return result
 }
 
 func constSpecName(spec *ast.ValueSpec) string {

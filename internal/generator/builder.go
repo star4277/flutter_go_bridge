@@ -28,14 +28,15 @@ const (
 )
 
 type builder struct {
-	api           *model.API
-	config        config.Resolved
-	unit          *unit
-	typeCache     map[types.Type]*wireType
-	structClasses map[*types.Named]structClass
-	namedModels   map[*types.Named]*namedModel
-	structModels  map[*types.Named]*structModel
-	opaqueModels  map[*types.Named]*opaqueModel
+	api             *model.API
+	config          config.Resolved
+	unit            *unit
+	typeCache       map[types.Type]*wireType
+	structClasses   map[*types.Named]structClass
+	namedModels     map[*types.Named]*namedModel
+	structModels    map[*types.Named]*structModel
+	opaqueModels    map[*types.Named]*opaqueModel
+	interfaceModels map[*types.Named]*interfaceModel
 	// supportImportPath is the import path of the generated support package
 	// for this project; empty disables DartOpaque/StreamSink detection.
 	supportImportPath string
@@ -77,7 +78,8 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		typeCache:     map[types.Type]*wireType{},
 		structClasses: map[*types.Named]structClass{},
 		namedModels:   map[*types.Named]*namedModel{}, structModels: map[*types.Named]*structModel{},
-		opaqueModels: map[*types.Named]*opaqueModel{},
+		opaqueModels:    map[*types.Named]*opaqueModel{},
+		interfaceModels: map[*types.Named]*interfaceModel{},
 	}
 	if module := api.Package.Module; module != nil {
 		b.supportImportPath = supportPackageImportPath(module.Path, module.Dir, SupportPackageDir(resolved))
@@ -113,7 +115,54 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 	}
 
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
+	if err := b.checkMethodOverrides(); err != nil {
+		return nil, b.warnings, err
+	}
 	return b.unit, b.warnings, nil
+}
+
+// checkMethodOverrides reconciles Go method shadowing with Dart's override
+// rules. Go lets an embedded method be shadowed by any signature at all; Dart
+// only accepts a compatible one, so a mismatch has to be reported here rather
+// than as an error in the generated code.
+func (b *builder) checkMethodOverrides() error {
+	for _, structure := range b.unit.Structs {
+		if structure.Super == nil {
+			continue
+		}
+		inherited := map[string]*callModel{}
+		inheritedOwner := map[string]*structModel{}
+		for super := structure.Super; super != nil; super = super.Super {
+			for _, call := range super.Methods {
+				if _, seen := inherited[call.DartName]; !seen {
+					inherited[call.DartName] = call
+					inheritedOwner[call.DartName] = super
+				}
+			}
+		}
+		for _, call := range structure.Methods {
+			promoted, shadows := inherited[call.DartName]
+			if !shadows {
+				continue
+			}
+			if dartMethodSignature(call) != dartMethodSignature(promoted) {
+				return fmt.Errorf(
+					"%s.%s shadows %s.%s with a different signature; Dart cannot express that on a subclass, so rename one of them with //fgb:rename",
+					structure.GoName, call.GoName, inheritedOwner[call.DartName].GoName, promoted.GoName)
+			}
+			call.Overrides = true
+		}
+	}
+	return nil
+}
+
+// dartMethodSignature is the shape Dart checks when validating an override.
+func dartMethodSignature(call *callModel) string {
+	prefix := ""
+	if isAsyncCall(call) {
+		prefix = "async "
+	}
+	return prefix + dartResultType(call) + " (" + dartParams(call) + ")"
 }
 
 func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
@@ -353,7 +402,7 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		if typ.Empty() {
 			return b.newSimpleType(original, kindAny, "Object?"), nil
 		}
-		return nil, errors.New("non-empty interfaces are not supported yet")
+		return nil, errors.New("an unnamed non-empty interface cannot be bridged; declare a named interface type")
 	case *types.Signature:
 		return nil, errors.New("function types are only supported as direct parameters of //fgb:async functions")
 	case *types.Named:
@@ -375,6 +424,12 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		}
 		if err := b.ensureNamedFromInput(typ); err != nil {
 			return nil, err
+		}
+		if interfaceType, isInterface := typ.Underlying().(*types.Interface); isInterface {
+			if interfaceType.Empty() {
+				return b.newSimpleType(original, kindAny, "Object?"), nil
+			}
+			return b.mapInterface(original, typ, interfaceType)
 		}
 		if _, ok := typ.Underlying().(*types.Struct); ok {
 			if b.classifyStruct(typ) == classOpaque {
@@ -799,6 +854,30 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 		if skipStructField(field, tag, options) {
 			continue
 		}
+		// An embedded struct becomes the Dart superclass: Go promotes its
+		// fields, so they travel flattened and both sides reach them through
+		// promotion / inheritance.
+		if field.Embedded() {
+			super, err := b.mapEmbedded(named, field)
+			if err != nil {
+				return nil, err
+			}
+			if super != nil {
+				if structure.Super != nil {
+					return nil, fmt.Errorf("struct %s embeds %s and %s, but a Dart class can only extend one type", named.Obj().Name(), structure.Super.GoName, super.GoName)
+				}
+				structure.Super = super
+				super.Subclassed = true
+				for _, inherited := range super.allFields() {
+					if wireNames[inherited.WireName] {
+						return nil, fmt.Errorf("struct %s has duplicate wire field %q after promoting %s", named.Obj().Name(), inherited.WireName, super.GoName)
+					}
+					wireNames[inherited.WireName] = true
+					usedNames[inherited.DartName]++
+				}
+				continue
+			}
+		}
 		wireName := options.Rename
 		if wireName == "" {
 			wireName = strings.Split(tag.Get("flutter_go_bridge"), ",")[0]
@@ -829,6 +908,163 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 		})
 	}
 	return result, nil
+}
+
+// mapEmbedded resolves an embedded struct field into the Dart superclass, or
+// returns nil when the embedded type is not a plain value struct and should
+// stay an ordinary field.
+// mapInterface bridges a named Go interface as a Dart
+// `abstract interface class`. Its methods are declaration-only - a call on an
+// interface value dispatches to the concrete Dart class - and values travel
+// tagged with the index of their concrete type.
+func (b *builder) mapInterface(original types.Type, named *types.Named, declared *types.Interface) (*wireType, error) {
+	if existing := b.interfaceModels[named]; existing != nil {
+		b.typeCache[original] = existing.Type
+		return existing.Type, nil
+	}
+	decl := b.api.Types[named.Obj()]
+	dartName := names.UpperCamel(named.Obj().Name())
+	docs, sourceFile := "", ""
+	if decl != nil {
+		dartName, docs, sourceFile = decl.DartName, decl.Docs, decl.SourceFile
+	}
+	result := b.newType(original, kindInterface, dartName)
+	declaration := &interfaceModel{
+		GoName: named.Obj().Name(), DartName: dartName, Docs: docs, SourceFile: sourceFile, Type: result,
+	}
+	result.Interface = declaration
+	b.interfaceModels[named] = declaration
+	b.unit.Interfaces = append(b.unit.Interfaces, declaration)
+
+	for i := 0; i < declared.NumMethods(); i++ {
+		method := declared.Method(i)
+		if !method.Exported() {
+			return nil, fmt.Errorf("interface %s declares unexported method %s, which cannot be bridged", named.Obj().Name(), method.Name())
+		}
+		var directive *model.InterfaceMethod
+		if decl != nil {
+			directive = decl.Methods[method.Name()]
+		}
+		if directive != nil && directive.Ignore {
+			continue
+		}
+		bridged, err := b.mapInterfaceMethod(named, method, directive)
+		if err != nil {
+			return nil, err
+		}
+		declaration.Methods = append(declaration.Methods, bridged)
+	}
+
+	if err := b.collectImplementors(named, declaration); err != nil {
+		return nil, err
+	}
+	if len(declaration.Implementors) == 0 {
+		return nil, fmt.Errorf("no bridged type implements interface %s; declare at least one so its values can cross the bridge", named.Obj().Name())
+	}
+	return result, nil
+}
+
+// mapInterfaceMethod builds the Dart declaration of one interface method. It
+// reuses callModel so the interface and the implementations are rendered by
+// exactly the same rules.
+func (b *builder) mapInterfaceMethod(owner *types.Named, method *types.Func, directive *model.InterfaceMethod) (*callModel, error) {
+	signature, _ := method.Type().(*types.Signature)
+	if signature == nil {
+		return nil, fmt.Errorf("interface %s method %s has no signature", owner.Obj().Name(), method.Name())
+	}
+	source := &model.Callable{
+		Func: method, Signature: signature, DartName: names.LowerCamel(method.Name()),
+		Mode: model.CallModeSync,
+	}
+	if directive != nil {
+		source.DartName, source.Mode, source.Docs = directive.DartName, directive.Mode, directive.Docs
+	}
+	declaration, err := b.mapCallable(source)
+	if err != nil {
+		return nil, fmt.Errorf("interface %s method %s: %w", owner.Obj().Name(), method.Name(), err)
+	}
+	return declaration, nil
+}
+
+// collectImplementors finds every bridged type in the input package that
+// satisfies the interface. The order follows the declaration order so the
+// wire tags stay stable across runs.
+func (b *builder) collectImplementors(iface *types.Named, declaration *interfaceModel) error {
+	declared := iface.Underlying().(*types.Interface)
+	candidates := make([]*types.TypeName, 0, len(b.api.Types))
+	for object := range b.api.Types {
+		candidates = append(candidates, object)
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Pos() < candidates[j].Pos() })
+	for _, object := range candidates {
+		named, ok := object.Type().(*types.Named)
+		if !ok || named == iface {
+			continue
+		}
+		if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
+			continue
+		}
+		// A value struct exposes its pointer-receiver methods on the Dart
+		// class too, so either form counts as an implementation.
+		if !types.Implements(named, declared) && !types.Implements(types.NewPointer(named), declared) {
+			continue
+		}
+		var mapped *wireType
+		var err error
+		if b.classifyStruct(named) == classOpaque {
+			mapped, err = b.mapType(types.NewPointer(named))
+		} else {
+			mapped, err = b.mapType(named)
+		}
+		if err != nil {
+			return fmt.Errorf("interface %s implementation %s: %w", iface.Obj().Name(), named.Obj().Name(), err)
+		}
+		dartName := strings.TrimSuffix(mapped.DartType, "?")
+		declaration.Implementors = append(declaration.Implementors, &implementorModel{
+			DartName: dartName, Type: mapped,
+		})
+		switch mapped.Kind {
+		case kindStruct:
+			mapped.Struct.Interfaces = appendUnique(mapped.Struct.Interfaces, declaration)
+		case kindOpaque:
+			mapped.Opaque.Interfaces = appendUnique(mapped.Opaque.Interfaces, declaration)
+		}
+	}
+	return nil
+}
+
+func appendUnique(list []*interfaceModel, item *interfaceModel) []*interfaceModel {
+	for _, existing := range list {
+		if existing == item {
+			return list
+		}
+	}
+	return append(list, item)
+}
+
+func (b *builder) mapEmbedded(owner *types.Named, field *types.Var) (*structModel, error) {
+	embedded := types.Unalias(field.Type())
+	if _, isPointer := embedded.(*types.Pointer); isPointer {
+		return nil, fmt.Errorf("struct %s embeds a pointer type; Dart cannot extend a nullable class, embed the value instead", owner.Obj().Name())
+	}
+	named, ok := embedded.(*types.Named)
+	if !ok {
+		return nil, nil
+	}
+	if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
+		return nil, nil
+	}
+	if isTime(named) || isBigInt(named) || b.isDartOpaque(named) || b.isStreamSink(named) {
+		return nil, nil
+	}
+	if b.classifyStruct(named) == classOpaque {
+		return nil, fmt.Errorf("struct %s embeds GoOpaque struct %s, which has no fields to inherit", owner.Obj().Name(), named.Obj().Name())
+	}
+	mapped, err := b.mapType(named)
+	if err != nil {
+		return nil, fmt.Errorf("embedded %s: %w", named.Obj().Name(), err)
+	}
+	return mapped.Struct, nil
 }
 
 func (b *builder) mapOpaque(original types.Type, named *types.Named) (*wireType, error) {
@@ -959,7 +1195,7 @@ func containsStreamSink(typ *wireType, seen map[int]bool) bool {
 	case kindMap:
 		return containsStreamSink(typ.Key, seen) || containsStreamSink(typ.Elem, seen)
 	case kindStruct:
-		for _, field := range typ.Struct.Fields {
+		for _, field := range typ.Struct.allFields() {
 			if containsStreamSink(field.Type, seen) {
 				return true
 			}

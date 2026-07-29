@@ -270,6 +270,8 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | 其他 slice/array | `List<T>` |
 | `map[K]V` | `Map<K, V>` |
 | 可翻译结构体（默认） | 对应源文件中的 Dart class：带字段、命名构造参数；指针字段可空 |
+| 匿名嵌入结构体字段 | Dart `extends`，被提升字段扁平化传输，见「匿名字段与接口」 |
+| 命名接口 | `abstract interface class` + 实现方 `implements`，见「匿名字段与接口」 |
 | 普通 `*struct` 值 | 可空 Dart value class，字段继续参与 CST/DCO 序列化 |
 | GoOpaque 结构体 | `extends GoOpaque` 的句柄类 + `NativeFinalizer` 自动释放 |
 | `fgb.DartOpaque` / `*fgb.DartOpaque` | `Object` / `Object?`（Dart 对象按句柄穿透 Go） |
@@ -280,6 +282,75 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | `math/big.Int` | `BigInt` |
 | 最后一个 `error` 返回值 | `FgbPlatformException` |
 | `any` / `interface{}` | `Object?` |
+
+## 匿名字段与接口
+
+**匿名嵌入字段生成 Dart 继承**：被嵌入的结构体本身是一个普通 class，嵌入它的结构体
+`extends` 它；被提升的字段在 wire 上扁平化（与 Go 的字段提升一致），Dart 构造函数用
+`super.xxx` 转发：
+
+```go
+type Animal struct {
+	Name string
+	Legs int
+}
+
+func (a Animal) Kind() string { return "animal" }
+
+type Dog struct {
+	Animal          // → class Dog extends Animal
+	Breed string
+}
+
+func (d Dog) Kind() string { return "dog" }   // 遮蔽 → Dart @override
+```
+
+```dart
+class Animal { final String name; final int legs; ... }
+class Dog extends Animal {
+  final String breed;
+  Dog({required super.name, required super.legs, required this.breed});
+  @override String kind() { ... }
+}
+```
+
+Go 允许用**任意签名**遮蔽被提升的方法，Dart 的 override 规则不允许，因此签名不兼容时会在
+生成期报错，并提示用 `//fgb:rename` 改名。参与继承的 class 不带 `final` 修饰（Dart 禁止
+继承 `final class`）。只能有一个匿名结构体字段（Dart 单继承），嵌入指针或 GoOpaque 结构体
+会报错。
+
+**接口生成 `abstract interface class`**，实现它的类型自动带上 `implements`：
+
+```go
+type Shape interface {
+	Area() int
+	Label() string
+}
+
+type Circle struct{ R int }
+
+func (c Circle) Area() int     { return 3 * c.R * c.R }
+func (c Circle) Label() string { return "circle" }
+```
+
+```dart
+abstract interface class Shape {
+  int area();
+  String label();
+}
+
+final class Circle implements Shape { ... }
+```
+
+- 接口值在 wire 上是 `[实现序号, 载荷]` 的 tagged union，Go 侧用类型 switch、Dart 侧用
+  `is` 判定（子类先于父类判定，保证被标记为最派生的类型）；因此接口调用一律走 standard
+  codec（不进 CST）。
+- 接口方法本身不产生调用：`shape.area()` 分发到具体 Dart 类，由它调用 Go。
+- 接口方法上可以写 `//fgb:async` / `//fgb:rename` / `//fgb:ignore`；实现的形态必须与声明
+  一致，否则 Dart 无法通过类型检查。
+- 接口值在 Go 里不用指针也能是 nil，所以**接口参数可以标记 `//fgb:nullable`**；
+  返回方向不可为 nil（Go 返回 nil 接口会报错）。
+- 至少要有一个已桥接的类型实现该接口，否则报错——没有实现就无法在两端还原具体类型。
 
 ## 多返回值与多 error
 
@@ -320,11 +391,11 @@ try {
 只声明一个 `error` 时 `goErrors` 为 null，用 `message` 即可——行为与之前完全一致。
 只有 error、没有非 error 返回值的函数在 Dart 侧仍是 `void`。
 
-当前泛型函数、可变参数、非空接口和复杂外部命名类型暂未支持。
+当前泛型函数、可变参数和复杂外部命名类型暂未支持。
 
 结构体分类与 FRB 一致：字段全部可序列化的结构体默认按字段翻译（指针 receiver 方法照常生成，
 但 receiver 按值序列化，Go 侧的修改不会写回 Dart 对象）；含不可序列化字段（func、chan、
-非空接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；`//fgb:opaque` 可强制句柄
+未桥接的接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；`//fgb:opaque` 可强制句柄
 语义——需要在 Go 侧保存内部状态、或私有字段承载状态的类型建议显式标记。GoOpaque 类型必须
 以 `*T` 出现在签名中。小写开头的私有类型、字段、方法、函数、常量一律不参与生成。
 

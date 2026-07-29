@@ -64,6 +64,20 @@ type TypeDecl struct {
 	Docs       string
 	DartName   string
 	AST        *ast.TypeSpec
+	// Methods carries the per-method directives of an interface declaration,
+	// keyed by the Go method name. Interface methods have no bodies, so this
+	// is the only place their //fgb: directives can come from.
+	Methods map[string]*InterfaceMethod
+}
+
+// InterfaceMethod is the directive-carrying description of one interface
+// method.
+type InterfaceMethod struct {
+	GoName   string
+	DartName string
+	Mode     CallMode
+	Docs     string
+	Ignore   bool
 }
 
 type Constant struct {

@@ -199,7 +199,7 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\traw, ok := value.(map[any]any)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Map\", value) }", goType)
 		r.line("\tvar result %s", goType)
-		for _, field := range typ.Struct.Fields {
+		for _, field := range typ.Struct.allFields() {
 			r.line("\tdecoded%s, err := fgbDecode%d(raw[%s], path+%s)", field.GoName, field.Type.ID, strconv.Quote(field.WireName), strconv.Quote("."+field.WireName))
 			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
@@ -235,6 +235,20 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.line("\tif raw == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid stream handle 0\", path) }", goType)
 		r.line("\treturn fgbMakeStreamSink%d(raw), nil", typ.ID)
+	case kindInterface:
+		// A tagged union: [implementorIndex, payload].
+		r.line("\tif value == nil { var zero %s; return zero, nil }", goType)
+		r.line("\traw, ok := value.([]any)")
+		r.line("\tif !ok || len(raw) != 2 { var zero %s; return zero, fgbTypeError(path, \"interface envelope\", value) }", goType)
+		r.line("\ttag, err := fgbAsInt64(raw[0], path+\".tag\")")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tswitch tag {")
+		for index, implementor := range typ.Interface.Implementors {
+			r.line("\tcase %d:", index)
+			r.line("\t\treturn fgbDecode%d(raw[1], path)", implementor.Type.ID)
+		}
+		r.line("\t}")
+		r.line("\tvar zero %s; return zero, fmt.Errorf(\"%%s: unknown %s implementation %%d\", path, tag)", goType, typ.Interface.GoName)
 	case kindNamed:
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -309,8 +323,8 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\t}")
 		r.line("\treturn result, nil")
 	case kindStruct:
-		r.line("\tresult := make(map[any]any, %d)", len(typ.Struct.Fields))
-		for _, field := range typ.Struct.Fields {
+		r.line("\tresult := make(map[any]any, %d)", len(typ.Struct.allFields()))
+		for _, field := range typ.Struct.allFields() {
 			r.line("\tencoded%s, err := fgbEncode%d(value.%s)", field.GoName, field.Type.ID, field.GoName)
 			r.line("\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 			r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
@@ -329,6 +343,20 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\treturn nil, fmt.Errorf(\"function values cannot be encoded\")")
 	case kindStreamSink:
 		r.line("\treturn nil, fmt.Errorf(\"stream sinks cannot be sent to Dart\")")
+	case kindInterface:
+		// Tag the value with the concrete type so the other side knows which
+		// decoder to use. Most-derived first is irrelevant here: Go's type
+		// switch matches the dynamic type exactly.
+		r.line("\tif value == nil { return nil, fmt.Errorf(\"cannot send a nil %s to Dart\") }", typ.Interface.GoName)
+		r.line("\tswitch typed := value.(type) {")
+		for index, implementor := range typ.Interface.Implementors {
+			r.line("\tcase %s:", r.goType(implementor.Type.Original))
+			r.line("\t\tencoded, err := fgbEncode%d(typed)", implementor.Type.ID)
+			r.line("\t\tif err != nil { return nil, err }")
+			r.line("\t\treturn []any{int64(%d), encoded}, nil", index)
+		}
+		r.line("\t}")
+		r.raw("\treturn nil, fmt.Errorf(\"%T does not implement a bridged " + typ.Interface.GoName + " implementation\", value)")
 	case kindNamed:
 		underlyingGo := r.goType(typ.Named.Underlying.Original)
 		r.line("\treturn fgbEncode%d(%s(value))", typ.Named.Underlying.ID, underlyingGo)

@@ -44,7 +44,7 @@ func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
 	case kindSlice, kindArray:
 		return t.Elem.supportsCodec(mode, seen)
 	case kindStruct:
-		for _, field := range t.Struct.Fields {
+		for _, field := range t.Struct.allFields() {
 			if !field.Type.supportsCodec(mode, seen) {
 				return false
 			}
@@ -52,10 +52,10 @@ func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
 		return true
 	case kindNamed:
 		return t.Named.Underlying.supportsCodec(mode, seen)
-	case kindMap, kindAny:
-		// Dart_CObject has no map representation and a C struct cannot safely
-		// represent arbitrary dynamic values. These remain on the fallback
-		// StandardMethodCodec path.
+	case kindMap, kindAny, kindInterface:
+		// Dart_CObject has no map representation, a C struct cannot safely
+		// represent arbitrary dynamic values, and an interface is a tagged
+		// union. These remain on the fallback StandardMethodCodec path.
 		return false
 	default:
 		return false

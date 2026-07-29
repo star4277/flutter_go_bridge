@@ -26,6 +26,7 @@ const (
 	kindDartOpaque  typeKind = "dart_opaque"
 	kindCallback    typeKind = "callback"
 	kindStreamSink  typeKind = "stream_sink"
+	kindInterface   typeKind = "interface"
 	kindNamed       typeKind = "named"
 	kindBytes       typeKind = "bytes"
 	kindInt32List   typeKind = "int32_list"
@@ -54,6 +55,7 @@ type unit struct {
 	Structs        []*structModel
 	Opaques        []*opaqueModel
 	Named          []*namedModel
+	Interfaces     []*interfaceModel
 	UsesTime       bool
 	UsesBigInt     bool
 	UsesDartOpaque bool
@@ -113,6 +115,9 @@ type callModel struct {
 	// signature, or -1. The bridge supplies the context and cancels it when
 	// the Dart side stops listening to the stream this call owns.
 	ContextIndex int
+	// Overrides marks a method that shadows one promoted from an embedded
+	// struct, so the Dart declaration carries @override.
+	Overrides bool
 }
 
 // resultModel is one non-error result of a bridged call.
@@ -180,6 +185,8 @@ type wireType struct {
 	Struct   *structModel
 	Opaque   *opaqueModel
 	Callback *callbackModel
+	// Interface is set for a Go interface type.
+	Interface *interfaceModel
 	// Stream is the element type of a fgb.StreamSink[T] parameter or field.
 	Stream *wireType
 	// ChannelStream marks a `chan<- T` parameter: the bridge owns the channel,
@@ -199,7 +206,7 @@ func (t *wireType) nilableWithoutPointer() bool {
 		return false
 	}
 	switch t.Kind {
-	case kindCallback, kindSlice, kindMap, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
+	case kindCallback, kindSlice, kindMap, kindBytes, kindInt32List, kindInt64List, kindFloat64List, kindInterface:
 		return true
 	default:
 		// Arrays are fixed-size values in Go and can never be nil.
@@ -232,8 +239,34 @@ type structModel struct {
 	Docs       string
 	SourceFile string
 	Type       *wireType
+	// Super is the embedded struct this one promotes, rendered as a Dart
+	// superclass. Its fields travel flattened into this struct's wire form,
+	// exactly like Go promotes them.
+	Super *structModel
+	// Subclassed marks a struct another one embeds: Dart forbids extending a
+	// `final` class, so it is rendered `base` instead.
+	Subclassed bool
+	// Interfaces are the bridged interfaces this struct satisfies, rendered
+	// as a Dart `implements` clause.
+	Interfaces []*interfaceModel
 	Fields     []*fieldModel
 	Methods    []*callModel
+}
+
+// allFields lists the wire fields of a struct: the promoted ones first (in
+// superclass order, matching Go's memory layout), then its own. Both language
+// codecs walk this list so the two sides always agree.
+func (s *structModel) allFields() []*fieldModel {
+	if s == nil {
+		return nil
+	}
+	if s.Super == nil {
+		return s.Fields
+	}
+	inherited := s.Super.allFields()
+	result := make([]*fieldModel, 0, len(inherited)+len(s.Fields))
+	result = append(result, inherited...)
+	return append(result, s.Fields...)
 }
 
 type fieldModel struct {
@@ -250,12 +283,38 @@ type fieldModel struct {
 	DefaultValue string
 }
 
+// interfaceModel is a Go interface rendered as a Dart
+// `abstract interface class`. Values travel tagged with the index of their
+// concrete type, so the receiving side knows which decoder to use.
+type interfaceModel struct {
+	GoName     string
+	DartName   string
+	Docs       string
+	SourceFile string
+	Type       *wireType
+	// Methods are declaration-only: a call on an interface value dispatches
+	// to the concrete Dart class, which owns the bridged implementation.
+	Methods []*callModel
+	// Implementors are the bridged types that satisfy the interface, in a
+	// stable order; the index is the wire tag.
+	Implementors []*implementorModel
+}
+
+// implementorModel links a concrete bridged type to the interface it
+// satisfies.
+type implementorModel struct {
+	DartName string
+	Type     *wireType
+}
+
 type opaqueModel struct {
 	GoName     string
 	DartName   string
 	Docs       string
 	SourceFile string
 	Type       *wireType
+	// Interfaces are the bridged interfaces this handle satisfies.
+	Interfaces []*interfaceModel
 	Methods    []*callModel
 }
 

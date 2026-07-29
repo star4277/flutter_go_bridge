@@ -804,3 +804,232 @@ func Load(id int) (error, int) { return nil, 0 }
 		t.Fatalf("Go dispatch should keep the declared result order:\n%s", goSource)
 	}
 }
+
+func TestGenerateEmbeddedStructBecomesSuperclass(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+type Animal struct {
+	Name string
+	Legs int
+}
+
+type Dog struct {
+	Animal
+	Breed string
+}
+
+func MakeDog() Dog { return Dog{} }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "class Dog extends Animal {") {
+		t.Fatalf("an embedded struct should become the Dart superclass:\n%s", apiDart)
+	}
+	for _, expected := range []string{
+		"required super.name,",
+		"required super.legs,",
+		"required this.breed,",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("promoted fields should be forwarded with super, missing %q:\n%s", expected, apiDart)
+		}
+	}
+	if strings.Contains(apiDart, "final Animal animal") {
+		t.Fatalf("the embedded struct must not stay an ordinary field:\n%s", apiDart)
+	}
+	if strings.Contains(apiDart, "final class Animal") || strings.Contains(apiDart, "final class Dog") {
+		t.Fatalf("classes taking part in inheritance must not be final:\n%s", apiDart)
+	}
+	for _, expected := range []string{`"name"`, `"legs"`, `"breed"`, "result.Name =", "result.Legs =", "result.Breed ="} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go codec missing %q for the flattened struct", expected)
+		}
+	}
+}
+
+func TestGenerateShadowedMethodBecomesOverride(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+type Animal struct{ Name string }
+
+func (a Animal) Kind() string { return "animal" }
+
+type Dog struct{ Animal }
+
+func (d Dog) Kind() string { return "dog" }
+
+func MakeDog() Dog { return Dog{} }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "@override") {
+		t.Fatalf("a compatible shadowing method should be marked @override:\n%s", apiDart)
+	}
+}
+
+func TestGenerateIncompatibleShadowedMethodRejected(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+type Animal struct{ Name string }
+
+func (a Animal) Kind() string { return "animal" }
+
+type Dog struct{ Animal }
+
+func (d Dog) Kind(verbose bool) string { return "dog" }
+
+func MakeDog() Dog { return Dog{} }
+`)
+	if err == nil || !strings.Contains(err.Error(), "shadows") {
+		t.Fatalf("Dart cannot express an incompatible override, got %v", err)
+	}
+}
+
+func TestGenerateEmbeddingRejectsMultipleAndPointer(t *testing.T) {
+	if _, _, _, _, err := generateFixture(t, `package api
+
+type A struct{ X int }
+type B struct{ Y int }
+
+type C struct {
+	A
+	B
+}
+
+func MakeC() C { return C{} }
+`); err == nil || !strings.Contains(err.Error(), "only extend one type") {
+		t.Fatalf("multiple embedding must be rejected, got %v", err)
+	}
+	if _, _, _, _, err := generateFixture(t, `package api
+
+type A struct{ X int }
+
+type D struct {
+	*A
+	Y int
+}
+
+func MakeD() D { return D{} }
+`); err == nil || !strings.Contains(err.Error(), "pointer") {
+		t.Fatalf("embedding a pointer must be rejected, got %v", err)
+	}
+}
+
+func TestGenerateInterfaceBecomesAbstractInterfaceClass(t *testing.T) {
+	apiDart, central, goSource, _, err := generateFixture(t, `package api
+
+type Shape interface {
+	Area() int
+	Label() string
+}
+
+type Circle struct{ R int }
+
+func (c Circle) Area() int     { return c.R }
+func (c Circle) Label() string { return "circle" }
+
+func Describe(shape Shape) string { return shape.Label() }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"abstract interface class Shape {",
+		"int area();",
+		"String label();",
+		"class Circle implements Shape {",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("api.dart missing %q:\n%s", expected, apiDart)
+		}
+	}
+	if !strings.Contains(central, "is not a Go implementation of Shape") {
+		t.Fatalf("the Dart encoder should tag interface values:\n%s", central)
+	}
+	if !strings.Contains(goSource, "case api.Circle:") {
+		t.Fatalf("the Go encoder should switch on the concrete type:\n%s", goSource)
+	}
+}
+
+func TestGenerateInterfaceRespectsEmbeddingOrder(t *testing.T) {
+	_, central, _, _, err := generateFixture(t, `package api
+
+type Shape interface{ Area() int }
+
+type Square struct{ Side int }
+
+func (s Square) Area() int { return s.Side }
+
+type ColoredSquare struct {
+	Square
+	Color string
+}
+
+func Describe(shape Shape) int { return shape.Area() }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	colored := strings.Index(central, "value is ColoredSquare")
+	square := strings.Index(central, "value is Square")
+	if colored < 0 || square < 0 || colored > square {
+		t.Fatalf("a subclass must be tested before the class it extends:\n%s", central)
+	}
+}
+
+func TestGenerateInterfaceMethodDirectives(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+type Loader interface {
+	//fgb:async, rename = "fetch"
+	Load(id int) (string, error)
+}
+
+type Remote struct{ Host string }
+
+//fgb:async
+func (r Remote) Load(id int) (string, error) { return "", nil }
+
+func Use(loader Loader) {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "Future<String> fetch({required int id});") {
+		t.Fatalf("interface method directives should shape the declaration:\n%s", apiDart)
+	}
+}
+
+func TestGenerateNullableInterfaceParameter(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+type Shape interface{ Area() int }
+
+type Circle struct{ R int }
+
+func (c Circle) Area() int { return c.R }
+
+//fgb:nullable = "shape"
+func Describe(shape Shape) int { return 0 }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "int describe({Shape? shape})") {
+		t.Fatalf("an interface parameter should be nullable:\n%s", apiDart)
+	}
+}
+
+func TestGenerateInterfaceWithoutImplementationRejected(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+type Shape interface{ Area() int }
+
+func Describe(shape Shape) int { return 0 }
+`)
+	if err == nil || !strings.Contains(err.Error(), "no bridged type implements") {
+		t.Fatalf("an interface with no implementation must be rejected, got %v", err)
+	}
+}

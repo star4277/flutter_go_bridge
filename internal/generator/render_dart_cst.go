@@ -72,7 +72,7 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstGenericList(typ)
 	case kindStruct:
 		r.line("  final result = arena.allocate<%s>(ffi.sizeOf<%s>());", cstDartTypeName(typ), cstDartTypeName(typ))
-		for _, field := range typ.Struct.Fields {
+		for _, field := range typ.Struct.allFields() {
 			r.line("  result.ref.%s = fgbCstEncode%d(value.%s, arena, path + %s);", field.CName, field.Type.ID, field.DartName, strconv.Quote("."+field.WireName))
 		}
 		r.line("  return result;")
