@@ -350,6 +350,79 @@ func Load() Values { return Values{} }
 	}
 }
 
+func TestGenerateTimeDurationMapping(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/duration\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+import "time"
+
+type Timing struct {
+	Timeout time.Duration
+	Optional *time.Duration
+	Samples []time.Duration
+}
+
+func RoundTripDuration(value time.Duration) time.Duration { return value }
+
+func RoundTripTiming(value Timing) Timing { return value }
+
+func RoundTripLabels(value map[time.Duration]string) map[time.Duration]string { return value }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goOutput := filepath.Join(dir, "bridge_generated.go")
+	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
+		LibraryName: "duration", DartEntrypointClassName: "DurationBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"final Duration timeout;", "final Duration? optional;", "final List<Duration> samples;",
+		"Duration roundTripDuration", "Map<Duration, String> roundTripLabels",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated Dart duration API missing %q:\n%s", expected, apiDart)
+		}
+	}
+
+	central := mustRead(t, dartOutput)
+	for _, expected := range []string{
+		"return Duration(microseconds: value);", "return value.inMicroseconds;",
+		"@ffi.Int64() external int timeout;", "external ffi.Pointer<ffi.Int64> optional;",
+	} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("central Dart bridge missing duration mapping %q", expected)
+		}
+	}
+
+	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		`"time"`, "const maxDurationMicroseconds", "duration out of time.Duration range",
+		"return time.Duration(raw) * time.Duration(time.Microsecond), nil",
+		"return fgbDcoInt64(int64(value / time.Microsecond))",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go bridge missing duration mapping %q", expected)
+		}
+	}
+}
+
 func TestGenerateCallModeEmitsExactlyOneDartEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/modes\n\ngo 1.24\n"), 0o644); err != nil {

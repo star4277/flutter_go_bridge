@@ -423,6 +423,10 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			b.unit.UsesTime = true
 			return b.newSimpleType(original, kindTime, "DateTime"), nil
 		}
+		if isDuration(typ) {
+			b.unit.UsesTime = true
+			return b.newSimpleType(original, kindDuration, "Duration"), nil
+		}
 		if isBigInt(typ) {
 			b.unit.UsesBigInt = true
 			return b.newSimpleType(original, kindBigInt, "BigInt"), nil
@@ -635,7 +639,7 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		if _, nested := elem.(*types.Pointer); nested {
 			return "has a nested pointer type"
 		}
-		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isBigInt(named) && !b.isDartOpaque(named) && !b.isStreamSink(named) {
+		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isDuration(named) && !isBigInt(named) && !b.isDartOpaque(named) && !b.isStreamSink(named) {
 			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 				// *Struct is always bridgeable: either an optional value or a
 				// GoOpaque handle.
@@ -658,7 +662,7 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		}
 		return "has a non-empty interface type"
 	case *types.Named:
-		if isTime(typ) || isBigInt(typ) || b.isDartOpaque(typ) || b.isStreamSink(typ) {
+		if isTime(typ) || isDuration(typ) || isBigInt(typ) || b.isDartOpaque(typ) || b.isStreamSink(typ) {
 			return ""
 		}
 		if declared, isInterface := typ.Underlying().(*types.Interface); isInterface {
@@ -1103,7 +1107,7 @@ func (b *builder) mapEmbedded(owner *types.Named, field *types.Var) (*structMode
 	if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
 		return nil, nil
 	}
-	if isTime(named) || isBigInt(named) || b.isDartOpaque(named) || b.isStreamSink(named) {
+	if isTime(named) || isDuration(named) || isBigInt(named) || b.isDartOpaque(named) || b.isStreamSink(named) {
 		return nil, nil
 	}
 	if b.classifyStruct(named) == classOpaque {
@@ -1256,6 +1260,10 @@ func isTime(named *types.Named) bool {
 	return isNamed(named, "time", "Time")
 }
 
+func isDuration(named *types.Named) bool {
+	return isNamed(named, "time", "Duration")
+}
+
 func isBigInt(named *types.Named) bool {
 	return isNamed(named, "math/big", "Int")
 }
@@ -1344,7 +1352,7 @@ func isNamed(named *types.Named, packagePath, name string) bool {
 
 func validMapKey(typ *wireType) bool {
 	switch typ.Kind {
-	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindNamed:
+	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindDuration, kindNamed:
 		return true
 	default:
 		return false
