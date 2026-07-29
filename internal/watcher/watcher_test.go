@@ -164,3 +164,126 @@ func TestTakeSnapshotToleratesMissingRoot(t *testing.T) {
 		t.Fatalf("snapshot = %v, want empty", snap)
 	}
 }
+
+// touch moves a file's mtime without changing its bytes, which is what an
+// unconditional rewrite by the generator looks like on disk.
+func touch(t *testing.T, path string) {
+	t.Helper()
+	stamp := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTrackerConfirmContentIgnoresIdenticalRewrite covers the generator's
+// habit of rewriting every output on each run. `run` answers a change by
+// rebuilding and reinstalling the app, so a no-op write must not count.
+func TestTrackerConfirmContentIgnoresIdenticalRewrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api.go")
+	write(t, path, "package api\n")
+
+	tracker, err := NewTracker(Options{Roots: []string{dir}, ConfirmContent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, path, "package api\n")
+	touch(t, path)
+	changed, err := tracker.Changed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("rewriting identical bytes must not be reported as a change")
+	}
+
+	write(t, path, "package api // edited\n")
+	changed, err = tracker.Changed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("a real edit must be reported")
+	}
+}
+
+// TestTrackerWithoutConfirmContentReportsTouch pins the default behaviour that
+// `generate --watch` relies on: metadata alone decides.
+func TestTrackerWithoutConfirmContentReportsTouch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "api.go")
+	write(t, path, "package api\n")
+
+	tracker, err := NewTracker(Options{Roots: []string{dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	touch(t, path)
+	changed, err := tracker.Changed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("without ConfirmContent a new mtime must be reported as a change")
+	}
+}
+
+func TestTrackerConfirmContentDetectsAddedAndRemoved(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "api.go")
+	write(t, first, "package api\n")
+
+	tracker, err := NewTracker(Options{Roots: []string{dir}, ConfirmContent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := filepath.Join(dir, "more.go")
+	write(t, second, "package api\n")
+	changed, err := tracker.Changed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("a new file must be reported even though an existing hash matches")
+	}
+
+	if err := os.Remove(second); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = tracker.Changed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("a removed file must be reported")
+	}
+}
+
+// TestTrackerSetExcludeDropsGeneratedFiles covers the run loop's handoff: the
+// generated file list is only known after generating, and those files must
+// stop counting as edits from that point on.
+func TestTrackerSetExcludeDropsGeneratedFiles(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "api.go"), "package api\n")
+	generated := filepath.Join(dir, "bridge_generated.go")
+	write(t, generated, "package main\n")
+
+	tracker, err := NewTracker(Options{Roots: []string{dir}, ConfirmContent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tracker.SetExclude([]string{generated}); err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, generated, "package main // regenerated\n")
+	changed, err := tracker.Changed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("an excluded generated file must not trigger a change")
+	}
+}

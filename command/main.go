@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/star4277/flutter_go_bridge/internal/config"
+	"github.com/star4277/flutter_go_bridge/internal/devrun"
 	"github.com/star4277/flutter_go_bridge/internal/generator"
 	"github.com/star4277/flutter_go_bridge/internal/integrate"
 	"github.com/star4277/flutter_go_bridge/internal/parser"
@@ -24,7 +26,7 @@ var version = "0.1.0"
 
 func main() {
 	if err := newRootCommand().Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
@@ -53,9 +55,133 @@ func newRootCommand() *cobra.Command {
 		Short:   "Generate pure-Dart bindings for a Go library built by Gokit",
 	}
 	root.AddCommand(newGenerateCommand(flags))
+	root.AddCommand(newRunCommand(&generateFlags{}))
 	root.AddCommand(newCreateCommand())
 	root.AddCommand(newIntegrateCommand())
 	return root
+}
+
+type runFlags struct {
+	deviceID   string
+	projectDir string
+	dartInput  []string
+	interval   time.Duration
+}
+
+func newRunCommand(flags *generateFlags) *cobra.Command {
+	options := &runFlags{}
+	command := &cobra.Command{
+		Use:   "run [flags] [-- flutter run args]",
+		Short: "Run the Flutter app and restart it whenever the Go API changes",
+		Long: `Run the Flutter app, regenerating the bridge and restarting the app whenever
+the watched Go sources change.
+
+A rebuilt Go dynamic library cannot be swapped into a live process: hot reload
+and hot restart only rebuild the Dart isolate, the already-loaded library stays
+resident, and on Android the new .so has not even been pushed to the device.
+Only relaunching the process re-links the app against the regenerated code, so
+that is what a Go change triggers here. Dart changes still use a hot reload.
+
+Arguments after -- are forwarded to flutter run:
+
+  flutter_go_bridge_codegen run -d emulator-5554 -- --flavor dev
+
+Note that "-d all" is rejected: the underlying flutter daemon protocol runs one
+device per session.`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(command *cobra.Command, args []string) error {
+			var flutterArgs []string
+			if index := command.ArgsLenAtDash(); index >= 0 {
+				flutterArgs = args[index:]
+			}
+			return runFlutter(command, flags, options, flutterArgs)
+		},
+	}
+	registerGenerateFlags(command, flags, false)
+	command.Flags().StringVarP(&options.deviceID, "device-id", "d", "", "Target device id, forwarded to flutter run")
+	command.Flags().StringVar(&options.projectDir, "project-dir", "", "Flutter project to launch (default the config base dir, or its example/ for plugin projects)")
+	command.Flags().StringSliceVar(&options.dartInput, "dart-input", nil, "Dart directories watched for hot reload (default the project's lib/)")
+	command.Flags().DurationVar(&options.interval, "watch-interval", 0, "File polling interval (default 400ms)")
+	return command
+}
+
+func runFlutter(command *cobra.Command, flags *generateFlags, options *runFlags, flutterArgs []string) error {
+	resolved, err := resolveGenerateConfig(command, flags)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(resolved.GoInput); err != nil {
+		return fmt.Errorf("run requires go_input to be a local file or directory, got %q", resolved.GoInput)
+	}
+	projectDir, err := resolveProjectDir(resolved.BaseDir, options.projectDir)
+	if err != nil {
+		return err
+	}
+	if options.deviceID != "" {
+		flutterArgs = append([]string{"-d", options.deviceID}, flutterArgs...)
+	}
+
+	// Ctrl+C must reach the loop rather than the process, so the app can be
+	// stopped in order instead of leaving gradle and adb behind.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	return devrun.Run(ctx, devrun.Options{
+		WorkDir:     projectDir,
+		FlutterArgs: flutterArgs,
+		GoRoots:     []string{resolved.GoInput},
+		DartRoots:   resolveDartRoots(resolved.BaseDir, projectDir, options.dartInput),
+		Exclude:     []string{resolved.GoOutput, resolved.DartOutput},
+		Interval:    options.interval,
+		Generate: func() ([]string, error) {
+			return runGenerateFiles(command, flags)
+		},
+	})
+}
+
+// resolveProjectDir picks the Flutter project to launch. Plugin projects keep
+// their runnable app under example/, so fall back to it when the base
+// directory has no entrypoint of its own.
+func resolveProjectDir(baseDir, override string) (string, error) {
+	if override != "" {
+		dir := override
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(baseDir, dir)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "pubspec.yaml")); err != nil {
+			return "", fmt.Errorf("--project-dir %q is not a Flutter project: %w", override, err)
+		}
+		return dir, nil
+	}
+	if _, err := os.Stat(filepath.Join(baseDir, "lib", "main.dart")); err == nil {
+		return baseDir, nil
+	}
+	example := filepath.Join(baseDir, "example")
+	if _, err := os.Stat(filepath.Join(example, "lib", "main.dart")); err == nil {
+		log.Printf("no lib/main.dart in %s, running the example app in %s", baseDir, example)
+		return example, nil
+	}
+	return baseDir, nil
+}
+
+// resolveDartRoots returns the trees watched for hot reload. A plugin project
+// has two of them: the plugin's own lib/ and the example app's.
+func resolveDartRoots(baseDir, projectDir string, override []string) []string {
+	if len(override) > 0 {
+		roots := make([]string, 0, len(override))
+		for _, root := range override {
+			if !filepath.IsAbs(root) {
+				root = filepath.Join(baseDir, root)
+			}
+			roots = append(roots, root)
+		}
+		return roots
+	}
+	roots := []string{filepath.Join(baseDir, "lib")}
+	if projectDir != baseDir {
+		roots = append(roots, filepath.Join(projectDir, "lib"))
+	}
+	return roots
 }
 
 type createFlags struct {
@@ -160,10 +286,23 @@ func newGenerateCommand(flags *generateFlags) *cobra.Command {
 			return runGenerate(command, flags)
 		},
 	}
+	registerGenerateFlags(command, flags, true)
+	command.Flags().BoolVar(&flags.watch, "watch", false, "Automatically re-generate whenever the input files change")
+	return command
+}
+
+// registerGenerateFlags declares the configuration flags shared by `generate`
+// and `run`. The single-letter forms are reserved for `generate`: `run` needs
+// -d for the target device, matching `flutter run`.
+func registerGenerateFlags(command *cobra.Command, flags *generateFlags, shorthands bool) {
+	goInput, goOutput, dartOutput := "", "", ""
+	if shorthands {
+		goInput, goOutput, dartOutput = "i", "g", "d"
+	}
 	command.Flags().StringVar(&flags.configFile, "config-file", "", "Path to a flutter_go_bridge YAML/JSON config file")
-	command.Flags().StringVarP(&flags.goInput, "go-input", "i", "", "Go package directory, .go file, or package pattern")
-	command.Flags().StringVarP(&flags.goOutput, "go-output", "g", "", "Generated Go bridge file (default bridge_generated.go beside the nearest go.mod)")
-	command.Flags().StringVarP(&flags.dartOutput, "dart-output", "d", "", "Generated Dart bridge file (default lib/src/bridge_generated.dart)")
+	command.Flags().StringVarP(&flags.goInput, "go-input", goInput, "", "Go package directory, .go file, or package pattern")
+	command.Flags().StringVarP(&flags.goOutput, "go-output", goOutput, "", "Generated Go bridge file (default bridge_generated.go beside the nearest go.mod)")
+	command.Flags().StringVarP(&flags.dartOutput, "dart-output", dartOutput, "", "Generated Dart bridge file (default lib/src/bridge_generated.dart)")
 	command.Flags().StringVar(&flags.libraryName, "library-name", "", "Dynamic library base name (defaults to go_lib_<pubspec.yaml name>, then Go module name)")
 	command.Flags().StringVar(&flags.dartEntrypointClassName, "dart-entrypoint-class-name", "", "Generated Dart bridge class name")
 	command.Flags().IntVar(&flags.dartFormatLineLength, "dart-format-line-length", 0, "Dart formatter line length")
@@ -172,8 +311,6 @@ func newGenerateCommand(flags *generateFlags) *cobra.Command {
 	command.Flags().BoolVar(&flags.noDartFormat, "no-dart-format", false, "Do not run dart format")
 	command.Flags().BoolVar(&flags.stopOnError, "stop-on-error", true, "Stop on the first unsupported exported declaration")
 	command.Flags().BoolVar(&flags.printAST, "print-ast", false, "Print official Go AST nodes while parsing")
-	command.Flags().BoolVar(&flags.watch, "watch", false, "Automatically re-generate whenever the input files change")
-	return command
 }
 
 // resolveGenerateConfig loads and merges the CLI, file, and default
@@ -221,15 +358,23 @@ func runGenerateWatch(command *cobra.Command, flags *generateFlags) error {
 }
 
 func runGenerate(command *cobra.Command, flags *generateFlags) error {
+	_, err := runGenerateFiles(command, flags)
+	return err
+}
+
+// runGenerateFiles performs one generation and reports every file it wrote,
+// including the support package. `run` needs that list to keep generated
+// output from registering as a hand edit on the next watch tick.
+func runGenerateFiles(command *cobra.Command, flags *generateFlags) ([]string, error) {
 	resolved, err := resolveGenerateConfig(command, flags)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The support package must exist before the Go input is loaded: an API
 	// that references it cannot be type-checked until the package is on disk.
 	supportPath, err := generator.WriteSupportPackage(resolved)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	log.Printf("generated %s", supportPath)
 	log.Printf("loading Go package %s", resolved.GoInput)
@@ -238,14 +383,14 @@ func runGenerate(command *cobra.Command, flags *generateFlags) error {
 		PrintAST: flags.printAST, ASTOut: os.Stdout,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	result, err := generator.Generate(api, resolved)
 	for _, warning := range result.Warnings {
 		log.Printf("warning: %v", warning)
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, path := range result.Files {
 		log.Printf("generated %s", path)
@@ -255,7 +400,7 @@ func runGenerate(command *cobra.Command, flags *generateFlags) error {
 			log.Printf("warning: dart format skipped: %v", err)
 		}
 	}
-	return nil
+	return append([]string{supportPath}, result.Files...), nil
 }
 
 func (flags *generateFlags) toConfig(command *cobra.Command) config.Config {

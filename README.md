@@ -4,7 +4,7 @@
 `flutter_rust_bridge_codegen` 的 CLI 与生成结构，但不依赖 Flutter Native Assets，也不依赖
 `package:flutter/services.dart`。
 
-当前实现 `generate`、`generate --watch`、`create` 和 `integrate`。
+当前实现 `generate`、`generate --watch`、`run`、`create` 和 `integrate`。
 
 ## 设计约定
 
@@ -149,6 +149,68 @@ flutter_go_bridge_codegen generate --watch
 - 每轮都重新加载配置文件，改配置在下一轮生效；
 - 生成失败只打印告警并继续监听，Ctrl+C 退出；
 - `--watch` 要求 `go_input` 是本地路径，包模式（package pattern）会直接报错。
+
+## run
+
+```text
+flutter_go_bridge_codegen run -d emulator-5554
+flutter_go_bridge_codegen run -d windows -- --flavor dev --dart-define=API=staging
+```
+
+`run` 自己拉起 `flutter run`，并在源码变更时做两件不同的事：
+
+| 变更 | 动作 | 原因 |
+| --- | --- | --- |
+| `go_input` 下的 Go 源码 | 重新生成 → **停止并重启整个进程** | 动态库无法热替换 |
+| Dart 源码（默认 `lib/`） | hot reload | 不涉及 native 库 |
+
+### 为什么 Go 变更必须重启进程
+
+hot reload 和 hot restart 都只重建 Dart isolate。`dlopen` 打开的动态库会一直留在进程里，
+不会因为 isolate 重建而卸载；Android 上重新编出来的 `.so` 甚至根本没被推到设备，需要重新
+打包 APK 并安装。所以只有重启进程才能让 app 重新链接到新生成的 Go 代码——这也是 `run` 相对
+`generate --watch` 的全部意义。
+
+> 顺带说明：Dart VM Service、解析 `flutter run` 的 stdout、DevTools Protocol 这几种做法都属于
+> **观测**手段，能告诉你 app 何时启动、何时热重载，但没有任何一种能卸载并重载 native 库。
+
+### 按键
+
+`run` 底层用 `flutter run --machine`，flutter 不再接管键盘，所以按键由本工具处理并翻译成
+daemon 请求。stdin 是终端时为单键（无需回车），否则退化为行输入（输入后回车）。
+
+| 键 | 行为 | 刷新 Go 动态库 |
+| --- | --- | --- |
+| `r` | hot reload | 否 |
+| `R` | hot restart | 否 |
+| `g` | 重新生成 + 重启进程 | 是 |
+| `q` | 停止 app 并退出 | |
+| `d` | detach，app 留在设备上继续运行 | |
+| `h` | 显示帮助 | |
+
+`r` / `R` 只重建 Dart 侧，改了 Go 代码按它们不会生效——要手动触发请用 `g`。
+
+### 参数
+
+- `--` 之后的参数原样透传给 `flutter run`（`--flavor`、`--dart-define` 等）；
+- `-d/--device-id` 是常用参数的快捷写法。注意 `--machine` 不支持 `-d all`，多设备时必须指定单个设备；
+- `--project-dir` 指定要启动的 Flutter 工程。默认取配置的 base dir；plugin 工程的 base dir 下
+  没有 `lib/main.dart`，会自动改用 `example/`；
+- `--dart-input` 覆盖热重载监听的 Dart 目录（默认工程的 `lib/`，plugin 工程同时监听插件自身和 example 的 `lib/`）；
+- `--watch-interval` 轮询间隔，默认 400ms；
+- `generate` 的配置参数（`--config-file`、`--go-input` 等）同样可用，但**没有单字母简写**——
+  `-d` 让给了设备，和 `flutter run` 保持一致。
+
+### 行为细节
+
+- 生成的文件不会触发自身：除 `go_output`、`dart_output` 外，每轮生成产出的全部文件（含镜像的
+  Dart 目录树和 support 包）都会动态加入排除集；
+- 变更检测在 `run` 下按内容哈希确认——生成器每轮都会无条件重写输出文件，仅靠 mtime 会导致
+  「重写了相同内容」也触发一次完整的重新构建安装；
+- 连续保存会先等待一个静默期再动作，避免一次 save-all 触发多次重启；
+- 生成失败只告警并保留当前正在运行的 app，不会把工作中的会话拆掉（首轮生成失败则直接报错退出）；
+- 退出时按 `app.stop` 优雅停止，超时后强制终止整个进程树——Windows 上 `flutter` 是批处理外壳，
+  只杀它会残留 dart/gradle/adb 进程。
 
 ## create
 
@@ -518,6 +580,11 @@ channel 不支持作为字段）。
 - `Add` / `out <-` 都不会因为 Dart 侧不监听而永久阻塞。
 - 只能 Dart→Go：作为返回值会在生成期报错；`//fgb:async` 是必需的；
   `//fgb:nullable` 不适用；只接受 `chan<- T`（双向或只读 channel 会报错）。
+- **热重启是安全的**：热重启会直接杀掉 Dart isolate，它来不及取消任何 stream，而动态库不会被
+  卸载，Go 侧的生产者 goroutine 仍在运行。由于 stream 端口是全局的、Dart 的 handle 计数器又会
+  从头开始，旧生产者的事件本会被投递进**新** isolate，导致每热重启一次就多出一路重复数据。
+  运行时用「isolate 代际」隔离这一点：Dart 每次 attach 都会推进代际、取消上一代全部 stream，
+  并且生产者在创建时就记下自己的代际，跨代的投递一律丢弃——即使该生产者忽略 `ctx.Done()`。
 
 ## 指令与字段 tag
 

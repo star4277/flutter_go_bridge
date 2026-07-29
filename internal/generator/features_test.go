@@ -642,6 +642,65 @@ func Make() (fgb.StreamSink[int], error) { var zero fgb.StreamSink[int]; return 
 	}
 }
 
+// TestGenerateStreamGenerationGuard pins the isolate-generation guard. A hot
+// restart kills the Dart isolate without it ever calling fgb_stream_cancel,
+// while this library stays loaded and its producers keep running. Since the
+// stream port is global and Dart restarts its handle counter, an unguarded
+// leftover producer delivers into the *new* isolate, and every hot restart
+// adds another copy of the stream.
+func TestGenerateStreamGenerationGuard(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+import (
+	"context"
+
+	"example.com/fixture/internal/fgb"
+)
+
+//fgb:async
+func Ticks(ctx context.Context, out chan<- int) error { return nil }
+
+//fgb:async
+func Watch(ctx context.Context, sink fgb.StreamSink[string]) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		// Generation and port live in one value. Read separately, a producer
+		// could clear the generation check and then pick up the next isolate's
+		// port, which is the delivery the guard exists to stop.
+		"type fgbStreamTarget struct",
+		"var fgbStreamTargetRef atomic.Pointer[fgbStreamTarget]",
+		"target := fgbStreamTargetRef.Load()",
+		"target.generation != generation",
+		"fgbPost(target.port, buffer.Bytes())",
+		// Registrations are keyed by generation as well as handle, so a
+		// straggler's deferred cleanup cannot delete a live stream's entry.
+		"type fgbStreamKey struct",
+		"func fgbRegisterStreamCancel(generation int64, handle int64, cancel context.CancelFunc)",
+		"func fgbUnregisterStreamCancel(generation int64, handle int64)",
+		// Each call captures the generation once and reuses it for cleanup.
+		"fgbStreamGen := fgbCurrentStreamGeneration()",
+		"fgbRegisterStreamCancel(fgbStreamGen,",
+		"defer fgbUnregisterStreamCancel(fgbStreamGen,",
+		// Both producer shapes capture the generation when they are created.
+		"generation := fgbCurrentStreamGeneration()",
+		"fgbPostStreamEvent(generation, handle, kind, payload)",
+		"fgbPostStreamEvent(generation, handle, 0, encoded)",
+		"fgbReleaseStreamSink(generation, handle)",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing %q", expected)
+		}
+	}
+	// The old single-value port must be gone: leaving it would mean two
+	// sources of truth for where events go.
+	if strings.Contains(goSource, "fgbStreamPort") {
+		t.Fatal("the standalone stream port must be replaced by fgbStreamTarget")
+	}
+}
+
 func TestGenerateChannelStream(t *testing.T) {
 	apiDart, _, goSource, _, err := generateFixture(t, `package api
 
