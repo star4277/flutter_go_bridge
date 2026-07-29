@@ -130,14 +130,11 @@ func (c *Client) readLoop(reader io.Reader, passthrough io.Writer) {
 	err := scanner.Err()
 	c.mu.Lock()
 	c.readErr = err
-	pending := c.pending
-	c.pending = map[int]chan response{}
 	c.mu.Unlock()
-
-	// Unblock anyone still waiting: the daemon will never answer now.
-	for _, waiter := range pending {
-		waiter <- response{err: errors.New("flutter daemon exited before responding")}
-	}
+	// Waiters are released by close(c.done) in the deferred cleanup rather than
+	// from a snapshot of the pending map here: a request registered between
+	// taking such a snapshot and closing done would be notified by neither, and
+	// wait forever on a context that may never be cancelled.
 }
 
 func (c *Client) complete(id int, message wireMessage) {
@@ -195,6 +192,15 @@ func (c *Client) Request(ctx context.Context, method string, params map[string]a
 		return nil, ctx.Err()
 	case result := <-waiter:
 		return result.result, result.err
+	case <-c.done:
+		// The reader has stopped, so no further response can arrive -- but one
+		// may already be buffered from just before it did.
+		select {
+		case result := <-waiter:
+			return result.result, result.err
+		default:
+		}
+		return nil, errors.New("flutter daemon exited before responding")
 	}
 }
 

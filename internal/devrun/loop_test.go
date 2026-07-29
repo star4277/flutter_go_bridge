@@ -80,6 +80,12 @@ type harness struct {
 	blockStartup bool
 	startBlocked chan struct{}
 	blockedOnce  sync.Once
+	// gateAfter holds the nth session launch open on gate, so a test can edit
+	// files while a replacement app is still starting.
+	gateAfter  int
+	gate       chan struct{}
+	gateHit    chan struct{}
+	startCount atomic.Int32
 }
 
 func newHarness(t *testing.T) *harness {
@@ -91,6 +97,8 @@ func newHarness(t *testing.T) *harness {
 		keys:         make(chan Key, 4),
 		done:         make(chan error, 1),
 		startBlocked: make(chan struct{}),
+		gate:         make(chan struct{}),
+		gateHit:      make(chan struct{}),
 	}
 	writeFile(t, filepath.Join(h.goDir, "api.go"), "package api\n")
 	writeFile(t, filepath.Join(h.dartDir, "main.dart"), "void main() {}\n")
@@ -121,6 +129,10 @@ func (h *harness) start(t *testing.T) {
 					h.blockedOnce.Do(func() { close(h.startBlocked) })
 					<-ctx.Done()
 					return nil, ctx.Err()
+				}
+				if count := int(h.startCount.Add(1)); count == h.gateAfter {
+					close(h.gateHit)
+					<-h.gate
 				}
 				session := newFakeApp()
 				h.starts <- session
@@ -301,6 +313,55 @@ func TestRunHandlesKeys(t *testing.T) {
 // and the main select does not run until the app is up, so quit has to reach
 // the context straight from the key pump or a multi-minute Android build is
 // uninterruptible.
+// TestRunPicksUpEditsMadeWhileTheReplacementStarts covers the gap between
+// generating and the app actually running. flutter can spend minutes
+// rebuilding and installing, and an edit saved in that window has to survive
+// it -- otherwise the running app is silently out of date and nothing happens
+// until the user touches another file.
+func TestRunPicksUpEditsMadeWhileTheReplacementStarts(t *testing.T) {
+	h := newHarness(t)
+	h.gateAfter = 2 // hold the relaunch open
+	h.start(t)
+	h.awaitStart(t, "initial launch")
+
+	writeFile(t, filepath.Join(h.goDir, "api.go"), "package api // first edit\n")
+	select {
+	case <-h.gateHit:
+	case <-time.After(settleTimeout):
+		t.Fatal("the Go edit did not start a relaunch")
+	}
+
+	// Saved while the replacement app is still starting.
+	writeFile(t, filepath.Join(h.goDir, "api.go"), "package api // second edit\n")
+	close(h.gate)
+
+	h.awaitStart(t, "the held relaunch")
+	h.awaitStart(t, "the edit saved during startup must trigger another relaunch")
+}
+
+// TestRunKeepsRunningAfterARestart guards against the previous session's event
+// pump being mistaken for the new one exiting: the pump signals separately from
+// the process being reaped, so a shared exit channel could deliver a stale
+// signal moments after a successful relaunch.
+func TestRunKeepsRunningAfterARestart(t *testing.T) {
+	h := newHarness(t)
+	h.start(t)
+	h.awaitStart(t, "initial launch")
+
+	writeFile(t, filepath.Join(h.goDir, "api.go"), "package api // edited\n")
+	second := h.awaitStart(t, "Go change must relaunch")
+
+	// The loop must still be alive and driving the new session.
+	writeFile(t, filepath.Join(h.dartDir, "main.dart"), "void main() { print('x'); }\n")
+	select {
+	case <-second.restarts:
+	case err := <-h.done:
+		t.Fatalf("the loop exited after a restart instead of continuing (%v)", err)
+	case <-time.After(settleTimeout):
+		t.Fatal("the loop stopped reacting after a restart")
+	}
+}
+
 func TestRunQuitsWhileTheAppIsStartingUp(t *testing.T) {
 	h := newHarness(t)
 	h.blockStartup = true

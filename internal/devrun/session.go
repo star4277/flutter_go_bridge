@@ -233,15 +233,16 @@ func (s *Session) Stop(ctx context.Context) error {
 func (s *Session) stop(ctx context.Context) error {
 	if s.appID != "" {
 		stopCtx, cancel := context.WithTimeout(ctx, stopGracePeriod)
-		_, err := s.client.Request(stopCtx, "app.stop", map[string]any{"appId": s.appID})
+		raw, err := s.client.Request(stopCtx, "app.stop", map[string]any{"appId": s.appID})
 		cancel()
 		// The reply is advisory. flutter routinely exits before it can answer,
 		// which surfaces here as "daemon exited before responding" -- and a
 		// gone process is exactly what we asked for. Whether the process is
-		// ending, not whether the RPC landed, decides success. A failed
-		// request only shortens how long that is worth waiting for.
+		// ending, not whether the RPC landed, decides success. A request that
+		// failed, or that the daemon answered false, only shortens how long
+		// that is worth waiting for.
 		grace := stopGracePeriod
-		if err != nil {
+		if err != nil || !daemonSucceeded(raw) {
 			grace = 2 * time.Second
 		}
 		select {
@@ -255,6 +256,19 @@ func (s *Session) stop(ctx context.Context) error {
 		return nil
 	}
 	return killProcessTree(s.command)
+}
+
+// daemonSucceeded reads the boolean the app domain answers with. A missing or
+// unparseable body is treated as success: only an explicit false is a refusal.
+func daemonSucceeded(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return true
+	}
+	var ok bool
+	if json.Unmarshal(raw, &ok) != nil {
+		return true
+	}
+	return ok
 }
 
 // hasExited reports whether the process has already been reaped, in which case
@@ -272,15 +286,32 @@ func (s *Session) hasExited() bool {
 func (s *Session) Detach(ctx context.Context) error {
 	var err error
 	s.stopOnce.Do(func() {
-		if s.appID != "" {
-			detachCtx, cancel := context.WithTimeout(ctx, stopGracePeriod)
-			_, err = s.client.Request(detachCtx, "app.detach", map[string]any{"appId": s.appID})
-			cancel()
-		}
-		if err != nil {
-			err = killProcessTree(s.command)
-		}
+		err = s.detach(ctx)
 	})
 	<-s.exited
 	return err
+}
+
+func (s *Session) detach(ctx context.Context) error {
+	if s.appID != "" {
+		detachCtx, cancel := context.WithTimeout(ctx, stopGracePeriod)
+		raw, err := s.client.Request(detachCtx, "app.detach", map[string]any{"appId": s.appID})
+		cancel()
+		// The app domain answers with a boolean. A false means it could not
+		// detach cleanly, in which case the runner may never finish on its own
+		// and waiting on the process would hang, so only a real success earns
+		// the grace period.
+		if err == nil && daemonSucceeded(raw) {
+			select {
+			case <-s.exited:
+				return nil
+			case <-time.After(stopGracePeriod):
+				s.options.Logf("app.detach did not finish in %s, killing the process tree", stopGracePeriod)
+			}
+		}
+	}
+	if s.hasExited() {
+		return nil
+	}
+	return killProcessTree(s.command)
 }

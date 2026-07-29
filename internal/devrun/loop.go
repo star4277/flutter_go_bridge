@@ -69,8 +69,12 @@ type loop struct {
 	// it. The pump must keep draining -- app.stop needs the daemon reader to
 	// stay responsive -- but its buffered output is no longer worth printing.
 	quiet *atomic.Bool
-	// ended receives a signal when the current session's process exits,
-	// whether we asked for it or the app died on the device.
+	// ended belongs to the current session. Each session gets a fresh channel
+	// rather than sharing one: Session.Stop returns when the process is reaped,
+	// which is a different goroutine from the event pump, so a pump can still
+	// be on its way to signalling after Stop returns. With one shared channel
+	// that late signal would be read by the *next* session's loop, which would
+	// exit with "flutter run exited" moments after a successful relaunch.
 	ended chan struct{}
 }
 
@@ -148,8 +152,9 @@ func Run(ctx context.Context, options Options) error {
 		options:  options,
 		interval: interval,
 		output:   output,
-		ended:    make(chan struct{}, 1),
 	}
+	// runner.ended is installed by startSession, which always runs before the
+	// select below reads it.
 
 	// Generate before taking the watch baseline, so the freshly written
 	// outputs are part of the baseline instead of looking like a change.
@@ -259,9 +264,11 @@ func (l *loop) startSession(ctx context.Context) error {
 
 	// One pump owns the event stream for the whole session, so the main select
 	// never competes with it and a slow restart cannot stall the daemon reader
-	// by letting its event buffer fill.
+	// by letting its event buffer fill. It signals this session's own channel,
+	// so a signal still in flight cannot be read as the next session exiting.
 	quiet := &atomic.Bool{}
-	l.quiet = quiet
+	ended := make(chan struct{}, 1)
+	l.quiet, l.ended = quiet, ended
 	go func() {
 		for event := range session.Events() {
 			if quiet.Load() {
@@ -270,7 +277,7 @@ func (l *loop) startSession(ctx context.Context) error {
 			session.Handle(event)
 		}
 		select {
-		case l.ended <- struct{}{}:
+		case ended <- struct{}{}:
 		default:
 		}
 	}()
@@ -296,12 +303,9 @@ func (l *loop) stopSession(ctx context.Context) {
 		l.logf("warning: stopping the app failed: %v", err)
 	}
 	l.session = nil
-	// Stop only returns after the process is reaped, so the pump has already
-	// signalled; clear it so the next session does not inherit a stale exit.
-	select {
-	case <-l.ended:
-	default:
-	}
+	// The pump signals its own channel, which the next session replaces, so
+	// there is nothing to drain here.
+	l.ended = nil
 }
 
 // poll checks both trees. Go wins when both changed: the restart it triggers
@@ -356,16 +360,15 @@ func (l *loop) regenerateAndRestart(ctx context.Context, reason string) error {
 
 	l.logf("restarting the app -- a rebuilt Go library cannot be hot reloaded")
 	l.stopSession(ctx)
+	// Baseline against what was just generated, before the launch: flutter can
+	// spend minutes rebuilding and installing, and an edit saved during that
+	// window has to survive it. Re-baselining afterwards would mark those edits
+	// as already seen and leave the running app quietly out of date until the
+	// user happened to touch another file.
 	if err := l.newTrackers(generated); err != nil {
 		return err
 	}
-	if err := l.startSession(ctx); err != nil {
-		return err
-	}
-	// Startup can take minutes; anything edited meanwhile belongs to the next
-	// round, not to the run that just launched.
-	l.resetTrackers()
-	return nil
+	return l.startSession(ctx)
 }
 
 func (l *loop) hotReload(ctx context.Context) error {
@@ -374,6 +377,14 @@ func (l *loop) hotReload(ctx context.Context) error {
 		l.logf("warning: hot reload failed: %v", err)
 	}
 	return l.dartTracker.Reset()
+}
+
+// resetDartTracker re-baselines only the Dart side, for actions that read Dart
+// sources from disk without touching the Go bridge.
+func (l *loop) resetDartTracker() {
+	if err := l.dartTracker.Reset(); err != nil {
+		l.logf("warning: %v", err)
+	}
 }
 
 func (l *loop) resetTrackers() {
@@ -393,13 +404,15 @@ func (l *loop) onKey(ctx context.Context, key Key) (bool, error) {
 		if err := l.session.Restart(ctx, false); err != nil {
 			l.logf("warning: hot reload failed: %v", err)
 		}
-		l.resetTrackers()
+		// Only the Dart baseline moves: a reload reads Dart sources from disk,
+		// but a pending Go edit still needs its regenerate-and-relaunch round.
+		l.resetDartTracker()
 	case KeyHotRestart:
 		l.logf("hot restart (Dart only -- the Go library is unchanged)")
 		if err := l.session.Restart(ctx, true); err != nil {
 			l.logf("warning: hot restart failed: %v", err)
 		}
-		l.resetTrackers()
+		l.resetDartTracker()
 	case KeyRegenerate:
 		return false, l.regenerateAndRestart(ctx, "requested")
 	// KeyQuit never arrives here: the key pump intercepts it and cancels the
