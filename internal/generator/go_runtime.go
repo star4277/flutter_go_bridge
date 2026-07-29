@@ -36,6 +36,11 @@ var fgbStreamPort atomic.Int64
 var fgbCancelledStreams sync.Map
 var fgbStreamCancels sync.Map
 
+// fgbStreamGeneration counts Dart isolate attachments. Everything a stream
+// producer captures is scoped to the generation it started in, so producers
+// left over from a hot-restarted isolate cannot reach the current one.
+var fgbStreamGeneration atomic.Int64
+
 func init() {
 	var marker uint16 = 0x1
 	if *(*byte)(unsafe.Pointer(&marker)) == 0 {
@@ -1149,6 +1154,29 @@ func fgbInvokeCallback(handle int64, arguments []any) (any, error) {
 
 //export fgb_stream_port
 func fgb_stream_port(port C.int64_t) {
+	// Called once per Dart isolate attach: the first run, and again after
+	// every hot restart. A hot restart kills the old isolate outright, so it
+	// never gets to call fgb_stream_cancel, while this library is never
+	// unloaded and its producer goroutines keep running.
+	//
+	// Left alone those producers would post into the *new* isolate: the port
+	// below is global, and Dart restarts its handle counter from zero, so an
+	// old producer's handle collides with a fresh stream's and its events are
+	// delivered to whoever now owns that number. Retire the whole generation.
+	fgbStreamGeneration.Add(1)
+	fgbStreamCancels.Range(func(key, value any) bool {
+		fgbStreamCancels.Delete(key)
+		if cancel, ok := value.(context.CancelFunc); ok {
+			cancel()
+		}
+		return true
+	})
+	// Stale cancellations must go too, or a fresh stream that reuses a
+	// cancelled handle would be dead the moment it registers.
+	fgbCancelledStreams.Range(func(key, _ any) bool {
+		fgbCancelledStreams.Delete(key)
+		return true
+	})
 	fgbStreamPort.Store(int64(port))
 }
 
@@ -1188,7 +1216,14 @@ func fgbMustStreamHandle(value any) int64 {
 // fgbPostStreamEvent hands one stream event to the Dart event loop without
 // waiting for it to be processed. It reports false once the Dart side stopped
 // listening, which the sink turns into fgb.ErrStreamClosed.
-func fgbPostStreamEvent(handle int64, kind int32, payload any) bool {
+//
+// generation is the isolate generation the producer was created in. A producer
+// that outlived its isolate reports closed here even if it ignores context
+// cancellation, so it can never leak events into a hot-restarted app.
+func fgbPostStreamEvent(generation int64, handle int64, kind int32, payload any) bool {
+	if generation != fgbStreamGeneration.Load() {
+		return false
+	}
 	if _, cancelled := fgbCancelledStreams.Load(handle); cancelled {
 		return false
 	}
@@ -1205,11 +1240,15 @@ func fgbPostStreamEvent(handle int64, kind int32, payload any) bool {
 }
 
 // fgbReleaseStreamSink runs after Go drops its last copy of a sink: the Dart
-// stream is completed so listeners are not left hanging.
-func fgbReleaseStreamSink(handle int64) {
+// stream is completed so listeners are not left hanging. A sink from a retired
+// generation is dropped silently -- its listener died with its isolate.
+func fgbReleaseStreamSink(generation int64, handle int64) {
+	if generation != fgbStreamGeneration.Load() {
+		return
+	}
 	if _, cancelled := fgbCancelledStreams.LoadAndDelete(handle); cancelled {
 		return
 	}
-	fgbPostStreamEvent(handle, 1, nil)
+	fgbPostStreamEvent(generation, handle, 1, nil)
 }
 `

@@ -642,6 +642,45 @@ func Make() (fgb.StreamSink[int], error) { var zero fgb.StreamSink[int]; return 
 	}
 }
 
+// TestGenerateStreamGenerationGuard pins the isolate-generation guard. A hot
+// restart kills the Dart isolate without it ever calling fgb_stream_cancel,
+// while this library stays loaded and its producers keep running. Since the
+// stream port is global and Dart restarts its handle counter, an unguarded
+// leftover producer delivers into the *new* isolate, and every hot restart
+// adds another copy of the stream.
+func TestGenerateStreamGenerationGuard(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+//fgb:async
+func Ticks(out chan<- int) error { return nil }
+
+//fgb:async
+func Watch(sink fgb.StreamSink[string]) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		// The generation is bumped where a new isolate attaches, and the old
+		// generation's producers are cancelled and their handles forgotten.
+		"var fgbStreamGeneration atomic.Int64",
+		"fgbStreamGeneration.Add(1)",
+		"func fgbPostStreamEvent(generation int64, handle int64, kind int32, payload any) bool",
+		"if generation != fgbStreamGeneration.Load()",
+		// Both producer shapes capture the generation when they are created.
+		"generation := fgbStreamGeneration.Load()",
+		"fgbPostStreamEvent(generation, handle, kind, payload)",
+		"fgbPostStreamEvent(generation, handle, 0, encoded)",
+		"fgbReleaseStreamSink(generation, handle)",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing %q", expected)
+		}
+	}
+}
+
 func TestGenerateChannelStream(t *testing.T) {
 	apiDart, _, goSource, _, err := generateFixture(t, `package api
 
