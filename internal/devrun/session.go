@@ -235,16 +235,37 @@ func (s *Session) stop(ctx context.Context) error {
 		stopCtx, cancel := context.WithTimeout(ctx, stopGracePeriod)
 		_, err := s.client.Request(stopCtx, "app.stop", map[string]any{"appId": s.appID})
 		cancel()
-		if err == nil {
-			select {
-			case <-s.exited:
-				return nil
-			case <-time.After(stopGracePeriod):
-				s.options.Logf("app.stop did not finish in %s, killing the process tree", stopGracePeriod)
-			}
+		// The reply is advisory. flutter routinely exits before it can answer,
+		// which surfaces here as "daemon exited before responding" -- and a
+		// gone process is exactly what we asked for. Whether the process is
+		// ending, not whether the RPC landed, decides success. A failed
+		// request only shortens how long that is worth waiting for.
+		grace := stopGracePeriod
+		if err != nil {
+			grace = 2 * time.Second
+		}
+		select {
+		case <-s.exited:
+			return nil
+		case <-time.After(grace):
+			s.options.Logf("app.stop did not finish in %s, killing the process tree", grace)
 		}
 	}
+	if s.hasExited() {
+		return nil
+	}
 	return killProcessTree(s.command)
+}
+
+// hasExited reports whether the process has already been reaped, in which case
+// there is nothing left to kill and no failure to report.
+func (s *Session) hasExited() bool {
+	select {
+	case <-s.exited:
+		return true
+	default:
+		return false
+	}
 }
 
 // Detach leaves the app running on the device and disconnects from it.

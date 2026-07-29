@@ -3,6 +3,8 @@
 package devrun
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -23,7 +25,21 @@ func killProcessTree(command *exec.Cmd) error {
 	}
 	// A negative pid signals the entire process group created by Setpgid.
 	if err := syscall.Kill(-command.Process.Pid, syscall.SIGKILL); err != nil {
-		return command.Process.Kill()
+		if errors.Is(err, syscall.ESRCH) {
+			// The group is already gone, which is the outcome we wanted.
+			return nil
+		}
+		return ignoreDeadProcess(command.Process.Kill())
 	}
 	return nil
+}
+
+// ignoreDeadProcess drops the errors that only mean "it already exited". The
+// session always waits for the process in the background, so by the time a
+// stop lands the process has usually been reaped already.
+func ignoreDeadProcess(err error) error {
+	if err == nil || errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	return err
 }

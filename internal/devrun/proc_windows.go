@@ -3,6 +3,8 @@
 package devrun
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -27,10 +29,23 @@ func killProcessTree(command *exec.Cmd) error {
 	}
 	kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(command.Process.Pid))
 	kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := kill.Run(); err != nil {
-		// taskkill is missing or the pid is already gone; fall back to the
-		// direct kill, which at least reaps the wrapper.
-		return command.Process.Kill()
+	if err := kill.Run(); err == nil {
+		return nil
 	}
-	return nil
+	// taskkill is missing or the pid is already gone; fall back to the direct
+	// kill, which at least reaps the wrapper.
+	return ignoreDeadProcess(command.Process.Kill())
+}
+
+// ignoreDeadProcess drops the errors that only mean "it already exited".
+//
+// Once cmd.Wait has reaped the process, Windows reports the released handle as
+// EINVAL -- plain "invalid argument" -- rather than ErrProcessDone. Since the
+// session always waits in the background, that is the normal state by the time
+// a stop lands, and it surfaced as a warning on every clean shutdown.
+func ignoreDeadProcess(err error) error {
+	if err == nil || errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.EINVAL) {
+		return nil
+	}
+	return err
 }
