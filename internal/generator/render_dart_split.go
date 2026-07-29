@@ -682,6 +682,9 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindUUID:
 		r.line("  if (value is! String) throw FormatException('$path: expected UUID string');")
 		r.line("  return UuidValue.fromString(value);")
+	case kindDuration:
+		r.line("  if (value is! int) throw FormatException('$path: expected duration microseconds');")
+		r.line("  return Duration(microseconds: value);")
 	case kindAny:
 		r.line("  return value;")
 	case kindPointer:
@@ -796,6 +799,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  return value.address;")
 	case kindUUID:
 		r.line("  return value.uuid;")
+	case kindDuration:
+		r.line("  return value.inMicroseconds;")
 	case kindPointer:
 		r.line("  if (value == null) return null;")
 		r.line("  return fgbEncode%d(value, bridge, path);", typ.Elem.ID)

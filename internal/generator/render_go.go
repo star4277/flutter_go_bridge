@@ -155,6 +155,10 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tresult, err := uuid.FromString(raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid UUID: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindDuration:
+		r.line("\traw, err := fgbAsInt64(value, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.renderDurationFromMicroseconds(goType, "raw")
 	case kindAny:
 		r.line("\treturn value, nil")
 	case kindPointer:
@@ -334,6 +338,8 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\treturn value.String(), nil")
 	case kindUUID:
 		r.line("\treturn value.String(), nil")
+	case kindDuration:
+		r.line("\treturn int64(value / time.Microsecond), nil")
 	case kindAny:
 		r.line("\treturn fgbNormalize(value, 0)")
 	case kindPointer:
@@ -765,6 +771,12 @@ func (r *goRenderer) renderBigIntEncoder(typ *wireType) {
 	} else {
 		r.line("\treturn new(big.Int).Set(&value), nil")
 	}
+}
+
+func (r *goRenderer) renderDurationFromMicroseconds(goType, expression string) {
+	r.line("\tconst maxDurationMicroseconds = int64(^uint64(0)>>1) / int64(time.Microsecond)")
+	r.line("\tif %s < -maxDurationMicroseconds || %s > maxDurationMicroseconds { var zero %s; return zero, fmt.Errorf(\"%%s: duration out of time.Duration range\", path) }", expression, expression, goType)
+	r.line("\treturn %s(%s) * %s(time.Microsecond), nil", goType, expression, goType)
 }
 
 func (r *goRenderer) goType(typ types.Type) string {

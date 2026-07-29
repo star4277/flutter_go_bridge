@@ -37,6 +37,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstStringBody("value")
 	case kindSigned, kindFloat:
 		r.line("  return value;")
+	case kindDuration:
+		r.line("  return value.inMicroseconds;")
 	case kindUnsigned:
 		if isDartBigIntType(typ) {
 			r.renderCstStringBody("value.toRadixString(16)")
@@ -120,7 +122,7 @@ func cstDartEncoderReturnType(typ *wireType) string {
 		return storage.DartType
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
+	case kindBool, kindSigned, kindUnsigned, kindDuration, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		return "int"
 	case kindFloat:
 		return "double"

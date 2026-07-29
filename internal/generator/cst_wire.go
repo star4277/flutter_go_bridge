@@ -42,7 +42,7 @@ func cstIsScalar(typ *wireType) bool {
 		return false
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindFloat, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
+	case kindBool, kindSigned, kindUnsigned, kindFloat, kindDuration, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		return true
 	case kindNamed:
 		return cstIsScalar(typ.Named.Underlying)
@@ -81,6 +81,8 @@ func cstStorageFor(typ *wireType) cstStorage {
 		return cstStorage{CType: "uint64_t", DartType: "ffi.Uint64", DartField: "@ffi.Uint64() external int", Scalar: true}
 	case kindFloat:
 		return cstStorage{CType: "double", DartType: "ffi.Double", DartField: "@ffi.Double() external double", Scalar: true}
+	case kindDuration:
+		return cstStorage{CType: "int64_t", DartType: "ffi.Int64", DartField: "@ffi.Int64() external int", Scalar: true}
 	case kindOpaque:
 		return cstStorage{CType: "uintptr_t", DartType: "ffi.UintPtr", DartField: "@ffi.UintPtr() external int", Scalar: true}
 	case kindDartOpaque, kindCallback, kindStreamSink:

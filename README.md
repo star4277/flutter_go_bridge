@@ -345,6 +345,7 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | `context.Context` 参数 | 不出现在 Dart 签名；由生成代码创建，取消订阅时自动 cancel |
 | 函数类型参数 | `FutureOr<R> Function(...)`，见「Dart 闭包回调」，需 `//fgb:async` |
 | `time.Time` | `DateTime` |
+| `time.Duration` | `Duration`（wire 使用微秒；Go→Dart 会截断不足 1 微秒的纳秒部分） |
 | `math/big.Int` | `BigInt` |
 | 最后一个 `error` 返回值 | `FgbPlatformException` |
 | `any` / `interface{}` | `Object?` |

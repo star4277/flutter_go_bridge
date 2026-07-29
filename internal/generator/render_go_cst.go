@@ -81,6 +81,9 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\tresult, err := uuid.FromString(raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid UUID: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindDuration:
+		r.line("\traw := int64(value)")
+		r.renderDurationFromMicroseconds(goType, "raw")
 	case kindPointer:
 		r.line("\tif value == nil { return nil, nil }")
 		inner := cstStorageFor(typ.Elem)
@@ -267,6 +270,8 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindUUID:
 		r.line("\treturn fgbDcoString(value.String())")
+	case kindDuration:
+		r.line("\treturn fgbDcoInt64(int64(value / time.Microsecond))")
 	case kindPointer:
 		r.line("\tif value == nil { return fgbDcoNull() }")
 		r.line("\treturn fgbDcoEncode%d(*value)", typ.Elem.ID)

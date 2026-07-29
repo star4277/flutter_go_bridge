@@ -18,6 +18,7 @@ const (
 	kindTime        typeKind = "time"
 	kindInternetIP  typeKind = "internet_ip"
 	kindUUID        typeKind = "uuid"
+	kindDuration    typeKind = "duration"
 	kindAny         typeKind = "any"
 	kindPointer     typeKind = "pointer"
 	kindSlice       typeKind = "slice"
