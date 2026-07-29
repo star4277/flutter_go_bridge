@@ -112,6 +112,10 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		for _, field := range typ.Struct.allFields() {
 			r.line("\tdecoded%s, err := fgbCstDecode%d(value.%s, path+%s)", field.GoName, field.Type.ID, field.CName, strconv.Quote("."+field.WireName))
 			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+			if field.Type.CgoScalar {
+				r.line("\tif err := fgbSetCgoField(&result, %s, decoded%s); err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: %%w\", path, err) }", strconv.Quote(field.GoName), field.GoName, goType)
+				continue
+			}
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
 		}
 		r.line("\treturn result, nil")
@@ -343,7 +347,7 @@ func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
 			r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)
 			continue
 		}
-		r.line("\tchild%d, err := fgbDcoEncode%d(value.%s)", index, field.Type.ID, field.GoName)
+		r.line("\tchild%d, err := fgbDcoEncode%d(%s)", index, field.Type.ID, r.goWireValue(field.Type, "value."+field.GoName))
 		r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 		r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)
 	}

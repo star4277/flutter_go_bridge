@@ -264,6 +264,7 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 			GoName: goName, DartName: dartName, CName: names.CIdentifier(dartName),
 			Type: mapped, Nullable: nullable,
 		})
+		call.Reflective = call.Reflective || mapped.CgoScalar
 	}
 	for _, name := range source.NullableParams {
 		if !nullableParams[name] {
@@ -300,6 +301,7 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 			GoName: variable.Name(), DartName: uniqueName(names.LowerCamel(variable.Name()), usedResultNames),
 			GoIndex: i, Type: mapped,
 		})
+		call.Reflective = call.Reflective || mapped.CgoScalar
 	}
 	// A record reads much better with the Go result names, and Go requires
 	// results to be either all named or none.
@@ -345,6 +347,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		if _, nested := elemRaw.(*types.Pointer); nested {
 			return nil, errors.New("nested pointers are not supported")
 		}
+		if named, ok := elemRaw.(*types.Named); ok && isCgoSyntheticNamed(named) {
+			return nil, fmt.Errorf("CGo pointer type %s cannot be serialized safely; expose an exported Go wrapper type or convert the pointer to data with an explicit ownership policy", original.String())
+		}
 		if named, ok := elemRaw.(*types.Named); ok {
 			if isBigInt(named) {
 				b.unit.UsesBigInt = true
@@ -367,6 +372,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		result.Elem = elem
 		return result, nil
 	case *types.Slice:
+		if named, ok := types.Unalias(typ.Elem()).(*types.Named); ok && isCgoSyntheticNamed(named) {
+			return nil, fmt.Errorf("slice element %s is a package-private CGo type; expose an exported Go wrapper type", named.Obj().Name())
+		}
 		elemBasic, _ := types.Unalias(typ.Elem()).(*types.Basic)
 		if elemBasic != nil {
 			switch elemBasic.Kind() {
@@ -388,6 +396,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		result.Elem = elem
 		return result, nil
 	case *types.Array:
+		if named, ok := types.Unalias(typ.Elem()).(*types.Named); ok && isCgoSyntheticNamed(named) {
+			return nil, fmt.Errorf("array element %s is a package-private CGo type; expose an exported Go wrapper type", named.Obj().Name())
+		}
 		elem, err := b.mapType(typ.Elem())
 		if err != nil {
 			return nil, err
@@ -397,6 +408,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		result.Length = typ.Len()
 		return result, nil
 	case *types.Map:
+		if containsCgoSyntheticType(typ.Key(), map[types.Type]bool{}) || containsCgoSyntheticType(typ.Elem(), map[types.Type]bool{}) {
+			return nil, errors.New("map keys and values cannot directly use package-private CGo types; expose exported Go wrapper types")
+		}
 		key, err := b.mapType(typ.Key())
 		if err != nil {
 			return nil, fmt.Errorf("map key: %w", err)
@@ -419,6 +433,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 	case *types.Signature:
 		return nil, errors.New("function types are only supported as direct parameters of //fgb:async functions")
 	case *types.Named:
+		if isCgoSyntheticNamed(typ) {
+			return b.mapCgoScalar(original, typ)
+		}
 		if isTime(typ) {
 			b.unit.UsesTime = true
 			return b.newSimpleType(original, kindTime, "DateTime"), nil
@@ -469,6 +486,33 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 	default:
 		return nil, fmt.Errorf("unsupported Go type %T (%s)", original, original.String())
 	}
+}
+
+// mapCgoScalar removes cmd/cgo's package-private `_Ctype_*` wrapper from a
+// scalar before it reaches the generated bridge. A separate bridge package
+// cannot spell api._Ctype_int, so codecs use the corresponding ordinary basic
+// value (int32, uint64, float64, ...) and the call renderer converts it to the
+// exact private type through reflection at the API boundary.
+func (b *builder) mapCgoScalar(original types.Type, named *types.Named) (*wireType, error) {
+	basic, ok := types.Unalias(named.Underlying()).(*types.Basic)
+	if !ok {
+		return nil, fmt.Errorf("CGo type %s has unsupported underlying type %s; expose an exported Go wrapper with serializable fields", named.Obj().Name(), named.Underlying())
+	}
+	base, err := b.mapType(basic)
+	if err != nil {
+		return nil, fmt.Errorf("CGo type %s: %w", named.Obj().Name(), err)
+	}
+	// Keep a distinct node so call and struct renderers know where a reflective
+	// conversion is required, while the codec itself still speaks the ordinary
+	// underlying Go scalar.
+	result := &wireType{
+		ID: b.nextTypeID, Kind: base.Kind, Original: basic, DartType: base.DartType,
+		BasicKind: base.BasicKind, BitSize: base.BitSize, Signed: base.Signed, CgoScalar: true,
+	}
+	b.nextTypeID++
+	b.typeCache[original] = result
+	b.unit.Types = append(b.unit.Types, result)
+	return result, nil
 }
 
 func (b *builder) mapAtomic(original types.Type, named *types.Named, valueType types.Type) (*wireType, error) {
@@ -639,6 +683,9 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		if _, nested := elem.(*types.Pointer); nested {
 			return "has a nested pointer type"
 		}
+		if named, ok := elem.(*types.Named); ok && isCgoSyntheticNamed(named) {
+			return fmt.Sprintf("has CGo pointer type %s with no bridge ownership policy", typ.String())
+		}
 		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isDuration(named) && !isBigInt(named) && !b.isDartOpaque(named) && !b.isStreamSink(named) {
 			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 				// *Struct is always bridgeable: either an optional value or a
@@ -648,10 +695,19 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		}
 		return b.fieldTranslateBlocker(elem, seen)
 	case *types.Slice:
+		if containsCgoSyntheticType(typ.Elem(), map[types.Type]bool{}) {
+			return fmt.Sprintf("has slice element type %s from CGo", typ.Elem())
+		}
 		return b.fieldTranslateBlocker(typ.Elem(), seen)
 	case *types.Array:
+		if containsCgoSyntheticType(typ.Elem(), map[types.Type]bool{}) {
+			return fmt.Sprintf("has array element type %s from CGo", typ.Elem())
+		}
 		return b.fieldTranslateBlocker(typ.Elem(), seen)
 	case *types.Map:
+		if containsCgoSyntheticType(typ, map[types.Type]bool{}) {
+			return "has a map containing package-private CGo types"
+		}
 		if blocker := b.fieldTranslateBlocker(typ.Key(), seen); blocker != "" {
 			return blocker
 		}
@@ -762,6 +818,9 @@ func (b *builder) mapCallback(original types.Type, signature *types.Signature) (
 	if cached := b.cachedType(original); cached != nil {
 		return cached, nil
 	}
+	if containsCgoSyntheticType(signature, map[types.Type]bool{}) {
+		return nil, errors.New("callback signatures cannot directly contain package-private CGo types; expose exported Go wrapper types")
+	}
 	if signature.TypeParams() != nil && signature.TypeParams().Len() != 0 {
 		return nil, errors.New("generic function types are not supported")
 	}
@@ -824,6 +883,9 @@ func (b *builder) mapCallback(original types.Type, signature *types.Signature) (
 func (b *builder) mapChannelStream(original types.Type, channel *types.Chan) (*wireType, error) {
 	if cached := b.cachedType(original); cached != nil {
 		return cached, nil
+	}
+	if containsCgoSyntheticType(channel.Elem(), map[types.Type]bool{}) {
+		return nil, errors.New("stream elements cannot directly use package-private CGo types; expose an exported Go wrapper type")
 	}
 	if channel.Dir() != types.SendOnly {
 		return nil, errors.New("only send-only channels (chan<- T) can be bridged as a stream")
@@ -1348,6 +1410,49 @@ func containsStreamSink(typ *wireType, seen map[int]bool) bool {
 func isNamed(named *types.Named, packagePath, name string) bool {
 	return named != nil && named.Obj() != nil && named.Obj().Pkg() != nil &&
 		named.Obj().Pkg().Path() == packagePath && named.Obj().Name() == name
+}
+
+// isCgoSyntheticNamed identifies the package-private named types synthesized
+// by cmd/cgo for selectors such as C.int, C.size_t, typedefs and enums.
+// These declarations are present in go/types but not in the user's source,
+// and another Go package cannot refer to their `_Ctype_*` names directly.
+func isCgoSyntheticNamed(named *types.Named) bool {
+	return named != nil && named.Obj() != nil && named.Obj().Pkg() != nil &&
+		strings.HasPrefix(named.Obj().Name(), "_Ctype_")
+}
+
+func containsCgoSyntheticType(typ types.Type, seen map[types.Type]bool) bool {
+	typ = types.Unalias(typ)
+	if seen[typ] {
+		return false
+	}
+	seen[typ] = true
+	switch typ := typ.(type) {
+	case *types.Named:
+		return isCgoSyntheticNamed(typ)
+	case *types.Pointer:
+		return containsCgoSyntheticType(typ.Elem(), seen)
+	case *types.Slice:
+		return containsCgoSyntheticType(typ.Elem(), seen)
+	case *types.Array:
+		return containsCgoSyntheticType(typ.Elem(), seen)
+	case *types.Map:
+		return containsCgoSyntheticType(typ.Key(), seen) || containsCgoSyntheticType(typ.Elem(), seen)
+	case *types.Signature:
+		for i := 0; i < typ.Params().Len(); i++ {
+			if containsCgoSyntheticType(typ.Params().At(i).Type(), seen) {
+				return true
+			}
+		}
+		for i := 0; i < typ.Results().Len(); i++ {
+			if containsCgoSyntheticType(typ.Results().At(i).Type(), seen) {
+				return true
+			}
+		}
+	case *types.Chan:
+		return containsCgoSyntheticType(typ.Elem(), seen)
+	}
+	return false
 }
 
 func validMapKey(typ *wireType) bool {

@@ -30,6 +30,135 @@ Run optional searches separately or explicitly handle the no-match exit code.
 
 ---
 
+## [ERR-20260730-004] wait-without-running-exec-cell
+
+**Logged**: 2026-07-30T07:46:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The wait tool was called with a placeholder cell id even though no asynchronous exec cell existed.
+
+### Error
+```
+exec cell x not found
+```
+
+### Context
+- The failed waits occurred while switching from a completed generation command to parallel build commands.
+- No repository process or file was affected.
+
+### Suggested Fix
+Only call `wait` after an exec result explicitly returns `Script running with cell ID ...`; use an exec script with `Promise.all` for parallel shell commands.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+
+### Resolution
+- **Resolved**: 2026-07-30T07:46:00+08:00
+- **Notes**: Subsequent parallel build/analyze commands used one exec script with `Promise.all`.
+
+---
+
+## [ERR-20260730-003] cgo-smoke-rebuild-workdir
+
+**Logged**: 2026-07-30T07:44:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The post-regeneration CGo rebuild ran from the repository root instead of the smoke fixture's Go module.
+
+### Error
+```
+no Go files in D:\Projects\a\flutter-go-bridge-gokit
+```
+
+### Context
+- Generation completed successfully.
+- A chained command reused the generator command's repository-root working directory for `go build`.
+
+### Suggested Fix
+Run generation and module compilation as separate commands with explicit working directories.
+
+### Metadata
+- Reproducible: yes
+- Related Files: build/cgo_smoke/go/go.mod
+
+### Resolution
+- **Resolved**: 2026-07-30T07:44:00+08:00
+- **Notes**: Re-ran `go build` from `build/cgo_smoke/go`.
+
+---
+
+## [ERR-20260730-002] cgo-smoke-nullable-error-message
+
+**Logged**: 2026-07-30T07:43:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first CGo Dart smoke script treated `FgbPlatformException.message` as non-nullable.
+
+### Error
+```
+Method 'contains' cannot be called on 'String?' because it is potentially null.
+```
+
+### Context
+- Command: `dart run bin/smoke.dart cgo_smoke.dll`
+- The generated dynamic library had already built successfully.
+- The failure was in the ignored smoke harness, before loading the DLL.
+
+### Suggested Fix
+Use a null-aware assertion when checking generated platform exception messages.
+
+### Metadata
+- Reproducible: yes
+- Related Files: build/cgo_smoke/dart/bin/smoke.dart
+
+### Resolution
+- **Resolved**: 2026-07-30T07:43:00+08:00
+- **Notes**: Changed the assertion to `error.message?.contains(...) ?? false`.
+
+---
+
+## [ERR-20260730-001] powershell-temporary-go-module-newlines
+
+**Logged**: 2026-07-30T07:23:01+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+A PowerShell diagnostic created an invalid temporary `go.mod` because a single-quoted string preserved the literal `` `n `` characters.
+
+### Error
+```
+go.mod:1: usage: module module/path
+```
+
+### Context
+- The command used `Set-Content` with a single-quoted PowerShell string containing backtick newline escapes.
+- The diagnostic was outside the repository and did not affect project files.
+
+### Suggested Fix
+Prefer repository tests created with `apply_patch`; when a temporary PowerShell file is unavoidable, use a here-string or a double-quoted string and run the command from the temporary module directory.
+
+### Metadata
+- Reproducible: yes
+- Related Files: internal/generator/features_test.go
+
+### Resolution
+- **Resolved**: 2026-07-30T07:23:01+08:00
+- **Notes**: Switched the investigation to a permanent Go regression test instead of shell-authored fixture files.
+
+---
+
 ## [ERR-20260729-004] multi-file-special-type-patch
 
 **Logged**: 2026-07-29T00:00:00+08:00

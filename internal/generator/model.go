@@ -79,6 +79,15 @@ type unit struct {
 	GoPackageAliases map[string]string
 }
 
+func (u *unit) usesCgoScalars() bool {
+	for _, typ := range u.Types {
+		if typ != nil && typ.CgoScalar {
+			return true
+		}
+	}
+	return false
+}
+
 type goImportModel struct {
 	Alias string
 	Path  string
@@ -135,6 +144,10 @@ type callModel struct {
 	// Overrides marks a method that shadows one promoted from an embedded
 	// struct, so the Dart declaration carries @override.
 	Overrides bool
+	// Reflective is used when a direct parameter or result is a cmd/cgo
+	// package-private scalar. Reflection converts the public transport scalar
+	// to/from the unnameable `_Ctype_*` type at the call boundary.
+	Reflective bool
 }
 
 // resultModel is one non-error result of a bridged call.
@@ -213,6 +226,9 @@ type wireType struct {
 	BasicKind     types.BasicKind
 	BitSize       int
 	Signed        bool
+	// CgoScalar marks a cmd/cgo `_Ctype_*` named scalar whose generated codec
+	// uses Original's ordinary Go basic type as its transport representation.
+	CgoScalar bool
 }
 
 // atomicModel maps a Go atomic wrapper to the value returned by Load and

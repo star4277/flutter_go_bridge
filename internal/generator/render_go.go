@@ -66,6 +66,10 @@ func renderGo(unit *unit) ([]byte, error) {
 	r.line("")
 	r.raw(strings.TrimSpace(goRuntimeSource))
 	r.line("")
+	if unit.usesCgoScalars() {
+		r.renderCgoReflectionHelpers()
+		r.line("")
+	}
 	if unit.NeedsMain {
 		r.line("// Required for c-shared and c-archive build modes.")
 		r.line("func main() {}")
@@ -106,6 +110,82 @@ func renderGo(unit *unit) ([]byte, error) {
 	// layout and future regenerated calls do not change symbol discovery.
 	r.renderCstDispatch()
 	return r.buffer.Bytes(), nil
+}
+
+func (r *goRenderer) renderCgoReflectionHelpers() {
+	r.raw(`func fgbReflectCall(function any, arguments []any) ([]reflect.Value, error) {
+	target := reflect.ValueOf(function)
+	if !target.IsValid() || target.Kind() != reflect.Func {
+		return nil, fmt.Errorf("CGo bridge target is not a function")
+	}
+	targetType := target.Type()
+	if len(arguments) != targetType.NumIn() {
+		return nil, fmt.Errorf("CGo bridge target wants %d arguments, got %d", targetType.NumIn(), len(arguments))
+	}
+	converted := make([]reflect.Value, len(arguments))
+	for index, argument := range arguments {
+		want := targetType.In(index)
+		if argument == nil {
+			switch want.Kind() {
+			case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+				converted[index] = reflect.Zero(want)
+				continue
+			default:
+				return nil, fmt.Errorf("argument %d is null, want %s", index, want)
+			}
+		}
+		value := reflect.ValueOf(argument)
+		switch {
+		case value.Type().AssignableTo(want):
+			converted[index] = value
+		case value.Type().ConvertibleTo(want):
+			converted[index] = value.Convert(want)
+		default:
+			return nil, fmt.Errorf("argument %d has type %s, want %s", index, value.Type(), want)
+		}
+	}
+	return target.Call(converted), nil
+}
+
+func fgbReflectResult[T any](value reflect.Value) (T, error) {
+	var zero T
+	if !value.IsValid() {
+		return zero, fmt.Errorf("invalid CGo result")
+	}
+	want := reflect.TypeFor[T]()
+	if value.Type().AssignableTo(want) {
+		return value.Interface().(T), nil
+	}
+	if value.Type().ConvertibleTo(want) {
+		return value.Convert(want).Interface().(T), nil
+	}
+	return zero, fmt.Errorf("CGo result has type %s, want %s", value.Type(), want)
+}
+
+func fgbReflectError(value reflect.Value) error {
+	if !value.IsValid() || ((value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) && value.IsNil()) {
+		return nil
+	}
+	result, _ := value.Interface().(error)
+	return result
+}
+
+func fgbSetCgoField(target any, name string, value any) error {
+	structure := reflect.ValueOf(target)
+	if !structure.IsValid() || structure.Kind() != reflect.Pointer || structure.IsNil() {
+		return fmt.Errorf("CGo field target must be a non-null pointer")
+	}
+	field := structure.Elem().FieldByName(name)
+	if !field.IsValid() || !field.CanSet() {
+		return fmt.Errorf("CGo field %s is not settable", name)
+	}
+	source := reflect.ValueOf(value)
+	if !source.IsValid() || !source.Type().ConvertibleTo(field.Type()) {
+		return fmt.Errorf("CGo field %s cannot accept %T", name, value)
+	}
+	field.Set(source.Convert(field.Type()))
+	return nil
+}`)
 }
 
 func (r *goRenderer) renderDecoder(typ *wireType) error {
@@ -233,6 +313,10 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		for _, field := range fields {
 			r.line("\tdecoded%s, err := fgbDecode%d(raw[%s], path+%s)", field.GoName, field.Type.ID, strconv.Quote(field.WireName), strconv.Quote("."+field.WireName))
 			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+			if field.Type.CgoScalar {
+				r.line("\tif err := fgbSetCgoField(&result, %s, decoded%s); err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: %%w\", path, err) }", strconv.Quote(field.GoName), field.GoName, goType)
+				continue
+			}
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
 		}
 		r.line("\treturn result, nil")
@@ -393,7 +477,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 				r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
 				continue
 			}
-			r.line("\tencoded%s, err := fgbEncode%d(value.%s)", field.GoName, field.Type.ID, field.GoName)
+			r.line("\tencoded%s, err := fgbEncode%d(%s)", field.GoName, field.Type.ID, r.goWireValue(field.Type, "value."+field.GoName))
 			r.line("\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 			r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
 		}
@@ -435,6 +519,13 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	}
 	r.line("}")
 	return nil
+}
+
+func (r *goRenderer) goWireValue(typ *wireType, expression string) string {
+	if typ != nil && typ.CgoScalar {
+		return fmt.Sprintf("%s(%s)", r.goType(typ.Original), expression)
+	}
+	return expression
 }
 
 // renderCallbackFactory synthesizes the Go func value handed to user code for
@@ -530,6 +621,10 @@ func (r *goRenderer) renderStreamSinkFactory(typ *wireType) {
 // Non-error results are bound to result<k>, every `error` result to goErr<j>;
 // any non-nil error fails the call, and several are reported together.
 func (r *goRenderer) renderGoCallStatement(call *callModel, indent, methodExpr string) {
+	if call.Reflective {
+		r.renderReflectiveGoCallStatement(call, indent, methodExpr)
+		return
+	}
 	assignments := make([]string, 0, len(call.Results)+call.ErrorCount)
 	nextResult, nextError := 0, 0
 	for _, isError := range call.resultShape() {
@@ -546,6 +641,42 @@ func (r *goRenderer) renderGoCallStatement(call *callModel, indent, methodExpr s
 		r.line("%s%s", indent, callExpr)
 	} else {
 		r.line("%s%s := %s", indent, strings.Join(assignments, ", "), callExpr)
+	}
+	switch call.ErrorCount {
+	case 0:
+	case 1:
+		r.line("%sif goErr0 != nil { return nil, fgbGoError(%s, goErr0) }", indent, methodExpr)
+	default:
+		r.line("%svar fgbErrs []any", indent)
+		for index := 0; index < call.ErrorCount; index++ {
+			r.line("%sif goErr%d != nil { fgbErrs = append(fgbErrs, goErr%d.Error()) }", indent, index, index)
+		}
+		r.line("%sif len(fgbErrs) != 0 { return nil, fgbGoErrors(%s, fgbErrs) }", indent, methodExpr)
+	}
+}
+
+func (r *goRenderer) renderReflectiveGoCallStatement(call *callModel, indent, methodExpr string) {
+	target := call.GoTarget
+	if call.Receiver != nil {
+		target = "receiver." + call.GoTarget
+	}
+	arguments := r.goCallArguments(call)
+	r.line("%sfgbValues, fgbReflectErr := fgbReflectCall(%s, []any{%s})", indent, target, strings.Join(arguments, ", "))
+	r.line("%sif fgbReflectErr != nil { return nil, fgbInvalidArguments(%s, fgbReflectErr) }", indent, methodExpr)
+	if len(call.resultShape()) == 0 {
+		r.line("%s_ = fgbValues", indent)
+	}
+	nextResult, nextError := 0, 0
+	for position, isError := range call.resultShape() {
+		if isError {
+			r.line("%sgoErr%d := fgbReflectError(fgbValues[%d])", indent, nextError, position)
+			nextError++
+			continue
+		}
+		result := call.Results[nextResult]
+		r.line("%sresult%d, err := fgbReflectResult[%s](fgbValues[%d])", indent, nextResult, r.goType(result.Type.Original), position)
+		r.line("%sif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: map[any]any{\"method\": %s}} }", indent, methodExpr)
+		nextResult++
 	}
 	switch call.ErrorCount {
 	case 0:
@@ -626,6 +757,10 @@ func (r *goRenderer) goCallExpression(call *callModel) string {
 	} else {
 		target = "receiver." + call.GoTarget
 	}
+	return target + "(" + strings.Join(r.goCallArguments(call), ", ") + ")"
+}
+
+func (r *goRenderer) goCallArguments(call *callModel) []string {
 	// call.Params holds only the parameters that cross the wire; a
 	// context.Context is supplied by the bridge and spliced back in here.
 	total := len(call.Params)
@@ -642,7 +777,7 @@ func (r *goRenderer) goCallExpression(call *callModel) string {
 		args = append(args, fmt.Sprintf("arg%d", next))
 		next++
 	}
-	return target + "(" + strings.Join(args, ", ") + ")"
+	return args
 }
 
 // renderStreamChannelSetup emits the bridge-owned plumbing for `chan<- T`

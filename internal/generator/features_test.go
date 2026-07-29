@@ -2,6 +2,7 @@ package generator
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,166 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/config"
 	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 )
+
+func TestGenerateCgoScalarTypes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/cgo-fixture\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+/*
+#include <stddef.h>
+#include <stdint.h>
+typedef int32_t score_t;
+*/
+import "C"
+
+type Stats struct {
+	Count C.int
+	Ratio C.double
+}
+
+func Add(left C.int, right C.longlong) C.longlong { return C.longlong(left) + right }
+func Scale(value C.float) C.double { return C.double(value) }
+func EchoSize(value C.size_t) C.size_t { return value }
+func EchoScore(value C.score_t) C.score_t { return value }
+func EchoStats(value Stats) Stats { return value }
+func Checked(value C.int) (C.int, error) { return value, nil }
+func Pair(value C.int) (C.int, C.double) { return value, C.double(value) }
+func Set(value C.int) {}
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resolved := config.Resolved{
+		BaseDir: dir, GoInput: inputDir,
+		GoOutput: filepath.Join(dir, "bridge_generated.go"), DartOutput: filepath.Join(dir, "dart", "bridge_generated.dart"),
+		LibraryName: "cgo_fixture", DartEntrypointClassName: "CgoBridge", StopOnError: true,
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(api, resolved); err != nil {
+		t.Fatal(err)
+	}
+
+	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"int add({required int left, required int right})",
+		"double scale({required double value})",
+		"BigInt echoSize({required BigInt value})",
+		"int echoScore({required int value})",
+		"final int count;", "final double ratio;",
+		"int checked({required int value})",
+		"(int, double) pair({required int value})",
+		"void set_({required int value})",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated CGo Dart API missing %q:\n%s", expected, apiDart)
+		}
+	}
+	goSource := mustRead(t, resolved.GoOutput)
+	if strings.Contains(goSource, "_Ctype_") {
+		t.Fatalf("generated bridge must not reference package-private cmd/cgo names:\n%s", goSource)
+	}
+	runtimeTest := `package main
+
+import "testing"
+
+func TestGeneratedCgoDispatch(t *testing.T) {
+	result, callErr := fgbDispatch(fgbMethodCall{Method: "Add", Arguments: []any{int32(4), int64(6)}})
+	if callErr != nil || result != int64(10) {
+		t.Fatalf("Add returned result=%#v error=%#v", result, callErr)
+	}
+	stats, callErr := fgbDispatch(fgbMethodCall{Method: "EchoStats", Arguments: []any{map[any]any{"count": int32(7), "ratio": 2.5}}})
+	if callErr != nil {
+		t.Fatal(callErr)
+	}
+	encoded := stats.(map[any]any)
+	if encoded["count"] != int32(7) || encoded["ratio"] != 2.5 {
+		t.Fatalf("EchoStats returned %#v", encoded)
+	}
+	paired, callErr := fgbDispatch(fgbMethodCall{Method: "Pair", Arguments: []any{int32(3)}})
+	if callErr != nil {
+		t.Fatal(callErr)
+	}
+	values := paired.([]any)
+	if values[0] != int32(3) || values[1] != float64(3) {
+		t.Fatalf("Pair returned %#v", values)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(dir, "bridge_generated_test.go"), []byte(runtimeTest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("go", "test", "./...")
+	command.Dir = dir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generated CGo bridge does not compile: %v\n%s", err, output)
+	}
+}
+
+func TestGenerateRejectsRawCgoPointers(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+/* #include <stdint.h> */
+import "C"
+
+func Raw(value *C.char) *C.char { return value }
+`)
+	if err == nil || !strings.Contains(err.Error(), "CGo pointer type") {
+		t.Fatalf("raw C pointers need an explicit ownership diagnostic, got %v", err)
+	}
+}
+
+func TestGenerateDirectMainPackageWithCgoScalar(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/direct-cgo\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte(`package main
+
+import "C"
+
+func Increment(value C.int) C.int { return value + 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: dir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := config.Resolved{
+		BaseDir: dir, GoInput: dir, GoOutput: filepath.Join(dir, "bridge_generated.go"),
+		DartOutput: filepath.Join(dir, "dart", "bridge_generated.dart"), LibraryName: "direct_cgo",
+		DartEntrypointClassName: "DirectCgoBridge", StopOnError: true,
+	}
+	if _, err := Generate(api, resolved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bridge_generated_test.go"), []byte(`package main
+
+import "testing"
+
+func TestIncrementDispatch(t *testing.T) {
+	result, callErr := fgbDispatch(fgbMethodCall{Method: "Increment", Arguments: []any{int32(8)}})
+	if callErr != nil || result != int32(9) { t.Fatalf("result=%#v error=%#v", result, callErr) }
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("go", "test", "./...")
+	command.Dir = dir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("direct CGo bridge does not compile or run: %v\n%s", err, output)
+	}
+}
 
 // generateFixture writes a one-file Go module, runs the full pipeline, and
 // returns the three generated sources plus warnings. setup callbacks may add

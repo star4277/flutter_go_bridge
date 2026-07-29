@@ -327,6 +327,7 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | `uint8`…`uint32` | `int`，生成范围检查 |
 | `uint64`, `uint`, `uintptr` | `BigInt` |
 | `float32`, `float64` | `double` |
+| CGo 标量（如 `C.char`、`C.int`、`C.size_t`、C typedef/enum） | 按 cmd/cgo 给出的底层位宽映射为 `int`、`BigInt` 或 `double`；不会把私有 `_Ctype_*` 名字泄漏到生成代码 |
 | `[]byte` | `Uint8List` |
 | `[]int32`, `[]int64`, `[]float64` | 对应 typed list |
 | 其他 slice/array | `List<T>` |
@@ -349,6 +350,8 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | `math/big.Int` | `BigInt` |
 | 最后一个 `error` 返回值 | `FgbPlatformException` |
 | `any` / `interface{}` | `Object?` |
+
+CGo 原始指针、C struct/union 以及直接包含 CGo 类型的 slice/array/map 不会被猜测性地序列化：它们的内存所有权、长度和释放方式无法从 Go 类型签名中可靠推导，生成器会要求先暴露一个导出的 Go 包装类型。值结构体中的 CGo 标量字段可以正常映射。
 
 ## 匿名字段与接口
 
