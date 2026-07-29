@@ -66,6 +66,21 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\tresult, err := time.Parse(time.RFC3339Nano, raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid time: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindInternetIP:
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null IP\", path) }", goType)
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tif raw == \"\" { return netip.Addr{}, nil }")
+		r.line("\tresult, err := netip.ParseAddr(raw)")
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid IP: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
+	case kindUUID:
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null UUID\", path) }", goType)
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tresult, err := uuid.FromString(raw)")
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid UUID: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
 	case kindPointer:
 		r.line("\tif value == nil { return nil, nil }")
 		inner := cstStorageFor(typ.Elem)
@@ -122,6 +137,12 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.line("\treturn %s(decoded), nil", goType)
+	case kindAtomic:
+		r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Atomic.Value.ID)
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tvar result %s", goType)
+		r.line("\tresult.Store(decoded)")
+		r.line("\treturn result, nil")
 	}
 	r.line("}")
 }
@@ -242,6 +263,10 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		}
 	case kindTime:
 		r.line("\treturn fgbDcoString(value.Format(time.RFC3339Nano))")
+	case kindInternetIP:
+		r.line("\treturn fgbDcoString(value.String())")
+	case kindUUID:
+		r.line("\treturn fgbDcoString(value.String())")
 	case kindPointer:
 		r.line("\tif value == nil { return fgbDcoNull() }")
 		r.line("\treturn fgbDcoEncode%d(*value)", typ.Elem.ID)
@@ -272,6 +297,8 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\treturn nil, fmt.Errorf(\"stream sinks cannot be sent to Dart\")")
 	case kindNamed:
 		r.line("return fgbDcoEncode%d(%s(value))", typ.Named.Underlying.ID, r.goType(typ.Named.Underlying.Original))
+	case kindAtomic:
+		r.line("return fgbDcoEncode%d(value.Load())", typ.Atomic.Value.ID)
 	default:
 		r.line("return nil, fmt.Errorf(\"DCO does not support %s\")", typ.Kind)
 	}

@@ -101,6 +101,12 @@ func CIdentifier(value string) string {
 	if _, found := cReserved[value]; found {
 		value = "field_" + value
 	}
+	// cgo exposes C struct members through Go selectors. A name such as
+	// `type` is valid in C but cannot appear in `value.type`, so the shared CST
+	// field spelling must also avoid Go keywords.
+	if _, found := goReserved[value]; found {
+		value += "_"
+	}
 	// The same identifier is emitted as a Dart FFI Struct field.  Keep it
 	// legal in both languages; a suffix preserves readability and avoids a
 	// second, generator-local name mapping that could drift from the C/Go side.
@@ -108,6 +114,14 @@ func CIdentifier(value string) string {
 		value += "_"
 	}
 	return value
+}
+
+var goReserved = map[string]struct{}{
+	"break": {}, "default": {}, "func": {}, "interface": {}, "select": {},
+	"case": {}, "defer": {}, "go": {}, "map": {}, "struct": {},
+	"chan": {}, "else": {}, "goto": {}, "package": {}, "switch": {},
+	"const": {}, "fallthrough": {}, "if": {}, "range": {}, "type": {},
+	"continue": {}, "for": {}, "import": {}, "return": {}, "var": {},
 }
 
 var cReserved = map[string]struct{}{

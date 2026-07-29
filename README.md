@@ -332,6 +332,10 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | 其他 slice/array | `List<T>` |
 | `map[K]V` | `Map<K, V>` |
 | 可翻译结构体（默认） | 对应源文件中的 Dart class：带字段、命名构造参数；指针字段可空 |
+| 第三方包中的可翻译结构体 | 自动生成可达的 Dart class（以及嵌套命名类型）到 `_generated.dart`；同名时自动加 Go 包名前缀 |
+| `sync/atomic.AtomicXXX` 及兼容的 atomic 包装类型 | 映射为 `Load()` 返回的 Dart 基础类型；只有 Go 指针形式才可空 |
+| `net/netip.Addr` | `InternetAddress`（Go 指针映射为 `InternetAddress?`） |
+| `github.com/gofrs/uuid/v5.UUID` | `UuidValue`（Go 指针映射为 `UuidValue?`）；生成命令会在缺失时运行 `flutter pub add uuid` |
 | 匿名嵌入结构体字段 | Dart `extends`，被提升字段扁平化传输，见「匿名字段与接口」 |
 | 命名接口 | `abstract interface class` + 实现方 `implements`，见「匿名字段与接口」 |
 | 普通 `*struct` 值 | 可空 Dart value class，字段继续参与 CST/DCO 序列化 |

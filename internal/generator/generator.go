@@ -14,8 +14,9 @@ import (
 )
 
 type Result struct {
-	Files    []string
-	Warnings []error
+	Files            []string
+	Warnings         []error
+	DartDependencies []string
 }
 
 func Generate(api *model.API, resolved config.Resolved) (Result, error) {
@@ -44,6 +45,10 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 	if err != nil {
 		return Result{Warnings: warnings}, err
 	}
+	dartDependencies := []string{}
+	if unit.UsesUUID {
+		dartDependencies = append(dartDependencies, "uuid")
+	}
 
 	goSource, err := renderGo(unit)
 	if err != nil {
@@ -64,7 +69,7 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 	for path, content := range dartFiles {
 		files[path] = content
 	}
-	result := Result{Warnings: warnings}
+	result := Result{Warnings: warnings, DartDependencies: dartDependencies}
 	for path, content := range files {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return result, err

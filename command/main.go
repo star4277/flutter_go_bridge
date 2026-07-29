@@ -10,9 +10,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/star4277/flutter_go_bridge/internal/config"
 	"github.com/star4277/flutter_go_bridge/internal/devrun"
@@ -395,12 +397,89 @@ func runGenerateFiles(command *cobra.Command, flags *generateFlags) ([]string, e
 	for _, path := range result.Files {
 		log.Printf("generated %s", path)
 	}
+	if err := ensureDartDependencies(resolved.BaseDir, result.DartDependencies); err != nil {
+		return nil, err
+	}
 	if resolved.DartFormat {
 		if err := formatDart(result.Files, resolved.DartFormatLineLength); err != nil {
 			log.Printf("warning: dart format skipped: %v", err)
 		}
 	}
 	return append([]string{supportPath}, result.Files...), nil
+}
+
+func ensureDartDependencies(projectDir string, dependencies []string) error {
+	if len(dependencies) == 0 {
+		return nil
+	}
+	pubspecPath := filepath.Join(projectDir, "pubspec.yaml")
+	raw, err := os.ReadFile(pubspecPath)
+	if err != nil {
+		return fmt.Errorf("read pubspec for generated Dart dependencies: %w", err)
+	}
+	var pubspec struct {
+		Dependencies map[string]any `yaml:"dependencies"`
+	}
+	if err := yaml.Unmarshal(raw, &pubspec); err != nil {
+		return fmt.Errorf("parse %s: %w", pubspecPath, err)
+	}
+	for _, dependency := range dependencies {
+		if _, exists := pubspec.Dependencies[dependency]; exists {
+			continue
+		}
+		name := "flutter"
+		args := []string{"pub", "add", dependency}
+		if _, lookErr := exec.LookPath(name); lookErr != nil {
+			if _, fvmErr := exec.LookPath("fvm"); fvmErr != nil {
+				return fmt.Errorf("generated Dart code requires package %q; neither flutter nor fvm was found to run pub add", dependency)
+			}
+			name = "fvm"
+			args = append([]string{"flutter"}, args...)
+		}
+		log.Printf("execute `%s %s` in %s", name, strings.Join(args, " "), projectDir)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		command := exec.CommandContext(ctx, name, args...)
+		command.Dir = projectDir
+		command.Stdout = os.Stdout
+		command.Stderr = os.Stderr
+		command.Env = append(os.Environ(), "DART_SUPPRESS_ANALYTICS=true", "CI=true")
+		runErr := command.Run()
+		cancel()
+		if runErr != nil {
+			// Pub may update pubspec before dependency resolution finishes. Treat
+			// that partial success as installed for generation purposes; the user
+			// can run pub get later if the package download itself was interrupted.
+			if declared, checkErr := dartDependencyDeclared(pubspecPath, dependency); checkErr == nil && declared {
+				log.Printf("warning: `%s %s` returned %v after adding %s to pubspec.yaml", name, strings.Join(args, " "), runErr, dependency)
+				continue
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("`%s %s` timed out", name, strings.Join(args, " "))
+			}
+			return fmt.Errorf("`%s %s` failed: %w", name, strings.Join(args, " "), runErr)
+		}
+		// Keep the in-memory view current when several dependencies are added.
+		if pubspec.Dependencies == nil {
+			pubspec.Dependencies = map[string]any{}
+		}
+		pubspec.Dependencies[dependency] = true
+	}
+	return nil
+}
+
+func dartDependencyDeclared(pubspecPath, dependency string) (bool, error) {
+	raw, err := os.ReadFile(pubspecPath)
+	if err != nil {
+		return false, err
+	}
+	var pubspec struct {
+		Dependencies map[string]any `yaml:"dependencies"`
+	}
+	if err := yaml.Unmarshal(raw, &pubspec); err != nil {
+		return false, err
+	}
+	_, exists := pubspec.Dependencies[dependency]
+	return exists, nil
 }
 
 func (flags *generateFlags) toConfig(command *cobra.Command) config.Config {

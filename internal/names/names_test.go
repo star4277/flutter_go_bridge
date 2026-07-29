@@ -19,3 +19,12 @@ func TestLibraryBase(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestCIdentifierAvoidsGoKeywordsUsedByCgoSelectors(t *testing.T) {
+	if got := CIdentifier("type"); got != "type_" {
+		t.Fatalf("got %q, want type_", got)
+	}
+	if got := CIdentifier("struct"); got != "field_struct" {
+		t.Fatalf("got %q, want field_struct", got)
+	}
+}

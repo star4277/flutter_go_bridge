@@ -151,6 +151,205 @@ func Fallback(value map[string]int) map[string]int { return value }
 	}
 }
 
+func TestGenerateExternalRepositoryStructTypes(t *testing.T) {
+	dir := t.TempDir()
+	rootModule := `module example.com/fixture
+
+go 1.24
+
+require example.com/thirdparty v0.0.0
+
+replace example.com/thirdparty => ./thirdparty
+`
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(rootModule), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	externalDir := filepath.Join(dir, "thirdparty")
+	if err := os.MkdirAll(filepath.Join(externalDir, "models"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(externalDir, "atomic"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "go.mod"), []byte("module example.com/thirdparty\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	atomicSource := `package atomic
+
+type Int64 struct { value int64 }
+
+func (value *Int64) Load() int64 { return value.value }
+func (value *Int64) Store(next int64) { value.value = next }
+`
+	if err := os.WriteFile(filepath.Join(externalDir, "atomic", "atomic.go"), []byte(atomicSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	externalSource := "package models\n\nimport \"example.com/thirdparty/atomic\"\n\n" +
+		"type Status string\n\n" +
+		"type Address struct {\n\tCity string\n}\n\n" +
+		"type Profile struct {\n" +
+		"\tID int64\n\tName string `json:\"display_name\"`\n" +
+		"\tAddress *Address\n\tStatus Status\n" +
+		"\tUpload atomic.Int64\n\tOptional *atomic.Int64\n\tsecret string\n}\n"
+	if err := os.WriteFile(filepath.Join(externalDir, "models", "models.go"), []byte(externalSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	apiSource := `package api
+
+import "example.com/thirdparty/models"
+
+type Profile struct {
+	Local bool
+}
+
+func LocalProfile() Profile { return Profile{} }
+
+func LoadProfile() models.Profile { return models.Profile{} }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(apiSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goOutput := filepath.Join(dir, "bridge_generated.go")
+	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
+		LibraryName: "fixture", DartEntrypointClassName: "FixtureBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"Profile localProfile()", "ModelsProfile loadProfile()", `import "../_generated.dart";`,
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated Dart API missing %q:\n%s", expected, apiDart)
+		}
+	}
+	externalDart := mustRead(t, filepath.Join(dir, "dart", "_generated.dart"))
+	for _, expected := range []string{
+		"final class ModelsProfile", "final int id;", "final String displayName;",
+		"final Address? address;", "final Status status;", "final class Address",
+		"extension type const Status(String value)", "final int upload;", "final int? optional;",
+	} {
+		if !strings.Contains(externalDart, expected) {
+			t.Fatalf("generated external Dart types missing %q:\n%s", expected, externalDart)
+		}
+	}
+	if strings.Contains(externalDart, "secret") {
+		t.Fatalf("unexported external fields must not be generated:\n%s", externalDart)
+	}
+	if strings.Contains(externalDart, "class Int64") || strings.Contains(externalDart, "AtomicInt64") {
+		t.Fatalf("atomic wrappers must map directly to their loaded scalar type:\n%s", externalDart)
+	}
+	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		`fgbext0 "example.com/thirdparty/models"`, `"example.com/thirdparty/atomic"`,
+		"fgbext0.Profile", "fgbext0.Address", "fgbext0.Status", ".Load()", ".Store(decoded)",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go bridge missing %q:\n%s", expected, goSource)
+		}
+	}
+}
+
+func TestGenerateSpecialExternalValueMappings(t *testing.T) {
+	dir := t.TempDir()
+	module := "module example.com/special\n\ngo 1.24\n\nrequire github.com/gofrs/uuid/v5 v5.0.0\n\nreplace github.com/gofrs/uuid/v5 => ./uuid\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uuidDir := filepath.Join(dir, "uuid")
+	if err := os.MkdirAll(uuidDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(uuidDir, "go.mod"), []byte("module github.com/gofrs/uuid/v5\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	uuidSource := `package uuid
+
+type UUID [16]byte
+
+func FromString(string) (UUID, error) { return UUID{}, nil }
+func (UUID) String() string { return "" }
+`
+	if err := os.WriteFile(filepath.Join(uuidDir, "uuid.go"), []byte(uuidSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+import (
+	"github.com/gofrs/uuid/v5"
+	"net/netip"
+)
+
+type Values struct {
+	IP netip.Addr
+	ID uuid.UUID
+	OptionalIP *netip.Addr
+	OptionalID *uuid.UUID
+}
+
+func Load() Values { return Values{} }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: filepath.Join(dir, "bridge_generated.go"),
+		DartOutput:  filepath.Join(dir, "dart", "bridge_generated.dart"),
+		LibraryName: "special", DartEntrypointClassName: "SpecialBridge", StopOnError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.DartDependencies) != 1 || result.DartDependencies[0] != "uuid" {
+		t.Fatalf("got Dart dependencies %#v, want [uuid]", result.DartDependencies)
+	}
+	dart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"final InternetAddress ip;", "final UuidValue id;", "final InternetAddress? optionalIp;", "final UuidValue? optionalId;",
+		"import 'dart:io';", "import 'package:uuid/uuid.dart';", `import "../bridge_generated.dart";`,
+	} {
+		if !strings.Contains(dart, expected) {
+			t.Fatalf("special external mapping missing %q:\n%s", expected, dart)
+		}
+	}
+	central := mustRead(t, filepath.Join(dir, "dart", "bridge_generated.dart"))
+	for _, expected := range []string{"import 'package:uuid/uuid.dart';", "UuidValue.fromString"} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("public bridge missing %q:\n%s", expected, central)
+		}
+	}
+	if strings.Contains(central, "typedef UUID") {
+		t.Fatalf("the generator must use uuid's native UuidValue type directly:\n%s", central)
+	}
+	goSource := mustRead(t, filepath.Join(dir, "bridge_generated.go"))
+	if count := strings.Count(goSource, `"net/netip"`); count != 1 {
+		t.Fatalf("generated Go bridge should import net/netip exactly once, got %d:\n%s", count, goSource)
+	}
+	if count := strings.Count(goSource, `"github.com/gofrs/uuid/v5"`); count != 1 {
+		t.Fatalf("generated Go bridge should import gofrs/uuid exactly once, got %d:\n%s", count, goSource)
+	}
+}
+
 func TestGenerateCallModeEmitsExactlyOneDartEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/modes\n\ngo 1.24\n"), 0o644); err != nil {
