@@ -36,7 +36,7 @@ func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
 
 	switch t.Kind {
 	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindBigInt,
-		kindTime, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
+		kindTime, kindInternetIP, kindUUID, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
 		kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		return true
 	case kindPointer:
@@ -52,6 +52,8 @@ func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
 		return true
 	case kindNamed:
 		return t.Named.Underlying.supportsCodec(mode, seen)
+	case kindAtomic:
+		return t.Atomic.Value.supportsCodec(mode, seen)
 	case kindMap, kindAny, kindInterface:
 		// Dart_CObject has no map representation, a C struct cannot safely
 		// represent arbitrary dynamic values, and an interface is a tagged

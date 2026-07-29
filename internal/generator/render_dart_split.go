@@ -133,6 +133,9 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 	centralRenderer.line("import 'dart:io';")
 	centralRenderer.line("import 'dart:isolate';")
 	centralRenderer.line("import 'dart:typed_data';")
+	if unit.UsesUUID {
+		centralRenderer.line("import 'package:uuid/uuid.dart';")
+	}
 	for _, key := range orderedKeys {
 		relative := paths[key]
 		centralRenderer.line("import %s;", strconv.Quote(filepath.ToSlash(relative)))
@@ -185,7 +188,13 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 			renderer.line("import %s;", dartImportPath(sourcePath, filepath.Join(root, filepath.FromSlash(paths[other]))))
 		}
 		renderer.line("import 'dart:async';")
+		if unit.UsesInternetIP {
+			renderer.line("import 'dart:io';")
+		}
 		renderer.line("import 'dart:typed_data';")
+		if unit.UsesUUID {
+			renderer.line("import 'package:uuid/uuid.dart';")
+		}
 		renderer.line("")
 		group := groups[key]
 		for _, declaration := range group.Interfaces {
@@ -667,6 +676,12 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindTime:
 		r.line("  if (value is! String) throw FormatException('$path: expected RFC3339 String');")
 		r.line("  return DateTime.parse(value);")
+	case kindInternetIP:
+		r.line("  if (value is! String) throw FormatException('$path: expected InternetAddress string');")
+		r.line("  return InternetAddress(value);")
+	case kindUUID:
+		r.line("  if (value is! String) throw FormatException('$path: expected UUID string');")
+		r.line("  return UuidValue.fromString(value);")
 	case kindAny:
 		r.line("  return value;")
 	case kindPointer:
@@ -747,6 +762,8 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  throw FormatException('$path: unknown %s implementation ${value[0]}');", typ.Interface.GoName)
 	case kindNamed:
 		r.line("  return %s(fgbDecode%d(value, bridge, path));", typ.Named.DartName, typ.Named.Underlying.ID)
+	case kindAtomic:
+		r.line("  return fgbDecode%d(value, bridge, path);", typ.Atomic.Value.ID)
 	default:
 		return fmt.Errorf("no Dart decoder for %s", typ.Kind)
 	}
@@ -775,6 +792,10 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		}
 	case kindTime:
 		r.line("  return value.toIso8601String();")
+	case kindInternetIP:
+		r.line("  return value.address;")
+	case kindUUID:
+		r.line("  return value.uuid;")
 	case kindPointer:
 		r.line("  if (value == null) return null;")
 		r.line("  return fgbEncode%d(value, bridge, path);", typ.Elem.ID)
@@ -813,6 +834,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.renderCallbackRegistration(typ, "bridge")
 	case kindNamed:
 		r.line("  return fgbEncode%d(value.value, bridge, path);", typ.Named.Underlying.ID)
+	case kindAtomic:
+		r.line("  return fgbEncode%d(value, bridge, path);", typ.Atomic.Value.ID)
 	default:
 		return fmt.Errorf("no Dart encoder for %s", typ.Kind)
 	}

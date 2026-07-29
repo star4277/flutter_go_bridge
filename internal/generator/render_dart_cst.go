@@ -50,6 +50,10 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstStringBody("value.toRadixString(16)")
 	case kindTime:
 		r.renderCstStringBody("value.toIso8601String()")
+	case kindInternetIP:
+		r.renderCstStringBody("value.address")
+	case kindUUID:
+		r.renderCstStringBody("value.uuid")
 	case kindPointer:
 		r.line("  if (value == null) return ffi.nullptr;")
 		inner := cstStorageFor(typ.Elem)
@@ -88,6 +92,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCallbackRegistration(typ, "arena.bridge")
 	case kindNamed:
 		r.line("  return fgbCstEncode%d(value.value, arena, path);", typ.Named.Underlying.ID)
+	case kindAtomic:
+		r.line("  return fgbCstEncode%d(value, arena, path);", typ.Atomic.Value.ID)
 	default:
 		// Unsupported types are intentionally omitted by renderCstEncoders.
 		r.line("  throw UnsupportedError('CST does not support %s');", typ.Kind)
@@ -105,6 +111,9 @@ func cstDartEncoderReturnType(typ *wireType) string {
 	}
 	if typ.Kind == kindNamed && typ.Named != nil {
 		return cstDartEncoderReturnType(typ.Named.Underlying)
+	}
+	if typ.Kind == kindAtomic && typ.Atomic != nil {
+		return cstDartEncoderReturnType(typ.Atomic.Value)
 	}
 	storage := cstStorageFor(typ)
 	if !storage.Scalar {

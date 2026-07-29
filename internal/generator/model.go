@@ -16,6 +16,8 @@ const (
 	kindFloat       typeKind = "float"
 	kindBigInt      typeKind = "big_int"
 	kindTime        typeKind = "time"
+	kindInternetIP  typeKind = "internet_ip"
+	kindUUID        typeKind = "uuid"
 	kindAny         typeKind = "any"
 	kindPointer     typeKind = "pointer"
 	kindSlice       typeKind = "slice"
@@ -28,6 +30,7 @@ const (
 	kindStreamSink  typeKind = "stream_sink"
 	kindInterface   typeKind = "interface"
 	kindNamed       typeKind = "named"
+	kindAtomic      typeKind = "atomic"
 	kindBytes       typeKind = "bytes"
 	kindInt32List   typeKind = "int32_list"
 	kindInt64List   typeKind = "int64_list"
@@ -57,6 +60,8 @@ type unit struct {
 	Named          []*namedModel
 	Interfaces     []*interfaceModel
 	UsesTime       bool
+	UsesInternetIP bool
+	UsesUUID       bool
 	UsesBigInt     bool
 	UsesDartOpaque bool
 	UsesStreamSink bool
@@ -65,6 +70,17 @@ type unit struct {
 	UsesRuntimePackage bool
 	// SupportPackagePath is the import path of the generated support package.
 	SupportPackagePath string
+	// ExternalImports are packages that own reachable named types outside the
+	// input package. Generated codec signatures mention those concrete Go
+	// types, so the bridge source must import them explicitly.
+	ExternalImports []goImportModel
+	// GoPackageAliases is the renderer lookup paired with ExternalImports.
+	GoPackageAliases map[string]string
+}
+
+type goImportModel struct {
+	Alias string
+	Path  string
 }
 
 // codecMode mirrors flutter_rust_bridge's directional codec model. The
@@ -182,6 +198,7 @@ type wireType struct {
 	Key      *wireType
 	Length   int64
 	Named    *namedModel
+	Atomic   *atomicModel
 	Struct   *structModel
 	Opaque   *opaqueModel
 	Callback *callbackModel
@@ -195,6 +212,13 @@ type wireType struct {
 	BasicKind     types.BasicKind
 	BitSize       int
 	Signed        bool
+}
+
+// atomicModel maps a Go atomic wrapper to the value returned by Load and
+// accepted by Store. Dart sees only Value's type; pointer nullability remains
+// represented by the ordinary kindPointer wrapper.
+type atomicModel struct {
+	Value *wireType
 }
 
 // nilableWithoutPointer reports whether the Go type can be nil on its own,

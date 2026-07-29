@@ -42,6 +42,12 @@ func renderGo(unit *unit) ([]byte, error) {
 	if unit.UsesTime {
 		imports = append(imports, "time")
 	}
+	if unit.UsesInternetIP {
+		imports = append(imports, "net/netip")
+	}
+	if unit.UsesUUID {
+		imports = append(imports, "github.com/gofrs/uuid/v5")
+	}
 	for _, item := range imports {
 		r.line("\t%q", item)
 	}
@@ -52,6 +58,9 @@ func renderGo(unit *unit) ([]byte, error) {
 	}
 	if !unit.Direct {
 		r.line("\tapi %q", unit.PackagePath)
+	}
+	for _, item := range unit.ExternalImports {
+		r.line("\t%s %q", item.Alias, item.Path)
 	}
 	r.line(")")
 	r.line("")
@@ -133,6 +142,19 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tresult, err := time.Parse(time.RFC3339Nano, raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid time: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindInternetIP:
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"IP string\", value) }", goType)
+		r.line("\tif raw == \"\" { return netip.Addr{}, nil }")
+		r.line("\tresult, err := netip.ParseAddr(raw)")
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid IP: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
+	case kindUUID:
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"UUID string\", value) }", goType)
+		r.line("\tresult, err := uuid.FromString(raw)")
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid UUID: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
 	case kindAny:
 		r.line("\treturn value, nil")
 	case kindPointer:
@@ -196,10 +218,15 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\t}")
 		r.line("\treturn result, nil")
 	case kindStruct:
-		r.line("\traw, ok := value.(map[any]any)")
+		fields := typ.Struct.allFields()
+		if len(fields) == 0 {
+			r.line("\t_, ok := value.(map[any]any)")
+		} else {
+			r.line("\traw, ok := value.(map[any]any)")
+		}
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Map\", value) }", goType)
 		r.line("\tvar result %s", goType)
-		for _, field := range typ.Struct.allFields() {
+		for _, field := range fields {
 			r.line("\tdecoded%s, err := fgbDecode%d(raw[%s], path+%s)", field.GoName, field.Type.ID, strconv.Quote(field.WireName), strconv.Quote("."+field.WireName))
 			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
@@ -253,6 +280,12 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.line("\treturn %s(decoded), nil", goType)
+	case kindAtomic:
+		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Atomic.Value.ID)
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tvar result %s", goType)
+		r.line("\tresult.Store(decoded)")
+		r.line("\treturn result, nil")
 	default:
 		return fmt.Errorf("no Go decoder for %s", typ.Kind)
 	}
@@ -295,6 +328,12 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.renderBigIntEncoder(typ)
 	case kindTime:
 		r.line("\treturn value.Format(time.RFC3339Nano), nil")
+	case kindInternetIP:
+		// netip.Addr.String returns an empty string for the invalid zero value,
+		// which InternetAddress represents without changing pointer nullability.
+		r.line("\treturn value.String(), nil")
+	case kindUUID:
+		r.line("\treturn value.String(), nil")
 	case kindAny:
 		r.line("\treturn fgbNormalize(value, 0)")
 	case kindPointer:
@@ -383,6 +422,8 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindNamed:
 		underlyingGo := r.goType(typ.Named.Underlying.Original)
 		r.line("\treturn fgbEncode%d(%s(value))", typ.Named.Underlying.ID, underlyingGo)
+	case kindAtomic:
+		r.line("\treturn fgbEncode%d(value.Load())", typ.Atomic.Value.ID)
 	default:
 		return fmt.Errorf("no Go encoder for %s", typ.Kind)
 	}
@@ -744,7 +785,12 @@ func (r *goRenderer) goType(typ types.Type) string {
 			return "big"
 		case r.unit.SupportPackagePath:
 			return "fgbrt"
+		case "sync/atomic":
+			return "atomic"
 		default:
+			if alias := r.unit.GoPackageAliases[pkg.Path()]; alias != "" {
+				return alias
+			}
 			return pkg.Name()
 		}
 	})

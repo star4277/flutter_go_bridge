@@ -37,6 +37,11 @@ type builder struct {
 	structModels    map[*types.Named]*structModel
 	opaqueModels    map[*types.Named]*opaqueModel
 	interfaceModels map[*types.Named]*interfaceModel
+	// Dart has one library namespace across the mutually importing generated
+	// source files. Reserve input-package names up front, then disambiguate
+	// reachable external declarations without renaming the user's own types.
+	dartTypeNames map[string]*types.Named
+	dartNames     map[*types.Named]string
 	// supportImportPath is the import path of the generated support package
 	// for this project; empty disables DartOpaque/StreamSink detection.
 	supportImportPath string
@@ -56,17 +61,18 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		}
 	}
 	result := &unit{
-		PackagePath:  api.Package.PkgPath,
-		PackageName:  api.Package.Name,
-		InputDir:     api.InputDir,
-		MirrorRoot:   api.InputDir,
-		SourceFiles:  append([]string(nil), api.SourceFiles...),
-		Direct:       direct,
-		NeedsMain:    needsMain,
-		LibraryName:  resolved.LibraryName,
-		ClassName:    names.UpperCamel(resolved.DartEntrypointClassName),
-		GoPreamble:   resolved.GoPreamble,
-		DartPreamble: resolved.DartPreamble,
+		PackagePath:      api.Package.PkgPath,
+		PackageName:      api.Package.Name,
+		InputDir:         api.InputDir,
+		MirrorRoot:       api.InputDir,
+		SourceFiles:      append([]string(nil), api.SourceFiles...),
+		Direct:           direct,
+		NeedsMain:        needsMain,
+		LibraryName:      resolved.LibraryName,
+		ClassName:        names.UpperCamel(resolved.DartEntrypointClassName),
+		GoPreamble:       resolved.GoPreamble,
+		DartPreamble:     resolved.DartPreamble,
+		GoPackageAliases: map[string]string{},
 	}
 	// Mirror the Dart tree from the Go module root so a package directory such
 	// as api/ shows up as api/ on the Dart side too.
@@ -80,6 +86,13 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		namedModels:   map[*types.Named]*namedModel{}, structModels: map[*types.Named]*structModel{},
 		opaqueModels:    map[*types.Named]*opaqueModel{},
 		interfaceModels: map[*types.Named]*interfaceModel{},
+		dartTypeNames:   map[string]*types.Named{},
+		dartNames:       map[*types.Named]string{},
+	}
+	for _, declaration := range api.Types {
+		if declaration != nil && declaration.Named != nil {
+			b.dartTypeNames[declaration.DartName] = declaration.Named
+		}
 	}
 	if module := api.Package.Module; module != nil {
 		b.supportImportPath = supportPackageImportPath(module.Path, module.Dir, SupportPackageDir(resolved))
@@ -337,8 +350,8 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 				b.unit.UsesBigInt = true
 				return b.newSimpleType(original, kindBigInt, "BigInt?"), nil
 			}
-			if _, ok := named.Underlying().(*types.Struct); ok && !b.isDartOpaque(named) && !isTime(named) {
-				if err := b.ensureNamedFromInput(named); err != nil {
+			if _, ok := named.Underlying().(*types.Struct); ok && !b.isDartOpaque(named) && !isTime(named) && !isInternetIP(named) {
+				if err := b.ensureNamedSupported(named); err != nil {
 					return nil, err
 				}
 				if b.classifyStruct(named) == classOpaque {
@@ -414,6 +427,14 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			b.unit.UsesBigInt = true
 			return b.newSimpleType(original, kindBigInt, "BigInt"), nil
 		}
+		if isInternetIP(typ) {
+			b.unit.UsesInternetIP = true
+			return b.newSimpleType(original, kindInternetIP, "InternetAddress"), nil
+		}
+		if isUUID(typ) {
+			b.unit.UsesUUID = true
+			return b.newSimpleType(original, kindUUID, "UuidValue"), nil
+		}
 		if b.isDartOpaque(typ) {
 			b.unit.UsesDartOpaque = true
 			b.unit.UsesRuntimePackage = true
@@ -422,7 +443,10 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		if b.isStreamSink(typ) {
 			return b.mapStreamSink(original, typ)
 		}
-		if err := b.ensureNamedFromInput(typ); err != nil {
+		if valueType, ok := atomicValueType(typ); ok {
+			return b.mapAtomic(original, typ, valueType)
+		}
+		if err := b.ensureNamedSupported(typ); err != nil {
 			return nil, err
 		}
 		if interfaceType, isInterface := typ.Underlying().(*types.Interface); isInterface {
@@ -441,6 +465,19 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 	default:
 		return nil, fmt.Errorf("unsupported Go type %T (%s)", original, original.String())
 	}
+}
+
+func (b *builder) mapAtomic(original types.Type, named *types.Named, valueType types.Type) (*wireType, error) {
+	if named.Obj() != nil && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() != "sync/atomic" {
+		b.registerExternalPackage(named.Obj().Pkg())
+	}
+	value, err := b.mapType(valueType)
+	if err != nil {
+		return nil, fmt.Errorf("atomic %s value: %w", named.Obj().Name(), err)
+	}
+	result := b.newType(original, kindAtomic, value.DartType)
+	result.Atomic = &atomicModel{Value: value}
+	return result, nil
 }
 
 func (b *builder) mapBasic(original types.Type, basic *types.Basic) (*wireType, error) {
@@ -497,6 +534,7 @@ func (b *builder) mapNamed(original types.Type, named *types.Named) (*wireType, 
 	if decl != nil {
 		dartName, docs = decl.DartName, decl.Docs
 	}
+	dartName = b.dartNameFor(named, dartName)
 	result := b.newType(original, kindNamed, dartName)
 	sourceFile := ""
 	if decl != nil {
@@ -599,9 +637,6 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		}
 		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isBigInt(named) && !b.isDartOpaque(named) && !b.isStreamSink(named) {
 			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
-				if external := b.externalTypeBlocker(named); external != "" {
-					return external
-				}
 				// *Struct is always bridgeable: either an optional value or a
 				// GoOpaque handle.
 				return ""
@@ -626,12 +661,12 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		if isTime(typ) || isBigInt(typ) || b.isDartOpaque(typ) || b.isStreamSink(typ) {
 			return ""
 		}
-		if external := b.externalTypeBlocker(typ); external != "" {
-			return external
-		}
 		if declared, isInterface := typ.Underlying().(*types.Interface); isInterface {
 			if declared.Empty() {
 				return ""
+			}
+			if typ.Obj() != nil && typ.Obj().Pkg() != nil && typ.Obj().Pkg() != b.api.Package.Types {
+				return fmt.Sprintf("uses external interface %s.%s", typ.Obj().Pkg().Path(), typ.Obj().Name())
 			}
 			// A named interface from the input package is bridged as a Dart
 			// interface, so a field of that type is translatable.
@@ -651,13 +686,6 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 	default:
 		return fmt.Sprintf("has unsupported type %s", typ.String())
 	}
-}
-
-func (b *builder) externalTypeBlocker(named *types.Named) string {
-	if named.Obj() == nil || named.Obj().Pkg() == nil || named.Obj().Pkg() == b.api.Package.Types {
-		return ""
-	}
-	return fmt.Sprintf("uses external type %s.%s", named.Obj().Pkg().Path(), named.Obj().Name())
 }
 
 // skipStructField mirrors the shared exclusion rules: blank/unexported fields
@@ -842,6 +870,7 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 	if decl != nil {
 		dartName, docs = decl.DartName, decl.Docs
 	}
+	dartName = b.dartNameFor(named, dartName)
 	result := b.newType(original, kindStruct, dartName)
 	sourceFile := ""
 	if decl != nil {
@@ -947,6 +976,7 @@ func (b *builder) mapInterface(original types.Type, named *types.Named, declared
 	if decl != nil {
 		dartName, docs, sourceFile = decl.DartName, decl.Docs, decl.SourceFile
 	}
+	dartName = b.dartNameFor(named, dartName)
 	result := b.newType(original, kindInterface, dartName)
 	declaration := &interfaceModel{
 		GoName: named.Obj().Name(), DartName: dartName, Docs: docs, SourceFile: sourceFile, Type: result,
@@ -1097,6 +1127,7 @@ func (b *builder) mapOpaque(original types.Type, named *types.Named) (*wireType,
 	if decl != nil {
 		dartName, docs = decl.DartName, decl.Docs
 	}
+	dartName = b.dartNameFor(named, dartName)
 	result := b.newType(original, kindOpaque, dartName+"?")
 	sourceFile := ""
 	if decl != nil {
@@ -1140,17 +1171,63 @@ func (b *builder) cachedType(original types.Type) *wireType {
 	return nil
 }
 
-func (b *builder) ensureNamedFromInput(named *types.Named) error {
+func (b *builder) ensureNamedSupported(named *types.Named) error {
 	if named.Obj() == nil || named.Obj().Pkg() == nil {
 		return nil
 	}
 	if named.Obj().Pkg() != b.api.Package.Types {
-		return fmt.Errorf("external named type %s.%s is not supported yet (time.Time, math/big.Int, and fgb.DartOpaque are supported)", named.Obj().Pkg().Path(), named.Obj().Name())
+		if declared, ok := named.Underlying().(*types.Interface); ok && !declared.Empty() {
+			return fmt.Errorf("external named interface %s.%s cannot be bridged automatically", named.Obj().Pkg().Path(), named.Obj().Name())
+		}
+		b.registerExternalPackage(named.Obj().Pkg())
+		return nil
 	}
 	if b.api.IgnoredTypes[named.Obj().Name()] {
 		return fmt.Errorf("type %s is marked fgb(ignore) but is used by the bridged API", named.Obj().Name())
 	}
 	return nil
+}
+
+// registerExternalPackage gives every dependency package a generated alias.
+// Generated aliases avoid collisions with the runtime imports and with two Go
+// packages that happen to share the same declared package name.
+func (b *builder) registerExternalPackage(pkg *types.Package) {
+	if pkg == nil || pkg.Path() == "" || pkg == b.api.Package.Types {
+		return
+	}
+	if _, exists := b.unit.GoPackageAliases[pkg.Path()]; exists {
+		return
+	}
+	alias := fmt.Sprintf("fgbext%d", len(b.unit.ExternalImports))
+	b.unit.GoPackageAliases[pkg.Path()] = alias
+	b.unit.ExternalImports = append(b.unit.ExternalImports, goImportModel{Alias: alias, Path: pkg.Path()})
+}
+
+// dartNameFor keeps the Go declaration name when it is unambiguous. Input
+// package declarations are reserved before mapping starts, so an external
+// collision receives a package-prefixed name such as models.User -> ModelsUser.
+func (b *builder) dartNameFor(named *types.Named, preferred string) string {
+	if cached := b.dartNames[named]; cached != "" {
+		return cached
+	}
+	owner := b.dartTypeNames[preferred]
+	if owner == nil || owner == named {
+		b.dartTypeNames[preferred] = named
+		b.dartNames[named] = preferred
+		return preferred
+	}
+	prefix := "External"
+	if named != nil && named.Obj() != nil && named.Obj().Pkg() != nil {
+		prefix = names.UpperCamel(named.Obj().Pkg().Name())
+	}
+	base := prefix + preferred
+	candidate := base
+	for suffix := 2; b.dartTypeNames[candidate] != nil && b.dartTypeNames[candidate] != named; suffix++ {
+		candidate = fmt.Sprintf("%s%d", base, suffix)
+	}
+	b.dartTypeNames[candidate] = named
+	b.dartNames[named] = candidate
+	return candidate
 }
 
 func (b *builder) qualifyInput(identifier string) string {
@@ -1183,6 +1260,10 @@ func isBigInt(named *types.Named) bool {
 	return isNamed(named, "math/big", "Int")
 }
 
+func isInternetIP(named *types.Named) bool { return isNamed(named, "net/netip", "Addr") }
+
+func isUUID(named *types.Named) bool { return isNamed(named, "github.com/gofrs/uuid/v5", "UUID") }
+
 // isSupportType matches a type from the generated support package, whose
 // import path depends on the module that owns it.
 func (b *builder) isSupportType(named *types.Named, name string) bool {
@@ -1196,6 +1277,33 @@ func (b *builder) isDartOpaque(named *types.Named) bool {
 func (b *builder) isStreamSink(named *types.Named) bool {
 	return b.isSupportType(named, "StreamSink") &&
 		named.TypeArgs() != nil && named.TypeArgs().Len() == 1
+}
+
+// atomicValueType recognizes atomic wrapper structs by behavior rather than a
+// hard-coded dependency list. Both sync/atomic.Int64 and wrappers such as
+// mihomo/common/atomic.Int64 expose Load() T and Store(T), and Dart should see
+// T directly instead of a synthetic empty AtomicInt64 class.
+func atomicValueType(named *types.Named) (types.Type, bool) {
+	if named == nil || named.Obj() == nil || named.Obj().Pkg() == nil || named.Obj().Pkg().Name() != "atomic" {
+		return nil, false
+	}
+	methods := types.NewMethodSet(types.NewPointer(named))
+	loadSelection := methods.Lookup(nil, "Load")
+	storeSelection := methods.Lookup(nil, "Store")
+	if loadSelection == nil || storeSelection == nil {
+		return nil, false
+	}
+	load, _ := loadSelection.Obj().Type().(*types.Signature)
+	store, _ := storeSelection.Obj().Type().(*types.Signature)
+	if load == nil || store == nil || load.Params().Len() != 0 || load.Results().Len() != 1 ||
+		store.Params().Len() != 1 || store.Results().Len() != 0 {
+		return nil, false
+	}
+	valueType := types.Unalias(load.Results().At(0).Type())
+	if _, ok := valueType.(*types.Basic); !ok || !types.Identical(valueType, types.Unalias(store.Params().At(0).Type())) {
+		return nil, false
+	}
+	return valueType, true
 }
 
 // containsStreamSink reports whether a stream sink is reachable from typ.
@@ -1222,6 +1330,8 @@ func containsStreamSink(typ *wireType, seen map[int]bool) bool {
 		return false
 	case kindNamed:
 		return containsStreamSink(typ.Named.Underlying, seen)
+	case kindAtomic:
+		return containsStreamSink(typ.Atomic.Value, seen)
 	default:
 		return false
 	}
