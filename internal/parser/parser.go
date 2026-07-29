@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/model"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/names"
+	"github.com/star4277/flutter_go_bridge/internal/model"
+	"github.com/star4277/flutter_go_bridge/internal/names"
 	"golang.org/x/tools/go/packages"
 )
 

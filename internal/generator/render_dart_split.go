@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	bridgemodel "github.com/star4277/flutter-go-bridge-gokit/internal/model"
+	bridgemodel "github.com/star4277/flutter_go_bridge/internal/model"
 )
 
 type splitDartRenderer struct {

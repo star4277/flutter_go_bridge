@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/generator"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/integrate"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/parser"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/watcher"
+	"github.com/star4277/flutter_go_bridge/internal/config"
+	"github.com/star4277/flutter_go_bridge/internal/generator"
+	"github.com/star4277/flutter_go_bridge/internal/integrate"
+	"github.com/star4277/flutter_go_bridge/internal/parser"
+	"github.com/star4277/flutter_go_bridge/internal/watcher"
 )
 
 var version = "0.1.0"

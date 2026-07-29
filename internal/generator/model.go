@@ -3,7 +3,7 @@ package generator
 import (
 	"go/types"
 
-	bridgemodel "github.com/star4277/flutter-go-bridge-gokit/internal/model"
+	bridgemodel "github.com/star4277/flutter_go_bridge/internal/model"
 )
 
 type typeKind string

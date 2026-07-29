@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	templatefs "github.com/star4277/flutter-go-bridge-gokit/template"
+	templatefs "github.com/star4277/flutter_go_bridge/template"
 )
 
 // CreateConfig mirrors flutter_rust_bridge's CreateConfig.

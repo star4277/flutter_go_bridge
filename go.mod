@@ -1,4 +1,4 @@
-module github.com/star4277/flutter-go-bridge-gokit
+module github.com/star4277/flutter_go_bridge
 
 go 1.24.0
 

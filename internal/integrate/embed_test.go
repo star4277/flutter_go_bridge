@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	templatefs "github.com/star4277/flutter-go-bridge-gokit/template"
+	templatefs "github.com/star4277/flutter_go_bridge/template"
 )
 
 // TestRunAppWithEmbeddedTemplates exercises the real embedded template tree,

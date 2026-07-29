@@ -14,8 +14,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
-	templatefs "github.com/star4277/flutter-go-bridge-gokit/template"
+	"github.com/star4277/flutter_go_bridge/internal/config"
+	templatefs "github.com/star4277/flutter_go_bridge/template"
 )
 
 // Template selects which project layout the overlay targets.

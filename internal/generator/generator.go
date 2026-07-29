@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/model"
-	"github.com/star4277/flutter-go-bridge-gokit/internal/names"
+	"github.com/star4277/flutter_go_bridge/internal/config"
+	"github.com/star4277/flutter_go_bridge/internal/model"
+	"github.com/star4277/flutter_go_bridge/internal/names"
 )
 
 type Result struct {

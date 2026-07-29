@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/model"
+	"github.com/star4277/flutter_go_bridge/internal/model"
 )
 
 func TestParseUsesOfficialTypedAST(t *testing.T) {

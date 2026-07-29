@@ -1,6 +1,6 @@
-# flutter-go-bridge-gokit
+# flutter_go_bridge
 
-`flutter-go-bridge-gokit` 是面向 Gokit 的 Go → Dart/Flutter 代码生成器。它借鉴
+`flutter_go_bridge` 是面向 Gokit 的 Go → Dart/Flutter 代码生成器。它借鉴
 `flutter_rust_bridge_codegen` 的 CLI 与生成结构，但不依赖 Flutter Native Assets，也不依赖
 `package:flutter/services.dart`。
 
@@ -113,7 +113,7 @@ Dart 侧的目录结构**镜像 Go 的包结构**，锚点是 Go 模块根：`go
 ## CLI
 
 ```text
-go install github.com/star4277/flutter-go-bridge-gokit/cmd/flutter_go_bridge_codegen@latest
+go install github.com/star4277/flutter_go_bridge/command@latest
 flutter_go_bridge_codegen generate
 ```
 

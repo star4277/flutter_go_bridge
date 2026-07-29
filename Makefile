@@ -1,4 +1,4 @@
-APP_NAME := flutter_rust_bridge_codegen
+APP_NAME := flutter_go_bridge_codegen
 VERSION ?= 0.1.0
 CGO_ENABLED ?= 0
 

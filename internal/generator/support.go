@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
+	"github.com/star4277/flutter_go_bridge/internal/config"
 )
 
 // supportPackageDirName is the directory - and package - holding the types a

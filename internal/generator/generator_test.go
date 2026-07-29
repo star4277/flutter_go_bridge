@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/star4277/flutter-go-bridge-gokit/internal/config"
-	bridgeparser "github.com/star4277/flutter-go-bridge-gokit/internal/parser"
+	"github.com/star4277/flutter_go_bridge/internal/config"
+	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 )
 
 func TestGenerateStableABIAndDartAPIDL(t *testing.T) {
