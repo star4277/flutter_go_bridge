@@ -629,6 +629,14 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		if external := b.externalTypeBlocker(typ); external != "" {
 			return external
 		}
+		if declared, isInterface := typ.Underlying().(*types.Interface); isInterface {
+			if declared.Empty() {
+				return ""
+			}
+			// A named interface from the input package is bridged as a Dart
+			// interface, so a field of that type is translatable.
+			return ""
+		}
 		if _, isStruct := typ.Underlying().(*types.Struct); isStruct {
 			if b.classifyStruct(typ) == classOpaque {
 				return fmt.Sprintf("holds GoOpaque struct %s by value (use *%s)", typ.Obj().Name(), typ.Obj().Name())
@@ -668,14 +676,15 @@ func skipStructField(field *types.Var, tag reflect.StructTag, options fieldTagOp
 type fieldTagOptions struct {
 	Ignore       bool
 	NonFinal     bool
+	Nullable     bool
 	Rename       string
 	DefaultValue string
 }
 
 // parseFieldTag understands `fgb:"ignore"`, `fgb:"rename:name"`,
-// `fgb:"non-final"`, and `fgb:"defaultValue: expr"` - combinable with commas.
-// defaultValue consumes the rest of the tag so Dart expressions may contain
-// commas; it must therefore be the last option.
+// `fgb:"non-final"`, `fgb:"nullable"`, and `fgb:"defaultValue: expr"` -
+// combinable with commas. defaultValue consumes the rest of the tag so Dart
+// expressions may contain commas; it must therefore be the last option.
 func parseFieldTag(raw string) (fieldTagOptions, error) {
 	var result fieldTagOptions
 	rest := strings.TrimSpace(raw)
@@ -699,13 +708,15 @@ func parseFieldTag(raw string) (fieldTagOptions, error) {
 			result.Ignore = true
 		case token == "non-final":
 			result.NonFinal = true
+		case token == "nullable":
+			result.Nullable = true
 		case strings.HasPrefix(token, "rename:"):
 			result.Rename = strings.TrimSpace(strings.TrimPrefix(token, "rename:"))
 			if result.Rename == "" {
 				return result, errors.New(`fgb:"rename:" needs a field name`)
 			}
 		default:
-			return result, fmt.Errorf("unknown fgb field tag option %q (want ignore, rename:name, non-final, or defaultValue: expr)", token)
+			return result, fmt.Errorf("unknown fgb field tag option %q (want ignore, rename:name, non-final, nullable, or defaultValue: expr)", token)
 		}
 	}
 	return result, nil
@@ -901,9 +912,17 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 			dartName = names.LowerCamel(wireName)
 		}
 		dartName = uniqueName(dartName, usedNames)
+		if options.Nullable {
+			if isPointerType(field.Type()) {
+				return nil, fmt.Errorf(`struct %s field %s is a pointer, so it is already nullable; drop fgb:"nullable"`, named.Obj().Name(), field.Name())
+			}
+			if !mapped.nilableWithoutPointer() {
+				return nil, fmt.Errorf(`struct %s field %s cannot be marked fgb:"nullable": only callback, slice, map, byte/typed-list and interface fields can be nil without a pointer, so use a Go pointer for other optional values`, named.Obj().Name(), field.Name())
+			}
+		}
 		structure.Fields = append(structure.Fields, &fieldModel{
 			GoName: field.Name(), CName: names.CIdentifier(wireName), DartName: dartName, WireName: wireName,
-			Type: mapped, Optional: isPointerType(field.Type()),
+			Type: mapped, Optional: isPointerType(field.Type()), Nullable: options.Nullable,
 			NonFinal: options.NonFinal, DefaultValue: options.DefaultValue,
 		})
 	}

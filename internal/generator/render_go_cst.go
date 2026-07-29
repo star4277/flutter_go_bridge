@@ -292,9 +292,25 @@ func (r *goRenderer) renderDcoArrayEncoder(typ *wireType) {
 }
 
 func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
-	r.line("\tresult := C.fgb_dco_array_new(%d)", len(typ.Struct.allFields()))
+	fields := typ.Struct.allFields()
+	r.line("\tresult := C.fgb_dco_array_new(%d)", len(fields))
 	r.line("\tif result == nil { return nil, fmt.Errorf(\"DCO struct allocation failed\") }")
-	for index, field := range typ.Struct.allFields() {
+	for index, field := range fields {
+		if field.Nullable {
+			// Keep nil distinct from empty for a field marked fgb:"nullable".
+			r.line("\tvar child%d *C.FgbDartCObject", index)
+			r.line("\tif value.%s == nil {", field.GoName)
+			r.line("\t\tencoded, err := fgbDcoNull()")
+			r.line("\t\tif err != nil { C.fgb_internal_dco_free(result); return nil, err }")
+			r.line("\t\tchild%d = encoded", index)
+			r.line("\t} else {")
+			r.line("\t\tencoded, err := fgbDcoEncode%d(value.%s)", field.Type.ID, field.GoName)
+			r.line("\t\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
+			r.line("\t\tchild%d = encoded", index)
+			r.line("\t}")
+			r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)
+			continue
+		}
 		r.line("\tchild%d, err := fgbDcoEncode%d(value.%s)", index, field.Type.ID, field.GoName)
 		r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 		r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)

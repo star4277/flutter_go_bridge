@@ -276,12 +276,27 @@ type fieldModel struct {
 	WireName string
 	Type     *wireType
 	Optional bool
+	// Nullable marks a field carrying `fgb:"nullable"`: its Go type can be nil
+	// without a pointer, and that nil survives in both directions.
+	Nullable bool
 	// NonFinal drops the Dart `final` keyword (fgb:"non-final").
 	NonFinal bool
 	// DefaultValue is a raw Dart expression used as the constructor default
 	// (fgb:"defaultValue: ..."); such fields are not `required`.
 	DefaultValue string
 }
+
+// dartType is the Dart spelling of the field, widened to nullable when the
+// field carries `fgb:"nullable"`. Pointer fields already carry their `?`.
+func (f *fieldModel) dartType() string {
+	if f.Nullable {
+		return f.Type.DartType + "?"
+	}
+	return f.Type.DartType
+}
+
+// optional reports whether the Dart constructor may omit the field.
+func (f *fieldModel) optional() bool { return f.Optional || f.Nullable }
 
 // interfaceModel is a Go interface rendered as a Dart
 // `abstract interface class`. Values travel tagged with the index of their

@@ -583,12 +583,19 @@ await transform(input: 'go', mapper: (s) async => await load(s));      // async 
 
 ```go
 type Item struct {
-	Name   string `fgb:"rename:title"`          // Dart 字段与 wire key 改名
-	Count  int    `fgb:"non-final,defaultValue: 0"` // 非 final 字段 + 构造默认值
-	Hidden string `fgb:"ignore"`                // 不参与生成
-	Note   *string                              // 指针字段：可空、构造参数不加 required
+	Name   string   `fgb:"rename:title"`             // Dart 字段与 wire key 改名
+	Count  int      `fgb:"non-final,defaultValue: 0"` // 非 final 字段 + 构造默认值
+	Hidden string   `fgb:"ignore"`                   // 不参与生成
+	Tags   []string `fgb:"nullable"`                 // 可为 nil，Dart 侧 List<String>?
+	Note   *string                                   // 指针字段：可空、构造参数不加 required
 }
 ```
+
+字段上的 `fgb:"nullable"` 与参数指令 `//fgb:nullable` 规则完全一致——标在字段上所以不用再写
+名字——**适用类型也一样**：回调、slice、map、`[]byte` 等 typed list、接口，也就是在 Go 中
+不用指针就能为 nil 的类型；其他类型（含已经可空的指针字段）会直接报错。被标记的字段
+**两个方向都保留 nil**：Dart 传 null → Go 收到 nil，Go 的 nil → Dart 得到 null，不会像未标记
+字段那样把 nil 归一成空集合。
 
 ## 验证
 

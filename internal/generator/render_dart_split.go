@@ -418,9 +418,9 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 	r.line("%s {", declaration)
 	for _, field := range structure.Fields {
 		if field.NonFinal {
-			r.line("  %s %s;", field.Type.DartType, field.DartName)
+			r.line("  %s %s;", field.dartType(), field.DartName)
 		} else {
-			r.line("  final %s %s;", field.Type.DartType, field.DartName)
+			r.line("  final %s %s;", field.dartType(), field.DartName)
 		}
 	}
 	r.line("")
@@ -451,13 +451,24 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 	r.line("")
 }
 
+// dartFieldDecode reads one struct field. A field marked `fgb:"nullable"`
+// keeps a null wire value as null instead of letting the shared decoder
+// normalize it.
+func dartFieldDecode(field *fieldModel, source, path string) string {
+	decoded := fmt.Sprintf("fgbDecode%d(%s, bridge, %s)", field.Type.ID, source, path)
+	if field.Nullable {
+		return fmt.Sprintf("%s == null ? null : %s", source, decoded)
+	}
+	return decoded
+}
+
 // dartConstructorParameter renders one constructor entry, forwarding promoted
 // fields to the superclass and binding the struct's own fields directly.
 func dartConstructorParameter(field *fieldModel, receiver string) string {
 	switch {
 	case field.DefaultValue != "":
 		return fmt.Sprintf("%s.%s = %s", receiver, field.DartName, field.DefaultValue)
-	case field.Optional:
+	case field.optional():
 		return fmt.Sprintf("%s.%s", receiver, field.DartName)
 	default:
 		return fmt.Sprintf("required %s.%s", receiver, field.DartName)
@@ -696,7 +707,8 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  if (value is Map) {")
 		r.line("    return %s(", typ.Struct.DartName)
 		for _, field := range typ.Struct.allFields() {
-			r.line("      %s: fgbDecode%d(value[%s], bridge, '$path.%s'),", field.DartName, field.Type.ID, strconv.Quote(field.WireName), field.WireName)
+			source := fmt.Sprintf("value[%s]", strconv.Quote(field.WireName))
+			r.line("      %s: %s,", field.DartName, dartFieldDecode(field, source, fmt.Sprintf("'$path.%s'", field.WireName)))
 		}
 		r.line("    );")
 		r.line("  }")
@@ -704,7 +716,8 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("    if (value.length != %d) throw FormatException('$path: expected %d fields');", len(typ.Struct.allFields()), len(typ.Struct.allFields()))
 		r.line("    return %s(", typ.Struct.DartName)
 		for index, field := range typ.Struct.allFields() {
-			r.line("      %s: fgbDecode%d(value[%d], bridge, '$path[%d]'),", field.DartName, field.Type.ID, index, index)
+			source := fmt.Sprintf("value[%d]", index)
+			r.line("      %s: %s,", field.DartName, dartFieldDecode(field, source, fmt.Sprintf("'$path[%d]'", index)))
 		}
 		r.line("    );")
 		r.line("  }")

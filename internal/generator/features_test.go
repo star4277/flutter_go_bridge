@@ -1033,3 +1033,80 @@ func Describe(shape Shape) int { return 0 }
 		t.Fatalf("an interface with no implementation must be rejected, got %v", err)
 	}
 }
+
+func TestGenerateNullableFieldTag(t *testing.T) {
+	apiDart, _, goSource, _, err := generateFixture(t, `package api
+
+type Record struct {
+	Name   string
+	Tags   []string       `+"`fgb:\"nullable\"`"+`
+	Scores map[string]int `+"`fgb:\"nullable\"`"+`
+	Plain  []string
+}
+
+func RoundTrip(record Record) Record { return record }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"final List<String>? tags;",
+		"final Map<String, int>? scores;",
+		"final List<String> plain;",
+		"required this.name",
+		"this.tags,",
+		"this.scores,",
+		"required this.plain",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("api.dart missing %q:\n%s", expected, apiDart)
+		}
+	}
+	// A nullable field keeps nil distinct from empty in the Go -> Dart
+	// direction, which the shared encoders would otherwise normalize away.
+	if !strings.Contains(goSource, "if value.Tags != nil {") || !strings.Contains(goSource, "if value.Scores != nil {") {
+		t.Fatalf("the Go encoder should preserve nil for nullable fields:\n%s", goSource)
+	}
+	if strings.Contains(goSource, "if value.Plain != nil {") {
+		t.Fatal("an unmarked field should keep the plain encoding path")
+	}
+}
+
+func TestGenerateNullableFieldTagRejectsUnsupportedTypes(t *testing.T) {
+	if _, _, _, _, err := generateFixture(t, `package api
+
+type Record struct {
+	Count int `+"`fgb:\"nullable\"`"+`
+}
+
+func RoundTrip(record Record) Record { return record }
+`); err == nil || !strings.Contains(err.Error(), "nil without a pointer") {
+		t.Fatalf("a non-nilable field must be rejected, got %v", err)
+	}
+	if _, _, _, _, err := generateFixture(t, `package api
+
+type Record struct {
+	Note *string `+"`fgb:\"nullable\"`"+`
+}
+
+func RoundTrip(record Record) Record { return record }
+`); err == nil || !strings.Contains(err.Error(), "already nullable") {
+		t.Fatalf("a pointer field must be reported as redundant, got %v", err)
+	}
+}
+
+func TestGenerateTypedListKeepsEmptyDistinctFromNil(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+func RoundTrip(data []byte) []byte { return data }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(goSource, "append([]byte(nil), raw...)") {
+		t.Fatal("append on a nil slice returns nil for empty input, erasing empty vs nil")
+	}
+	if !strings.Contains(goSource, "copy(result, raw)") {
+		t.Fatalf("typed lists should be copied into a made slice:\n%s", goSource)
+	}
+}

@@ -144,22 +144,22 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]byte)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Uint8List\", value) }", goType)
-		r.line("\treturn append(%s(nil), raw...), nil", goType)
+		r.renderTypedListCopy(goType)
 	case kindInt32List:
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]int32)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Int32List\", value) }", goType)
-		r.line("\treturn append(%s(nil), raw...), nil", goType)
+		r.renderTypedListCopy(goType)
 	case kindInt64List:
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]int64)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Int64List\", value) }", goType)
-		r.line("\treturn append(%s(nil), raw...), nil", goType)
+		r.renderTypedListCopy(goType)
 	case kindFloat64List:
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]float64)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Float64List\", value) }", goType)
-		r.line("\treturn append(%s(nil), raw...), nil", goType)
+		r.renderTypedListCopy(goType)
 	case kindSlice:
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]any)")
@@ -260,6 +260,15 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 	return nil
 }
 
+// renderTypedListCopy copies a decoded typed list. `append(T(nil), raw...)`
+// would look equivalent but returns nil for an empty input, which would erase
+// the difference between an empty list and a nil one.
+func (r *goRenderer) renderTypedListCopy(goType string) {
+	r.line("\tresult := make(%s, len(raw))", goType)
+	r.line("\tcopy(result, raw)")
+	r.line("\treturn result, nil")
+}
+
 func (r *goRenderer) renderEncoder(typ *wireType) error {
 	goType := r.goType(typ.Original)
 	r.line("func fgbEncode%d(value %s) (any, error) {", typ.ID, goType)
@@ -323,8 +332,22 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\t}")
 		r.line("\treturn result, nil")
 	case kindStruct:
-		r.line("\tresult := make(map[any]any, %d)", len(typ.Struct.allFields()))
-		for _, field := range typ.Struct.allFields() {
+		fields := typ.Struct.allFields()
+		r.line("\tresult := make(map[any]any, %d)", len(fields))
+		for _, field := range fields {
+			// A nullable field keeps its nil: the shared encoders normalize a
+			// nil slice or map to an empty one, which would erase exactly the
+			// distinction the field was marked for.
+			if field.Nullable {
+				r.line("\tvar encoded%s any", field.GoName)
+				r.line("\tif value.%s != nil {", field.GoName)
+				r.line("\t\traw, err := fgbEncode%d(value.%s)", field.Type.ID, field.GoName)
+				r.line("\t\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
+				r.line("\t\tencoded%s = raw", field.GoName)
+				r.line("\t}")
+				r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
+				continue
+			}
 			r.line("\tencoded%s, err := fgbEncode%d(value.%s)", field.GoName, field.Type.ID, field.GoName)
 			r.line("\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 			r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
