@@ -692,6 +692,9 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindURL:
 		r.line("  if (value is! String) throw FormatException('$path: expected URI string');")
 		r.line("  return Uri.parse(value);")
+	case kindRegExp:
+		r.line("  if (value is! String) throw FormatException('$path: expected regular expression string');")
+		r.line("  return RegExp(value);")
 	case kindUUID:
 		r.line("  if (value is! String) throw FormatException('$path: expected UUID string');")
 		r.line("  return UuidValue.fromString(value);")
@@ -814,6 +817,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  return value.uuid;")
 	case kindURL:
 		r.line("  return value.toString();")
+	case kindRegExp:
+		r.line("  return value.pattern;")
 	case kindDuration:
 		r.line("  return value.inMicroseconds;")
 	case kindPointer:

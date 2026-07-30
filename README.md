@@ -337,6 +337,7 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | `net/netip.Addr` | `InternetAddress`（Go 指针映射为 `InternetAddress?`） |
 | `net/netip.Prefix` | `String`（CIDR 文本，如 `192.168.1.0/24`；Go 指针映射为 `String?`；零值/非法 Prefix 与空串互转） |
 | `net/url.URL` | `Uri`（wire 使用 `URL.String()` 文本；Go 指针映射为 `Uri?`） |
+| `regexp.Regexp` | `RegExp`（wire 使用模式源码；Go 指针映射为 `RegExp?`；两侧各自编译，注意 RE2 与 Dart/JS 正则语法差异，如 `(?i)` 内联标志、命名分组写法、反向引用） |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue`（Go 指针映射为 `UuidValue?`）；生成命令会在缺失时运行 `flutter pub add uuid` |
 | 匿名嵌入结构体字段 | Dart `extends`，被提升字段扁平化传输，见「匿名字段与接口」 |
 | 命名接口 | `abstract interface class` + 实现方 `implements`，见「匿名字段与接口」 |

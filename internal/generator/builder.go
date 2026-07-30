@@ -443,6 +443,10 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			b.unit.UsesURL = true
 			return b.newSimpleType(original, kindURL, "Uri"), nil
 		}
+		if isRegExp(typ) {
+			b.unit.UsesRegExp = true
+			return b.newSimpleType(original, kindRegExp, "RegExp"), nil
+		}
 		if isUUID(typ) {
 			b.unit.UsesUUID = true
 			return b.newSimpleType(original, kindUUID, "UuidValue"), nil
@@ -1296,17 +1300,20 @@ func isIPPrefix(named *types.Named) bool { return isNamed(named, "net/netip", "P
 // isURL matches net/url.URL, which bridges as its text form.
 func isURL(named *types.Named) bool { return isNamed(named, "net/url", "URL") }
 
+// isRegExp matches regexp.Regexp, which bridges as its pattern source.
+func isRegExp(named *types.Named) bool { return isNamed(named, "regexp", "Regexp") }
+
 // hasDedicatedMapping reports whether mapType translates a named type through a
 // built-in rule instead of bridging it as a declared struct. Such a type must
 // never reach classifyStruct: several of them (netip.Addr, netip.Prefix,
-// url.URL, the atomic wrappers) keep all of their state unexported and would
-// otherwise be mistaken for an untranslatable struct.
+// url.URL, regexp.Regexp, the atomic wrappers) keep all of their state
+// unexported and would otherwise be mistaken for an untranslatable struct.
 func (b *builder) hasDedicatedMapping(named *types.Named) bool {
 	if named == nil {
 		return false
 	}
-	if isTime(named) || isDuration(named) || isBigInt(named) ||
-		isInternetIP(named) || isIPPrefix(named) || isURL(named) || isUUID(named) {
+	if isTime(named) || isDuration(named) || isBigInt(named) || isInternetIP(named) ||
+		isIPPrefix(named) || isURL(named) || isRegExp(named) || isUUID(named) {
 		return true
 	}
 	if b.isDartOpaque(named) || b.isStreamSink(named) {

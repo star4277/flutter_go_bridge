@@ -426,6 +426,83 @@ func RoundTripLabels(value map[netip.Prefix]string) map[netip.Prefix]string { re
 	}
 }
 
+func TestGenerateRegexpMapping(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/pattern\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+import "regexp"
+
+type Rule struct {
+	Match regexp.Regexp
+	Exclude *regexp.Regexp
+	Extra []regexp.Regexp
+}
+
+func RoundTripRegexp(value regexp.Regexp) regexp.Regexp { return value }
+
+func Compile(value string) *regexp.Regexp { return regexp.MustCompile(value) }
+
+func RoundTripRule(value Rule) Rule { return value }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goOutput := filepath.Join(dir, "bridge_generated.go")
+	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
+		LibraryName: "pattern", DartEntrypointClassName: "PatternBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"final RegExp match;", "final RegExp? exclude;", "final List<RegExp> extra;",
+		"RegExp roundTripRegexp", "RegExp? compile",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated Dart regexp API missing %q:\n%s", expected, apiDart)
+		}
+	}
+	// regexp.Regexp is entirely unexported state; it must not be mistaken for a
+	// struct and must not be downgraded to a GoOpaque handle either.
+	if strings.Contains(apiDart, "class Regexp") || strings.Contains(apiDart, "GoOpaque") {
+		t.Fatalf("regexp.Regexp must map to RegExp directly:\n%s", apiDart)
+	}
+
+	central := mustRead(t, dartOutput)
+	for _, expected := range []string{"return RegExp(value);", "return value.pattern;"} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("central Dart bridge missing regexp mapping %q:\n%s", expected, central)
+		}
+	}
+
+	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		"regexp.Compile(raw)", "return *compiled, nil", "invalid regular expression",
+		"return value.String(), nil", "return fgbDcoString(value.String())",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go bridge missing regexp mapping %q:\n%s", expected, goSource)
+		}
+	}
+	if count := strings.Count(goSource, `"regexp"`); count != 1 {
+		t.Fatalf("generated Go bridge should import regexp exactly once, got %d", count)
+	}
+}
+
 func TestGenerateURLMapping(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/uri\n\ngo 1.24\n"), 0o644); err != nil {

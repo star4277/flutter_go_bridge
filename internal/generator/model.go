@@ -19,6 +19,7 @@ const (
 	kindInternetIP  typeKind = "internet_ip"
 	kindIPPrefix    typeKind = "ip_prefix"
 	kindURL         typeKind = "url"
+	kindRegExp      typeKind = "regexp"
 	kindUUID        typeKind = "uuid"
 	kindDuration    typeKind = "duration"
 	kindAny         typeKind = "any"
@@ -66,6 +67,7 @@ type unit struct {
 	UsesInternetIP bool
 	UsesIPPrefix   bool
 	UsesURL        bool
+	UsesRegExp     bool
 	UsesUUID       bool
 	UsesBigInt     bool
 	UsesDartOpaque bool

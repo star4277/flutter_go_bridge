@@ -87,6 +87,11 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.renderURLParse(goType, "raw")
+	case kindRegExp:
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null regular expression\", path) }", goType)
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.renderRegexpCompile(goType, "raw")
 	case kindUUID:
 		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null UUID\", path) }", goType)
 		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
@@ -287,6 +292,8 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 	case kindUUID:
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindURL:
+		r.line("\treturn fgbDcoString(value.String())")
+	case kindRegExp:
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindDuration:
 		r.line("\treturn fgbDcoInt64(int64(value / time.Microsecond))")
