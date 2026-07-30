@@ -350,6 +350,257 @@ func Load() Values { return Values{} }
 	}
 }
 
+func TestGenerateIPPrefixMapping(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/prefix\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+import "net/netip"
+
+type Routes struct {
+	Destination netip.Prefix
+	Optional *netip.Prefix
+	Extra []netip.Prefix
+}
+
+func RoundTripPrefix(value netip.Prefix) netip.Prefix { return value }
+
+func RoundTripRoutes(value Routes) Routes { return value }
+
+func RoundTripLabels(value map[netip.Prefix]string) map[netip.Prefix]string { return value }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goOutput := filepath.Join(dir, "bridge_generated.go")
+	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
+		LibraryName: "prefix", DartEntrypointClassName: "PrefixBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"final String destination;", "final String? optional;", "final List<String> extra;",
+		"String roundTripPrefix", "Map<String, String> roundTripLabels",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated Dart prefix API missing %q:\n%s", expected, apiDart)
+		}
+	}
+	// netip.Prefix travels as plain text, so it must not drag dart:io in the way
+	// netip.Addr does for InternetAddress.
+	if strings.Contains(apiDart, "import 'dart:io';") {
+		t.Fatalf("netip.Prefix must not require dart:io:\n%s", apiDart)
+	}
+
+	central := mustRead(t, dartOutput)
+	if !strings.Contains(central, "expected CIDR prefix string") {
+		t.Fatalf("central Dart bridge missing the prefix decoder guard:\n%s", central)
+	}
+
+	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		"netip.ParsePrefix(raw)", "return netip.Prefix{}, nil",
+		"if !value.IsValid() {", "invalid CIDR prefix",
+		"return fgbDcoString(value.String())",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go bridge missing prefix mapping %q:\n%s", expected, goSource)
+		}
+	}
+	if count := strings.Count(goSource, `"net/netip"`); count != 1 {
+		t.Fatalf("generated Go bridge should import net/netip exactly once, got %d", count)
+	}
+}
+
+func TestGenerateURLMapping(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/uri\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+import "net/url"
+
+type Request struct {
+	Target url.URL
+	Fallback *url.URL
+	Mirrors []url.URL
+}
+
+func RoundTripURL(value url.URL) url.URL { return value }
+
+func RoundTripRequest(value Request) Request { return value }
+
+func RoundTripLabels(value map[url.URL]string) map[url.URL]string { return value }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goOutput := filepath.Join(dir, "bridge_generated.go")
+	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
+		LibraryName: "uri", DartEntrypointClassName: "UriBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	for _, expected := range []string{
+		"final Uri target;", "final Uri? fallback;", "final List<Uri> mirrors;",
+		"Uri roundTripUrl", "Map<Uri, String> roundTripLabels",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated Dart URL API missing %q:\n%s", expected, apiDart)
+		}
+	}
+	// url.URL must not be mistaken for a struct: it hides everything behind
+	// unexported state once User (*url.Userinfo) is reached.
+	if strings.Contains(apiDart, "Userinfo") || strings.Contains(apiDart, "class Url") {
+		t.Fatalf("url.URL must map to Uri instead of a generated class:\n%s", apiDart)
+	}
+
+	central := mustRead(t, dartOutput)
+	for _, expected := range []string{"return Uri.parse(value);", "return value.toString();"} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("central Dart bridge missing URL mapping %q:\n%s", expected, central)
+		}
+	}
+
+	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		"url.Parse(raw)", "return *parsed, nil", "invalid URI",
+		"return value.String(), nil", "return fgbDcoString(value.String())",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go bridge missing URL mapping %q:\n%s", expected, goSource)
+		}
+	}
+	if count := strings.Count(goSource, `"net/url"`); count != 1 {
+		t.Fatalf("generated Go bridge should import net/url exactly once, got %d", count)
+	}
+}
+
+// A third-party struct cannot carry fgb markers, so a type whose state is
+// entirely unexported has to be detected and bridged as a handle. Emitting a
+// fieldless Dart value class instead drops the payload and does not compile.
+func TestGenerateStructWithoutBridgedFieldsBecomesOpaque(t *testing.T) {
+	dir := t.TempDir()
+	module := "module example.com/hidden\n\ngo 1.24\n\nrequire example.com/thirdparty v0.0.0\n\nreplace example.com/thirdparty => ./thirdparty\n"
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	externalDir := filepath.Join(dir, "thirdparty")
+	if err := os.MkdirAll(externalDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "go.mod"), []byte("module example.com/thirdparty\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	externalSource := `package thirdparty
+
+// Userinfo keeps all of its state unexported, like net/url.Userinfo.
+type Userinfo struct {
+	username string
+	password string
+}
+
+// Hidden exports a field but excludes it from the wire.
+type Hidden struct {
+	Internal string ` + "`json:\"-\"`" + `
+}
+
+// Marker declares no fields at all and stays a value type.
+type Marker struct{}
+
+type Holder struct {
+	Name string
+	Info *Userinfo
+}
+`
+	if err := os.WriteFile(filepath.Join(externalDir, "thirdparty.go"), []byte(externalSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := `package api
+
+import "example.com/thirdparty"
+
+func Load() thirdparty.Holder { return thirdparty.Holder{} }
+
+func Ping() thirdparty.Marker { return thirdparty.Marker{} }
+
+func Secret() *thirdparty.Hidden { return nil }
+`
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: filepath.Join(dir, "bridge_generated.go"),
+		DartOutput:  filepath.Join(dir, "dart", "bridge_generated.dart"),
+		LibraryName: "hidden", DartEntrypointClassName: "HiddenBridge", StopOnError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	external := mustRead(t, filepath.Join(dir, "dart", "_generated.dart"))
+	for _, expected := range []string{
+		"final class Userinfo extends GoOpaque {", "final class Hidden extends GoOpaque {",
+		"final Userinfo? info;",
+	} {
+		if !strings.Contains(external, expected) {
+			t.Fatalf("untranslatable struct did not bridge as GoOpaque, missing %q:\n%s", expected, external)
+		}
+	}
+	// An empty named-parameter list is a Dart syntax error, so a fieldless
+	// value class must declare a bare constructor.
+	if strings.Contains(external, "({\n  });") {
+		t.Fatalf("generated Dart has an empty named-parameter list:\n%s", external)
+	}
+	if !strings.Contains(external, "const Marker();") {
+		t.Fatalf("a struct{} value class needs a parameterless constructor:\n%s", external)
+	}
+	var reported bool
+	for _, warning := range result.Warnings {
+		if strings.Contains(warning.Error(), "Userinfo") && strings.Contains(warning.Error(), "GoOpaque") {
+			reported = true
+		}
+	}
+	if !reported {
+		t.Fatalf("the downgrade to GoOpaque must be reported, got warnings %v", result.Warnings)
+	}
+}
+
 func TestGenerateTimeDurationMapping(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/duration\n\ngo 1.24\n"), 0o644); err != nil {

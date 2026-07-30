@@ -54,6 +54,10 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstStringBody("value.toIso8601String()")
 	case kindInternetIP:
 		r.renderCstStringBody("value.address")
+	case kindIPPrefix:
+		r.renderCstStringBody("value")
+	case kindURL:
+		r.renderCstStringBody("value.toString()")
 	case kindUUID:
 		r.renderCstStringBody("value.uuid")
 	case kindPointer:

@@ -74,6 +74,19 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\tresult, err := netip.ParseAddr(raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid IP: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindIPPrefix:
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null CIDR prefix\", path) }", goType)
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\tif raw == \"\" { return netip.Prefix{}, nil }")
+		r.line("\tresult, err := netip.ParsePrefix(raw)")
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid CIDR prefix: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
+	case kindURL:
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null URI\", path) }", goType)
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.renderURLParse(goType, "raw")
 	case kindUUID:
 		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null UUID\", path) }", goType)
 		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
@@ -268,7 +281,12 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\treturn fgbDcoString(value.Format(time.RFC3339Nano))")
 	case kindInternetIP:
 		r.line("\treturn fgbDcoString(value.String())")
+	case kindIPPrefix:
+		r.line("\tif !value.IsValid() { return fgbDcoString(\"\") }")
+		r.line("\treturn fgbDcoString(value.String())")
 	case kindUUID:
+		r.line("\treturn fgbDcoString(value.String())")
+	case kindURL:
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindDuration:
 		r.line("\treturn fgbDcoInt64(int64(value / time.Microsecond))")

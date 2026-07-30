@@ -335,6 +335,8 @@ apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
 | 第三方包中的可翻译结构体 | 自动生成可达的 Dart class（以及嵌套命名类型）到 `_generated.dart`；同名时自动加 Go 包名前缀 |
 | `sync/atomic.AtomicXXX` 及兼容的 atomic 包装类型 | 映射为 `Load()` 返回的 Dart 基础类型；只有 Go 指针形式才可空 |
 | `net/netip.Addr` | `InternetAddress`（Go 指针映射为 `InternetAddress?`） |
+| `net/netip.Prefix` | `String`（CIDR 文本，如 `192.168.1.0/24`；Go 指针映射为 `String?`；零值/非法 Prefix 与空串互转） |
+| `net/url.URL` | `Uri`（wire 使用 `URL.String()` 文本；Go 指针映射为 `Uri?`） |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue`（Go 指针映射为 `UuidValue?`）；生成命令会在缺失时运行 `flutter pub add uuid` |
 | 匿名嵌入结构体字段 | Dart `extends`，被提升字段扁平化传输，见「匿名字段与接口」 |
 | 命名接口 | `abstract interface class` + 实现方 `implements`，见「匿名字段与接口」 |
@@ -462,9 +464,12 @@ try {
 
 结构体分类与 FRB 一致：字段全部可序列化的结构体默认按字段翻译（指针 receiver 方法照常生成，
 但 receiver 按值序列化，Go 侧的修改不会写回 Dart 对象）；含不可序列化字段（func、chan、
-未桥接的接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；`//fgb:opaque` 可强制句柄
+未桥接的接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；**没有任何字段能上 wire 的
+结构体**（字段全部私有或被 `json:"-"` / `fgb:"ignore"` 排除，第三方包里最常见）同样自动降级为
+GoOpaque——否则只会生成一个空的 Dart class，既丢状态又编译不过。`//fgb:opaque` 可强制句柄
 语义——需要在 Go 侧保存内部状态、或私有字段承载状态的类型建议显式标记。GoOpaque 类型必须
-以 `*T` 出现在签名中。小写开头的私有类型、字段、方法、函数、常量一律不参与生成。
+以 `*T` 出现在签名中。真正的空结构体 `struct{}`（一个字段都没声明）仍按值翻译为无字段的 Dart
+class。小写开头的私有类型、字段、方法、函数、常量一律不参与生成。
 
 `fgb.DartOpaque`（来自生成的支持包，见下）把任意 Dart 对象按句柄交给 Go 保存、之后原样传回；
 Go 侧最后一份拷贝被 GC 后会自动通知 Dart 释放。
