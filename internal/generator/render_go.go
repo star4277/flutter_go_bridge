@@ -42,8 +42,14 @@ func renderGo(unit *unit) ([]byte, error) {
 	if unit.UsesTime {
 		imports = append(imports, "time")
 	}
-	if unit.UsesInternetIP {
+	if unit.UsesInternetIP || unit.UsesIPPrefix {
 		imports = append(imports, "net/netip")
+	}
+	if unit.UsesURL {
+		imports = append(imports, "net/url")
+	}
+	if unit.UsesRegExp {
+		imports = append(imports, "regexp")
 	}
 	if unit.UsesUUID {
 		imports = append(imports, "github.com/gofrs/uuid/v5")
@@ -149,6 +155,21 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tresult, err := netip.ParseAddr(raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid IP: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindIPPrefix:
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"CIDR prefix string\", value) }", goType)
+		r.line("\tif raw == \"\" { return netip.Prefix{}, nil }")
+		r.line("\tresult, err := netip.ParsePrefix(raw)")
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid CIDR prefix: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
+	case kindURL:
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"URI string\", value) }", goType)
+		r.renderURLParse(goType, "raw")
+	case kindRegExp:
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"regular expression string\", value) }", goType)
+		r.renderRegexpCompile(goType, "raw")
 	case kindUUID:
 		r.line("\traw, ok := value.(string)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"UUID string\", value) }", goType)
@@ -336,7 +357,16 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		// netip.Addr.String returns an empty string for the invalid zero value,
 		// which InternetAddress represents without changing pointer nullability.
 		r.line("\treturn value.String(), nil")
+	case kindIPPrefix:
+		// netip.Prefix.String would emit "invalid Prefix" for the zero value, so
+		// the wire uses the empty string that ParsePrefix's decoder maps back.
+		r.line("\tif !value.IsValid() { return \"\", nil }")
+		r.line("\treturn value.String(), nil")
 	case kindUUID:
+		r.line("\treturn value.String(), nil")
+	case kindURL:
+		r.line("\treturn value.String(), nil")
+	case kindRegExp:
 		r.line("\treturn value.String(), nil")
 	case kindDuration:
 		r.line("\treturn int64(value / time.Microsecond), nil")
@@ -777,6 +807,24 @@ func (r *goRenderer) renderDurationFromMicroseconds(goType, expression string) {
 	r.line("\tconst maxDurationMicroseconds = int64(^uint64(0)>>1) / int64(time.Microsecond)")
 	r.line("\tif %s < -maxDurationMicroseconds || %s > maxDurationMicroseconds { var zero %s; return zero, fmt.Errorf(\"%%s: duration out of time.Duration range\", path) }", expression, expression, goType)
 	r.line("\treturn %s(%s) * %s(time.Microsecond), nil", goType, expression, goType)
+}
+
+// renderURLParse turns the wire text back into a url.URL. url.Parse yields a
+// pointer, and the empty string parses into the zero value, so the zero URL
+// survives a round trip without a special case.
+func (r *goRenderer) renderURLParse(goType, expression string) {
+	r.line("\tparsed, err := url.Parse(%s)", expression)
+	r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid URI: %%w\", path, err) }", goType)
+	r.line("\treturn *parsed, nil")
+}
+
+// renderRegexpCompile turns the wire text back into a regexp.Regexp. The wire
+// carries the pattern source, which is what Regexp.String reports, so the
+// compiled program is rebuilt on this side rather than transferred.
+func (r *goRenderer) renderRegexpCompile(goType, expression string) {
+	r.line("\tcompiled, err := regexp.Compile(%s)", expression)
+	r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid regular expression: %%w\", path, err) }", goType)
+	r.line("\treturn *compiled, nil")
 }
 
 func (r *goRenderer) goType(typ types.Type) string {

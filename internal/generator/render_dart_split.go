@@ -444,14 +444,21 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 		// A const constructor cannot forward to a non-const superclass one.
 		constructorKeyword = ""
 	}
-	r.line("  %s%s({", constructorKeyword, structure.DartName)
-	for _, field := range structure.Super.allFields() {
-		r.line("    %s,", dartConstructorParameter(field, "super"))
+	parameters := len(structure.Super.allFields()) + len(structure.Fields)
+	if parameters == 0 {
+		// Dart has no syntax for an empty named-parameter list, so a struct
+		// without bridged fields needs a bare constructor.
+		r.line("  %s%s();", constructorKeyword, structure.DartName)
+	} else {
+		r.line("  %s%s({", constructorKeyword, structure.DartName)
+		for _, field := range structure.Super.allFields() {
+			r.line("    %s,", dartConstructorParameter(field, "super"))
+		}
+		for _, field := range structure.Fields {
+			r.line("    %s,", dartConstructorParameter(field, "this"))
+		}
+		r.line("  });")
 	}
-	for _, field := range structure.Fields {
-		r.line("    %s,", dartConstructorParameter(field, "this"))
-	}
-	r.line("  });")
 	for _, call := range structure.Methods {
 		r.line("")
 		r.renderInstanceCall(call, "this", "__FGB_BRIDGE_CLASS__.instance", true, "  ")
@@ -679,6 +686,15 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindInternetIP:
 		r.line("  if (value is! String) throw FormatException('$path: expected InternetAddress string');")
 		r.line("  return InternetAddress(value);")
+	case kindIPPrefix:
+		r.line("  if (value is! String) throw FormatException('$path: expected CIDR prefix string');")
+		r.line("  return value;")
+	case kindURL:
+		r.line("  if (value is! String) throw FormatException('$path: expected URI string');")
+		r.line("  return Uri.parse(value);")
+	case kindRegExp:
+		r.line("  if (value is! String) throw FormatException('$path: expected regular expression string');")
+		r.line("  return RegExp(value);")
 	case kindUUID:
 		r.line("  if (value is! String) throw FormatException('$path: expected UUID string');")
 		r.line("  return UuidValue.fromString(value);")
@@ -782,7 +798,7 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  if (value == null) return null;")
 	}
 	switch typ.Kind {
-	case kindBool, kindString, kindSigned, kindFloat, kindAny:
+	case kindBool, kindString, kindSigned, kindFloat, kindAny, kindIPPrefix:
 		r.line("  return value;")
 	case kindUnsigned, kindBigInt:
 		if strings.TrimSuffix(typ.DartType, "?") == "BigInt" {
@@ -799,6 +815,10 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  return value.address;")
 	case kindUUID:
 		r.line("  return value.uuid;")
+	case kindURL:
+		r.line("  return value.toString();")
+	case kindRegExp:
+		r.line("  return value.pattern;")
 	case kindDuration:
 		r.line("  return value.inMicroseconds;")
 	case kindPointer:

@@ -36,7 +36,7 @@ func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
 
 	switch t.Kind {
 	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindBigInt,
-		kindTime, kindInternetIP, kindUUID, kindDuration, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
+		kindTime, kindInternetIP, kindIPPrefix, kindURL, kindRegExp, kindUUID, kindDuration, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
 		kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		return true
 	case kindPointer:
