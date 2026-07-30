@@ -17,6 +17,8 @@ const (
 	kindBigInt      typeKind = "big_int"
 	kindTime        typeKind = "time"
 	kindInternetIP  typeKind = "internet_ip"
+	kindIPPrefix    typeKind = "ip_prefix"
+	kindURL         typeKind = "url"
 	kindUUID        typeKind = "uuid"
 	kindDuration    typeKind = "duration"
 	kindAny         typeKind = "any"
@@ -62,6 +64,8 @@ type unit struct {
 	Interfaces     []*interfaceModel
 	UsesTime       bool
 	UsesInternetIP bool
+	UsesIPPrefix   bool
+	UsesURL        bool
 	UsesUUID       bool
 	UsesBigInt     bool
 	UsesDartOpaque bool

@@ -355,7 +355,7 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 				b.unit.UsesBigInt = true
 				return b.newSimpleType(original, kindBigInt, "BigInt?"), nil
 			}
-			if _, ok := named.Underlying().(*types.Struct); ok && !b.isDartOpaque(named) && !isTime(named) && !isInternetIP(named) {
+			if _, ok := named.Underlying().(*types.Struct); ok && !b.hasDedicatedMapping(named) {
 				if err := b.ensureNamedSupported(named); err != nil {
 					return nil, err
 				}
@@ -451,6 +451,14 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		if isInternetIP(typ) {
 			b.unit.UsesInternetIP = true
 			return b.newSimpleType(original, kindInternetIP, "InternetAddress"), nil
+		}
+		if isIPPrefix(typ) {
+			b.unit.UsesIPPrefix = true
+			return b.newSimpleType(original, kindIPPrefix, "String"), nil
+		}
+		if isURL(typ) {
+			b.unit.UsesURL = true
+			return b.newSimpleType(original, kindURL, "Uri"), nil
 		}
 		if isUUID(typ) {
 			b.unit.UsesUUID = true
@@ -635,6 +643,7 @@ func (b *builder) classifyStruct(named *types.Named) structClass {
 	}
 	b.structClasses[named] = classInProgress
 	class := classValue
+	bridged := 0
 	goStruct := named.Underlying().(*types.Struct)
 	for i := 0; i < goStruct.NumFields(); i++ {
 		field := goStruct.Field(i)
@@ -647,6 +656,7 @@ func (b *builder) classifyStruct(named *types.Named) structClass {
 		if skipStructField(field, tag, options) {
 			continue
 		}
+		bridged++
 		if reason := b.fieldTranslateBlocker(field.Type(), map[types.Type]bool{}); reason != "" {
 			b.warnings = append(b.warnings, fmt.Errorf(
 				"struct %s bridges as GoOpaque because field %s %s; mark the type with fgb(opaque) to silence this warning",
@@ -654,6 +664,16 @@ func (b *builder) classifyStruct(named *types.Named) structClass {
 			class = classOpaque
 			break
 		}
+	}
+	// A struct that carries state but exposes none of it to the wire - the usual
+	// shape of a third-party type built on unexported fields, which cannot be
+	// annotated with fgb(opaque) - has to bridge as a handle. A Dart value class
+	// would be empty, so it would both drop the payload and fail to compile.
+	if class == classValue && bridged == 0 && goStruct.NumFields() > 0 {
+		b.warnings = append(b.warnings, fmt.Errorf(
+			"struct %s bridges as GoOpaque because none of its %d fields can travel to Dart (all unexported or excluded)",
+			named.Obj().Name(), goStruct.NumFields()))
+		class = classOpaque
 	}
 	b.structClasses[named] = class
 	return class
@@ -686,7 +706,7 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		if named, ok := elem.(*types.Named); ok && isCgoSyntheticNamed(named) {
 			return fmt.Sprintf("has CGo pointer type %s with no bridge ownership policy", typ.String())
 		}
-		if named, ok := elem.(*types.Named); ok && !isTime(named) && !isDuration(named) && !isBigInt(named) && !b.isDartOpaque(named) && !b.isStreamSink(named) {
+		if named, ok := elem.(*types.Named); ok && !b.hasDedicatedMapping(named) {
 			if _, isStruct := named.Underlying().(*types.Struct); isStruct {
 				// *Struct is always bridgeable: either an optional value or a
 				// GoOpaque handle.
@@ -718,7 +738,7 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		}
 		return "has a non-empty interface type"
 	case *types.Named:
-		if isTime(typ) || isDuration(typ) || isBigInt(typ) || b.isDartOpaque(typ) || b.isStreamSink(typ) {
+		if b.hasDedicatedMapping(typ) {
 			return ""
 		}
 		if declared, isInterface := typ.Underlying().(*types.Interface); isInterface {
@@ -1169,7 +1189,7 @@ func (b *builder) mapEmbedded(owner *types.Named, field *types.Var) (*structMode
 	if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
 		return nil, nil
 	}
-	if isTime(named) || isDuration(named) || isBigInt(named) || b.isDartOpaque(named) || b.isStreamSink(named) {
+	if b.hasDedicatedMapping(named) {
 		return nil, nil
 	}
 	if b.classifyStruct(named) == classOpaque {
@@ -1332,6 +1352,32 @@ func isBigInt(named *types.Named) bool {
 
 func isInternetIP(named *types.Named) bool { return isNamed(named, "net/netip", "Addr") }
 
+// isIPPrefix matches net/netip.Prefix, which bridges as its CIDR text form.
+func isIPPrefix(named *types.Named) bool { return isNamed(named, "net/netip", "Prefix") }
+
+// isURL matches net/url.URL, which bridges as its text form.
+func isURL(named *types.Named) bool { return isNamed(named, "net/url", "URL") }
+
+// hasDedicatedMapping reports whether mapType translates a named type through a
+// built-in rule instead of bridging it as a declared struct. Such a type must
+// never reach classifyStruct: several of them (netip.Addr, netip.Prefix,
+// url.URL, the atomic wrappers) keep all of their state unexported and would
+// otherwise be mistaken for an untranslatable struct.
+func (b *builder) hasDedicatedMapping(named *types.Named) bool {
+	if named == nil {
+		return false
+	}
+	if isTime(named) || isDuration(named) || isBigInt(named) ||
+		isInternetIP(named) || isIPPrefix(named) || isURL(named) || isUUID(named) {
+		return true
+	}
+	if b.isDartOpaque(named) || b.isStreamSink(named) {
+		return true
+	}
+	_, isAtomic := atomicValueType(named)
+	return isAtomic
+}
+
 func isUUID(named *types.Named) bool { return isNamed(named, "github.com/gofrs/uuid/v5", "UUID") }
 
 // isSupportType matches a type from the generated support package, whose
@@ -1457,7 +1503,7 @@ func containsCgoSyntheticType(typ types.Type, seen map[types.Type]bool) bool {
 
 func validMapKey(typ *wireType) bool {
 	switch typ.Kind {
-	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindDuration, kindNamed:
+	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindDuration, kindIPPrefix, kindURL, kindNamed:
 		return true
 	default:
 		return false
