@@ -48,9 +48,6 @@ func renderGo(unit *unit) ([]byte, error) {
 	if unit.UsesURL {
 		imports = append(imports, "net/url")
 	}
-	if unit.UsesRegExp {
-		imports = append(imports, "regexp")
-	}
 	if unit.UsesUUID {
 		imports = append(imports, "github.com/gofrs/uuid/v5")
 	}
@@ -166,10 +163,6 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\traw, ok := value.(string)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"URI string\", value) }", goType)
 		r.renderURLParse(goType, "raw")
-	case kindRegExp:
-		r.line("\traw, ok := value.(string)")
-		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"regular expression string\", value) }", goType)
-		r.renderRegexpCompile(goType, "raw")
 	case kindUUID:
 		r.line("\traw, ok := value.(string)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"UUID string\", value) }", goType)
@@ -365,8 +358,6 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindUUID:
 		r.line("\treturn value.String(), nil")
 	case kindURL:
-		r.line("\treturn value.String(), nil")
-	case kindRegExp:
 		r.line("\treturn value.String(), nil")
 	case kindDuration:
 		r.line("\treturn int64(value / time.Microsecond), nil")
@@ -816,15 +807,6 @@ func (r *goRenderer) renderURLParse(goType, expression string) {
 	r.line("\tparsed, err := url.Parse(%s)", expression)
 	r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid URI: %%w\", path, err) }", goType)
 	r.line("\treturn *parsed, nil")
-}
-
-// renderRegexpCompile turns the wire text back into a regexp.Regexp. The wire
-// carries the pattern source, which is what Regexp.String reports, so the
-// compiled program is rebuilt on this side rather than transferred.
-func (r *goRenderer) renderRegexpCompile(goType, expression string) {
-	r.line("\tcompiled, err := regexp.Compile(%s)", expression)
-	r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid regular expression: %%w\", path, err) }", goType)
-	r.line("\treturn *compiled, nil")
 }
 
 func (r *goRenderer) goType(typ types.Type) string {
