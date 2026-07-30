@@ -23,10 +23,76 @@ Run optional searches separately or explicitly handle the no-match exit code.
 ### Metadata
 - Reproducible: yes
 - Related Files: none
+- Recurrence-Count: 2
+- Last-Seen: 2026-07-30
 
 ### Resolution
 - **Resolved**: 2026-07-29T00:00:00+08:00
 - **Notes**: Subsequent discovery commands handle optional results explicitly. On Windows, pass directories to `rg` with `-g` filters instead of shell-style path globs such as `internal/*.go`.
+
+---
+
+## [ERR-20260730-006] skill-validator-missing-pyyaml
+
+**Logged**: 2026-07-30T08:03:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The skill validator could not import its required `yaml` module, and a later successful command masked the failure exit code.
+
+### Error
+```
+ModuleNotFoundError: No module named 'yaml'
+```
+
+### Context
+- `quick_validate.py` and `gopls version` were initially run in one PowerShell command.
+- `gopls version` succeeded, making the combined shell command exit successfully despite the validator traceback.
+
+### Suggested Fix
+Install `PyYAML` for the selected Python interpreter and run required validation commands separately so each exit code is authoritative.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .agents/skills/fgb-develop-feature/SKILL.md
+
+### Resolution
+- **Resolved**: 2026-07-30T08:03:00+08:00
+- **Notes**: Installed `PyYAML` and reran `quick_validate.py` independently.
+
+---
+
+## [ERR-20260730-005] skill-init-python-command
+
+**Logged**: 2026-07-30T08:01:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The skill initializer could not run because this Windows environment exposes Python through `py`, not `python`.
+
+### Error
+```
+python : The term 'python' is not recognized
+```
+
+### Context
+- Command: `python .../skill-creator/scripts/init_skill.py`
+- Python 3.14 was installed and available through the Windows Python Launcher.
+
+### Suggested Fix
+On Windows, check `py -3 --version` when `python` is unavailable and invoke Python scripts with `py -3`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .agents/skills/fgb-develop-feature/SKILL.md
+
+### Resolution
+- **Resolved**: 2026-07-30T08:01:00+08:00
+- **Notes**: Initialized the skill successfully with `py -3`.
 
 ---
 

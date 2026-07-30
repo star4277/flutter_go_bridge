@@ -1,0 +1,4 @@
+interface:
+  display_name: "FGB Feature Development"
+  short_description: "Develop FGB features with staged testing"
+  default_prompt: "Use $fgb-develop-feature to implement a Flutter Go Bridge feature through analysis, staged tests, documentation, branching, and commit."
