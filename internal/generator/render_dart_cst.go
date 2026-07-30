@@ -58,8 +58,6 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstStringBody("value")
 	case kindURL:
 		r.renderCstStringBody("value.toString()")
-	case kindRegExp:
-		r.renderCstStringBody("value.pattern")
 	case kindUUID:
 		r.renderCstStringBody("value.uuid")
 	case kindPointer:
