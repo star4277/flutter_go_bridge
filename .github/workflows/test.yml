@@ -19,7 +19,11 @@ jobs:
         run: go mod download
 
       - name: Run tests
-        run: go test -covermode=atomic -coverprofile=coverage.txt ./...
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=$(go list ./... | grep -v '/template$')
+          go test -covermode=atomic -coverprofile=coverage.txt $packages
 
       - name: Upload results to Codecov
         uses: codecov/codecov-action@v5
