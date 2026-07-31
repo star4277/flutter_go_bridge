@@ -6,9 +6,6 @@
 go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
-该路径的最后一级目录名就是 Go 安装后的可执行文件名，因此命令会安装
-`flutter_go_bridge_codegen`，而不是 `command`。
-
 ## `generate`
 
 ```sh

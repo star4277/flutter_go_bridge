@@ -1,684 +1,382 @@
 # flutter_go_bridge
 
-`flutter_go_bridge` 是面向 Gokit 的 Go → Dart/Flutter 代码生成器。它借鉴
-`flutter_rust_bridge_codegen` 的 CLI 与生成结构，但不依赖 Flutter Native Assets，也不依赖
-`package:flutter/services.dart`。
+<p align="center">
+  <strong>A code-generation bridge between Go and Dart.</strong>
+</p>
 
-当前实现 `generate`、`generate --watch`、`run`、`create` 和 `integrate`。
+<p align="center">
+  Turn Go service APIs into type-safe Dart and Flutter interfaces with generated bindings, a stable FFI ABI, and no Flutter runtime dependency in the generated Dart code.
+</p>
 
-## 设计约定
+<p align="center">
+  <a href="./README.md">English</a> |
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
-- 使用 Go 官方 `go/packages`、`go/ast`、`go/types` 解析源码和类型信息，不使用自定义 Go 语法解析器。
-- 生成器内部使用可递归扩展的类型 IR 和 codec capability 判定，作用类似 FRB 的 `MirType`。
-- 默认序列化方向与 FRB 一致：Dart → Go 使用 CST（C 结构体），Go → Dart 使用 DCO（`Dart_CObject`）。
-- `map`、`any` 等当前无法安全表示为 CST/DCO 的调用，会整体回退到内置的纯 Dart Standard codec；不导入 Flutter SDK。
-- Dart API DL 用于 `//fgb:async` 的 DCO 对象投递；同步 DCO 结果通过返回的 `Dart_CObject*` 解码。
-- 所有 `dart:ffi`、动态库加载、内存管理和 Dart API DL 代码都集中在 `bridge_generated.dart`。
-- 每个 Go 源文件生成一个同名 Dart API 文件；目录结构按 Go 输入目录原样镜像。
-- Go 端只生成一个 `bridge_generated.go`，默认放在最近的 `go.mod` 同级目录，不生成 `.c` 或 `.h` 文件。
-- opaque Go 对象由 `NativeFinalizer` 自动释放；生成 API 不提供、也不要求开发者调用 `dispose()`。
+<p align="center">
+  <a href="https://star4277.github.io/flutter_go_bridge"><img alt="Documentation" src="https://img.shields.io/badge/docs-online-4969ed"></a>
+  <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-green"></a>
+  <a href="https://github.com/star4277/flutter_go_bridge/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/star4277/flutter_go_bridge?style=flat"></a>
+  <a href="https://github.com/star4277/flutter_go_bridge/actions"><img alt="GitHub Actions" src="https://img.shields.io/github/actions/workflow/status/star4277/flutter_go_bridge/docs.yml?branch=main&label=docs"></a>
+</p>
 
-## 序列化策略
+## Documentation
 
-每个调用会根据参数、receiver 和返回值递归选择 codec：
+The complete English documentation is available at:
 
-| 方向 | 首选 | 说明 |
-| --- | --- | --- |
-| Dart → Go | CST | 为参数和结构体生成真实 C wire struct；标量内联，字符串、集合和嵌套结构体由短生命周期 arena 管理 |
-| Go → Dart | DCO | 使用 `Dart_CObject`；结构体按字段声明顺序编码为 Dart `List`，再在 Dart 侧还原为 API class |
-| 双向 fallback | Standard codec | 用于 `map`、`any` 等 CST/DCO 尚不支持的类型，仍然是纯 Dart 实现 |
+**https://star4277.github.io/flutter_go_bridge**
 
-Go 值结构体的字段会生成在其对应源文件的 Dart class 中。普通字段为 `required` 构造参数；Go 指针字段映射为
-Dart 可空类型，构造参数不加 `required`。所有 CST/DCO/FFI 细节仍只存在于 `bridge_generated.dart`。
+It covers installation, configuration, generated output, serialization, type mapping, directives,
+structs, interfaces, streams, callbacks, return values, and error handling.
 
-## 同步与异步标记
+## What it does
 
-未标记函数和 `//fgb:sync` 都只生成同步 Dart 方法；只有 `//fgb:async` 才生成异步 Dart 方法。
-同一个 Go 方法不会同时生成同步、异步两个版本，Dart 方法名也不会添加 `Sync` 或 `Async` 后缀。
+Write ordinary Go code and let `flutter_go_bridge_codegen` produce the bridge:
+
+```text
+Go package
+    │
+    │ go/packages + go/types
+    ▼
+flutter_go_bridge_codegen
+    ├── bridge_generated.go
+    └── mirrored Dart API tree
+            └── bridge_generated.dart keeps every FFI detail
+```
 
 ```go
-func Add(a, b int) int { // 默认同步
+package api
+
+import "errors"
+
+type User struct {
+	ID   int64
+	Name string
+}
+
+func Add(a, b int) int {
 	return a + b
 }
 
-//fgb:sync
-func Subtract(a, b int) int {
-	return a - b
-}
-
 //fgb:async
-func LoadValue() int {
-	return 42
+func LoadUser(id int64) (User, error) {
+	if id <= 0 {
+		return User{}, errors.New("id must be positive")
+	}
+	return User{ID: id, Name: "Gopher"}, nil
 }
 ```
 
-生成的 Dart API：
+The generated Dart API uses named parameters and normal Dart types:
 
 ```dart
-final sum = add(a: 20, b: 22);
-final difference = subtract(a: 22, b: 20);
-final value = await loadValue();
+final total = add(a: 20, b: 22);
+final user = await loadUser(id: 1);
+print(user.name);
 ```
 
-## 输出结构
+Unmarked functions are synchronous. Add `//fgb:async` only when the Dart API should return a
+`Future`.
 
-假设 Go 模块如下：
+## Why flutter_go_bridge
 
-```text
-go/
-├── go.mod
-└── api/
-    ├── api.go
-    └── account.go
+- **Ordinary Go source** — APIs are parsed with the official `go/packages`, `go/ast`, and `go/types`
+  toolchain. No custom Go syntax or interface definition language is required.
+- **Dart-first generated API** — every Go source file gets a matching Dart file, parameters are named,
+  and structs become typed Dart classes.
+- **FFI stays internal** — dynamic library loading, native memory, codecs, handles, and Dart API DL are
+  isolated in `bridge_generated.dart`.
+- **No Flutter SDK dependency in generated bindings** — generated APIs use Dart SDK libraries and do
+  not import `package:flutter/services.dart` or depend on Flutter Native Assets.
+- **Per-call codec selection** — fast CST/DCO paths are used where possible; maps, dynamic values, and
+  interfaces fall back to the built-in standard codec when needed.
+- **Stable native ABI** — adding a Go function does not add a new exported C symbol. Calls use a fixed
+  dispatcher ABI, so Gokit and CMake integration remains stable.
+- **Stateful Go objects** — serializable structs become Dart value classes; stateful or unsupported
+  structs become `GoOpaque` handles released by `NativeFinalizer`.
+- **Streams and callbacks** — expose Go producers as Dart `Stream<T>` and pass synchronous or async
+  Dart closures into Go functions.
+
+## Install
+
+```sh
+go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
-推荐配置：
+This installs the `flutter_go_bridge_codegen` command.
+
+When building the code generator from a source checkout, initialize the Gokit submodule first:
+
+```sh
+git submodule update --init --recursive
+```
+
+## Quick start
+
+### Create a new project
+
+```sh
+flutter_go_bridge_codegen create my_app
+```
+
+For an FFI plugin:
+
+```sh
+flutter_go_bridge_codegen create my_plugin -t plugin
+```
+
+`create` runs `flutter create` and applies the Go/Gokit bridge template, leaving a runnable project.
+
+### Integrate an existing project
+
+Run the command anywhere inside the Flutter project:
+
+```sh
+flutter_go_bridge_codegen integrate
+```
+
+For an existing FFI plugin:
+
+```sh
+flutter_go_bridge_codegen integrate -t plugin
+```
+
+The command finds the nearest `pubspec.yaml`, adds the Go module and Gokit build files, generates the
+initial bridge, and preserves existing files whenever possible.
+
+### Generate bindings
+
+```sh
+flutter_go_bridge_codegen generate
+```
+
+During development, regenerate automatically:
+
+```sh
+flutter_go_bridge_codegen generate --watch
+```
+
+Or let the CLI run Flutter and coordinate both source trees:
+
+```sh
+flutter_go_bridge_codegen run -d emulator-5554
+```
+
+Dart changes use hot reload. Go changes regenerate the bridge and restart the application process so
+the rebuilt native library is loaded.
+
+## Configuration
+
+The CLI discovers these files automatically:
+
+- `.flutter_go_bridge.yml`, `.flutter_go_bridge.yaml`, or `.flutter_go_bridge.json`;
+- `flutter_go_bridge.yml`, `flutter_go_bridge.yaml`, or `flutter_go_bridge.json`;
+- the `flutter_go_bridge` section in `pubspec.yaml`.
+
+A minimal configuration looks like this:
 
 ```yaml
 go_input: go/api
 go_output: go/bridge_generated.go
 dart_output: lib/src/bridge_generated.dart
-# library_name is optional; defaults to go_lib_<pubspec.yaml name>.
 dart_entrypoint_class_name: FlutterGoBridge
 dart_format: true
 ```
 
-生成结果：
+`library_name` is optional and defaults to `go_lib_<pubspec package name>`. Command-line flags
+override configuration files.
+
+See the [configuration reference](https://star4277.github.io/flutter_go_bridge/guide/configuration)
+for every option.
+
+## Generated output
+
+Given this Go module:
 
 ```text
 go/
 ├── go.mod
-├── bridge_generated.go       # package main、cgo ABI、codec、dispatcher
-├── internal/
-│   └── fgb/
-│       └── fgb_generated.go  # 支持包（StreamSink / DartOpaque）
+└── api/
+    ├── api.go
+    └── account.go
+```
+
+Code generation produces one Go bridge and a mirrored Dart tree:
+
+```text
+go/
+├── bridge_generated.go
+├── internal/fgb/fgb_generated.go
 └── api/
     ├── api.go
     └── account.go
 
 lib/src/
-├── bridge_generated.dart     # 唯一的 FFI/runtime/codec 整合文件
-└── api/                      # 与 Go 包目录同名，和 bridge 同级
-    ├── api.dart              # api.go 中的类型、函数和方法
-    └── account.dart          # account.go 中的类型、函数和方法
+├── bridge_generated.dart
+└── api/
+    ├── api.dart
+    └── account.dart
 ```
 
-Dart 侧的目录结构**镜像 Go 的包结构**，锚点是 Go 模块根：`go/api/api.go` → `lib/src/api/api.dart`，
-`api/` 目录与 `bridge_generated.dart` 同级。若输入包就是模块根（`package main` 直连模式），
-文件直接落在输出根。
+- `bridge_generated.go` contains the cgo exports, dispatchers, and Go codecs.
+- `bridge_generated.dart` contains the FFI runtime, dynamic library bindings, codecs, and handle
+  management.
+- Mirrored Dart files contain the public classes, functions, methods, interfaces, and constants.
 
-如果 `go_output` 省略，生成器会从本地 `go_input` 向上查找最近的 `go.mod`，并在其同级生成
-`bridge_generated.go`。如果 `dart_output` 指向目录，整合文件名默认为 `bridge_generated.dart`。
+## Serialization model
 
-## CLI
+Each call selects a transport from all types reachable through its parameters, receiver, and return
+values:
 
-```text
-go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
-flutter_go_bridge_codegen generate
-```
-
-也可以直接传参：
-
-```text
-flutter_go_bridge_codegen generate \
-  --go-input go/api \
-  --go-output go/bridge_generated.go \
-  --dart-output lib/src/bridge_generated.dart \
-  --library-name go_lib_example
-```
-
-自动配置文件位置与 `flutter_rust_bridge_codegen` 类似：
-
-- `.flutter_go_bridge.yml/.yaml/.json`
-- `flutter_go_bridge.yml/.yaml/.json`
-- `pubspec.yaml` 中的 `flutter_go_bridge:` 节
-
-命令行参数覆盖配置文件。
-
-### generate --watch
-
-```text
-flutter_go_bridge_codegen generate --watch
-```
-
-监听 `go_input`（目录递归，或单个 `.go` 文件）并在变更后自动重新生成，行为对应
-`flutter_rust_bridge_codegen generate --watch`：
-
-- 采用约 400ms 的轮询快照对比（无额外依赖，跨平台/网络盘/原子改名保存均可靠），
-  `go_output`、`dart_output` 与点目录（如 `.git`）不会触发重跑；
-- 每轮都重新加载配置文件，改配置在下一轮生效；
-- 生成失败只打印告警并继续监听，Ctrl+C 退出；
-- `--watch` 要求 `go_input` 是本地路径，包模式（package pattern）会直接报错。
-
-## run
-
-```text
-flutter_go_bridge_codegen run -d emulator-5554
-flutter_go_bridge_codegen run -d windows -- --flavor dev --dart-define=API=staging
-```
-
-`run` 自己拉起 `flutter run`，并在源码变更时做两件不同的事：
-
-| 变更 | 动作 | 原因 |
+| Direction | Preferred path | Purpose |
 | --- | --- | --- |
-| `go_input` 下的 Go 源码 | 重新生成 → **停止并重启整个进程** | 动态库无法热替换 |
-| Dart 源码（默认 `lib/`） | hot reload | 不涉及 native 库 |
+| Dart → Go | CST | Real C wire structs with inline scalars and short-lived arenas for nested values |
+| Go → Dart | DCO | `Dart_CObject` values posted or returned directly to Dart |
+| Either direction | Standard codec | Fallback for maps, `any`, named interfaces, and other dynamic shapes |
 
-### 为什么 Go 变更必须重启进程
+This selection is generated per call. Application code works only with the public Dart API and does
+not choose codecs manually.
 
-hot reload 和 hot restart 都只重建 Dart isolate。`dlopen` 打开的动态库会一直留在进程里，
-不会因为 isolate 重建而卸载；Android 上重新编出来的 `.so` 甚至根本没被推到设备，需要重新
-打包 APK 并安装。所以只有重启进程才能让 app 重新链接到新生成的 Go 代码——这也是 `run` 相对
-`generate --watch` 的全部意义。
+## Supported API shapes
 
-> 顺带说明：Dart VM Service、解析 `flutter run` 的 stdout、DevTools Protocol 这几种做法都属于
-> **观测**手段，能告诉你 app 何时启动、何时热重载，但没有任何一种能卸载并重载 native 库。
-
-### 按键
-
-`run` 底层用 `flutter run --machine`，flutter 不再接管键盘，所以按键由本工具处理并翻译成
-daemon 请求。stdin 是终端时为单键（无需回车），否则退化为行输入（输入后回车）。
-
-| 键 | 行为 | 刷新 Go 动态库 |
-| --- | --- | --- |
-| `r` | hot reload | 否 |
-| `R` | hot restart | 否 |
-| `g` | 重新生成 + 重启进程 | 是 |
-| `q` | 停止 app 并退出 | |
-| `d` | detach，app 留在设备上继续运行 | |
-| `h` | 显示帮助 | |
-
-`r` / `R` 只重建 Dart 侧，改了 Go 代码按它们不会生效——要手动触发请用 `g`。
-
-### 参数
-
-- `--` 之后的参数原样透传给 `flutter run`（`--flavor`、`--dart-define` 等）；
-- `-d/--device-id` 是常用参数的快捷写法。注意 `--machine` 不支持 `-d all`，多设备时必须指定单个设备；
-- `--project-dir` 指定要启动的 Flutter 工程。默认取配置的 base dir；plugin 工程的 base dir 下
-  没有 `lib/main.dart`，会自动改用 `example/`；
-- `--dart-input` 覆盖热重载监听的 Dart 目录（默认工程的 `lib/`，plugin 工程同时监听插件自身和 example 的 `lib/`）；
-- `--watch-interval` 轮询间隔，默认 400ms；
-- `generate` 的配置参数（`--config-file`、`--go-input` 等）同样可用，但**没有单字母简写**——
-  `-d` 让给了设备，和 `flutter run` 保持一致。
-
-### 行为细节
-
-- 生成的文件不会触发自身：除 `go_output`、`dart_output` 外，每轮生成产出的全部文件（含镜像的
-  Dart 目录树和 support 包）都会动态加入排除集；
-- 变更检测在 `run` 下按内容哈希确认——生成器每轮都会无条件重写输出文件，仅靠 mtime 会导致
-  「重写了相同内容」也触发一次完整的重新构建安装；
-- 连续保存会先等待一个静默期再动作，避免一次 save-all 触发多次重启；
-- 生成失败只告警并保留当前正在运行的 app，不会把工作中的会话拆掉（首轮生成失败则直接报错退出）；
-- 退出时按 `app.stop` 优雅停止，超时后强制终止整个进程树——Windows 上 `flutter` 是批处理外壳，
-  只杀它会残留 dart/gradle/adb 进程。
-
-## create
-
-```text
-flutter_go_bridge_codegen create my_app
-flutter_go_bridge_codegen create my_plugin -t plugin
-```
-
-对应 `flutter_rust_bridge_codegen create`，从零建出一个可直接运行的 Flutter + Go 工程：
-
-1. 执行 `flutter create`（app 用 `--template app`，plugin 用 `--template plugin_ffi`；
-   `--org`、`--platforms` 透传）；
-2. 删除会与模板冲突的脚手架文件（app 的 `lib/`、`test/`；plugin 的 `lib/`、`src/`、
-   `ffigen.yaml`、各平台构建文件、`example/lib/` 等），因此入口文件是全新模板，
-   不会带 integrate 那样的注释保留；
-3. 在新工程上运行与 `integrate` 完全相同的注入流程（模板覆盖、pub 依赖、
-   gokit build_tool、dart fix/format）。
-
-目标目录已存在时会报错并提示改用 `integrate`。`--library-name` / `--go-mod-dir` /
-`--platforms` 与 `integrate` 同义。
-
-## integrate
-
-在已有 Flutter 工程内（任意子目录均可，会向上查找 `pubspec.yaml`）执行：
-
-```text
-flutter_go_bridge_codegen integrate                 # app 模板
-flutter_go_bridge_codegen integrate -t plugin       # FFI plugin 模板
-```
-
-它参照 `flutter_rust_bridge_codegen integrate` 的流程初始化项目：
-
-- 覆盖模板：`flutter_go_bridge.yaml`、`go/`（Go 模块 + 示例 API + 预生成
-  `bridge_generated.go`）、`lib/src/`（预生成 Dart bridge）、`test_driver/`，app 模板附加
-  `go_builder/`（内含 gokit），plugin 模板附加平台构建文件和工程根的 `gokit/`。
-- 已存在的文件一律跳过并告警；只有 `lib/main.dart`（app）或 `lib/<package>.dart`（plugin）
-  会把原内容整体注释后写入模板，便于生成可运行的自包含 demo。
-- app 模板执行 `flutter pub add <library_name> --path=go_builder`；按需为工程（及 plugin 的
-  `example/`）添加 `integration_test`。
-- 在 gokit `build_tool` 中执行 `flutter pub get`，把 gokit 目录加入 `analysis_options.yaml`
-  的 analyzer exclude，最后运行 `dart fix --apply` 与 `dart format`。
-
-库名默认 `go_lib_<pubspec name>`（plugin 为 `<pubspec name>`），Go 模块目录默认 `go`，可用
-`--library-name` / `--go-mod-dir` 覆盖。`--platforms` 指定平台列表（缺省会通过
-`flutter create --help` 探测 ohos 支持）；其余开关与 FRB 一致：`--no-write-lib`、
-`--no-integration-test`、`--no-dart-fix`、`--no-dart-format`。
-
-模板通过 `go:embed` 内嵌进 codegen 二进制；从源码构建前需要
-`git submodule update --init --recursive` 拉取 gokit 子模块，否则 `integrate` 会在运行时报错。
-
-## Dart 调用
-
-生成代码只依赖 Dart SDK 自带库，可在纯 Dart VM 或 Flutter 中使用。所有生成的
-Dart 入口（函数、方法、构造函数）一律使用命名参数；`bridge_generated.dart` 不再
-re-export 各 API 文件，需要什么就 import 什么：
-
-```dart
-import 'bridge_generated.dart'; // FlutterGoBridge / FgbPlatformException / GoOpaque
-import 'api.dart';
-import 'account.dart';
-
-void main() async {
-  FlutterGoBridge.initialize(libraryPath: 'path/to/mylib.dll');
-
-  final answer = add(a: 20, b: 22);    // 未标记：同步
-  final account = await loadAccount(); // Go 侧标记 //fgb:async：异步
-}
-```
-
-## 稳定 ABI
-
-业务函数通过统一 dispatcher 分发，不会为每个方法生成独立 C 符号。公共符号为：
-
-| 符号 | 作用 |
-| --- | --- |
-| `fgb_init` | 使用 `NativeApi.initializeApiDLData` 初始化 Dart API DL |
-| `fgb_cst` | CST 参数 + DCO 返回值的同步首选入口 |
-| `fgb_cst_async` | CST 参数；goroutine 完成后通过 `Dart_PostCObject` 投递 DCO 结果 |
-| `fgb_dco_free` | 释放同步调用返回的 DCO 对象树 |
-| `fgb` | Standard codec 同步 fallback 入口 |
-| `fgb_async` | Standard codec 异步 fallback 入口 |
-| `fgb_alloc` / `fgb_free` | FFI 请求与响应缓冲区管理 |
-| `fgb_drop` | `NativeFinalizer` 自动释放 GoOpaque 句柄 |
-| `fgb_dart_opaque_port` | 注册 DartOpaque 释放通知端口 |
-| `fgb_callback_port` | 注册 Dart 闭包回调的常驻请求端口 |
-| `fgb_callback_result` | Dart 闭包执行完毕后回传结果 |
-| `fgb_stream_port` | 注册 Stream 事件的常驻投递端口 |
-| `fgb_stream_cancel` | Dart 停止监听后通知 Go 停止生产 |
-
-这些符号由 `bridge_generated.go` 中的 cgo 导出声明生成；代码生成器本身不会创建 C 源文件或头文件。
-
-## Gokit
-
-生成的 Go bridge 位于模块根目录，因此 `gokit.yaml` 的主包应指向模块根：
-
-```yaml
-library_name: go_lib_example
-main_package: .
-```
-
-Windows/Linux 的 CMake 配置可继续使用 Gokit，并以 `fgb_init` 作为强制链接符号：
-
-```cmake
-include("../gokit/cmake/gokit.cmake")
-apply_gokit(${PLUGIN_NAME} ../go mylib fgb_init)
-```
-
-## 类型映射
-
-| Go | Dart/wire |
+| Go | Generated Dart |
 | --- | --- |
 | `bool`, `string` | `bool`, `String` |
-| `int8`…`int64`, `int` | `int` |
-| `uint8`…`uint32` | `int`，生成范围检查 |
+| `int8` through `int64`, `int` | `int` |
+| `uint8`, `uint16`, `uint32` | `int` with range checks |
 | `uint64`, `uint`, `uintptr` | `BigInt` |
 | `float32`, `float64` | `double` |
-| `[]byte` | `Uint8List` |
-| `[]int32`, `[]int64`, `[]float64` | 对应 typed list |
-| 其他 slice/array | `List<T>` |
-| `map[K]V` | `Map<K, V>` |
-| 可翻译结构体（默认） | 对应源文件中的 Dart class：带字段、命名构造参数；指针字段可空 |
-| 第三方包中的可翻译结构体 | 自动生成可达的 Dart class（以及嵌套命名类型）到 `_generated.dart`；同名时自动加 Go 包名前缀 |
-| `sync/atomic.AtomicXXX` 及兼容的 atomic 包装类型 | 映射为 `Load()` 返回的 Dart 基础类型；只有 Go 指针形式才可空 |
-| `net/netip.Addr` | `InternetAddress`（Go 指针映射为 `InternetAddress?`） |
-| `net/netip.Prefix` | `String`（CIDR 文本，如 `192.168.1.0/24`；Go 指针映射为 `String?`；零值/非法 Prefix 与空串互转） |
-| `net/url.URL` | `Uri`（wire 使用 `URL.String()` 文本；Go 指针映射为 `Uri?`） |
-| `github.com/gofrs/uuid/v5.UUID` | `UuidValue`（Go 指针映射为 `UuidValue?`）；生成命令会在缺失时运行 `flutter pub add uuid` |
-| 匿名嵌入结构体字段 | Dart `extends`，被提升字段扁平化传输，见「匿名字段与接口」 |
-| 命名接口 | `abstract interface class` + 实现方 `implements`，见「匿名字段与接口」 |
-| 普通 `*struct` 值 | 可空 Dart value class，字段继续参与 CST/DCO 序列化 |
-| GoOpaque 结构体 | `extends GoOpaque` 的句柄类 + `NativeFinalizer` 自动释放 |
-| `fgb.DartOpaque` / `*fgb.DartOpaque` | `Object` / `Object?`（Dart 对象按句柄穿透 Go） |
-| `fgb.StreamSink[T]` / `chan<- T` | `Stream<T>` 或 `StreamSink<T>`，见「Stream」，需 `//fgb:async` |
-| `context.Context` 参数 | 不出现在 Dart 签名；由生成代码创建，取消订阅时自动 cancel |
-| 函数类型参数 | `FutureOr<R> Function(...)`，见「Dart 闭包回调」，需 `//fgb:async` |
-| `time.Time` | `DateTime` |
-| `time.Duration` | `Duration`（wire 使用微秒；Go→Dart 会截断不足 1 微秒的纳秒部分） |
-| `math/big.Int` | `BigInt` |
-| 最后一个 `error` 返回值 | `FgbPlatformException` |
-| `any` / `interface{}` | `Object?` |
+| `[]byte`, `[]int32`, `[]int64`, `[]float64` | Dart typed lists |
+| `[]T`, `[N]T`, `map[K]V` | `List<T>`, `List<T>`, `Map<K, V>` |
+| `time.Time`, `time.Duration`, `math/big.Int` | `DateTime`, `Duration`, `BigInt` |
+| `net/netip.Addr`, `net/netip.Prefix`, `net/url.URL` | `InternetAddress`, `String`, `Uri` |
+| `github.com/gofrs/uuid/v5.UUID` | `UuidValue` |
+| `type XXX struct { ... }` | `class XXX` or `class XXX extends GoOpaque` |
+| `type XXX interface { ... }` | `abstract interface class XXX` |
+| `error` | `FgbPlatformException` |
+| `chan<- T`, `fgb.StreamSink[T]` | `Stream<T>` or `StreamSink<T>` |
+| `func(A) R` parameter | `FutureOr<R> Function(A)` |
 
-## 匿名字段与接口
+See the complete [type mapping](https://star4277.github.io/flutter_go_bridge/reference/type-mapping),
+including pointer, nullable, collection, interface, and unsupported-type rules.
 
-**匿名嵌入字段生成 Dart 继承**：被嵌入的结构体本身是一个普通 class，嵌入它的结构体
-`extends` 它；被提升的字段在 wire 上扁平化（与 Go 的字段提升一致），Dart 构造函数用
-`super.xxx` 转发：
+## Core bridge features
+
+### Structs and interfaces
+
+Serializable Go structs become Dart value classes. Anonymous embedded structs become Dart
+inheritance, and promoted fields are flattened on the wire. Named Go interfaces become Dart
+`abstract interface class` declarations with a generated, closed set of Go implementations.
+
+Structs with state that cannot be serialized can be marked explicitly:
 
 ```go
-type Animal struct {
-	Name string
-	Legs int
-}
-
-func (a Animal) Kind() string { return "animal" }
-
-type Dog struct {
-	Animal          // → class Dog extends Animal
-	Breed string
-}
-
-func (d Dog) Kind() string { return "dog" }   // 遮蔽 → Dart @override
-```
-
-```dart
-class Animal { final String name; final int legs; ... }
-class Dog extends Animal {
-  final String breed;
-  Dog({required super.name, required super.legs, required this.breed});
-  @override String kind() { ... }
+//fgb:opaque
+type Counter struct {
+	total int
 }
 ```
 
-Go 允许用**任意签名**遮蔽被提升的方法，Dart 的 override 规则不允许，因此签名不兼容时会在
-生成期报错，并提示用 `//fgb:rename` 改名。参与继承的 class 不带 `final` 修饰（Dart 禁止
-继承 `final class`）。只能有一个匿名结构体字段（Dart 单继承），嵌入指针或 GoOpaque 结构体
-会报错。
+They become `GoOpaque` handle classes and retain Go-side identity across calls.
 
-**接口生成 `abstract interface class`**，实现它的类型自动带上 `implements`：
+### Streams
 
-```go
-type Shape interface {
-	Area() int
-	Label() string
-}
-
-type Circle struct{ R int }
-
-func (c Circle) Area() int     { return 3 * c.R * c.R }
-func (c Circle) Label() string { return "circle" }
-```
-
-```dart
-abstract interface class Shape {
-  int area();
-  String label();
-}
-
-final class Circle implements Shape { ... }
-```
-
-- 接口值在 wire 上是 `[实现序号, 载荷]` 的 tagged union，Go 侧用类型 switch、Dart 侧用
-  `is` 判定（子类先于父类判定，保证被标记为最派生的类型）；因此接口调用一律走 standard
-  codec（不进 CST）。
-- 接口方法本身不产生调用：`shape.area()` 分发到具体 Dart 类，由它调用 Go。
-- 接口方法上可以写 `//fgb:async` / `//fgb:rename` / `//fgb:ignore`；实现的形态必须与声明
-  一致，否则 Dart 无法通过类型检查。
-- 接口值在 Go 里不用指针也能是 nil，所以**接口参数可以标记 `//fgb:nullable`**；
-  返回方向不可为 nil（Go 返回 nil 接口会报错）。
-- 至少要有一个已桥接的类型实现该接口，否则报错——没有实现就无法在两端还原具体类型。
-
-## 多返回值与多 error
-
-**非 error 返回值有多个时封装成 Dart record（元组）**；Go 的结果要么全带名字要么全不带，
-所以规则很干净——全带名字就生成命名 record，否则生成位置 record：
-
-```go
-func Divide(a, b int) (int, int, error)                          // → (int, int) divide({...})
-func Split(v string) (head string, tail string, err error)       // → ({String head, String tail}) split({...})
-func Describe(n int) (Point, string, bool)                       // → (Point, String, bool) describe({...})
-```
-
-```dart
-final (q, r) = divide(a: 17, b: 5);        // 位置 record 可直接解构
-final parts = split(value: 'hello');
-print('${parts.head} / ${parts.tail}');    // 命名 record 按名字取
-```
-
-单个非 error 返回值保持原样，不会被包成一元元组。
-
-**`error` 可以出现在任意位置，而且可以有多个**：每一个非 nil 的 error 都会被收集起来，
-一起放进 `FgbPlatformException.goErrors`（`FgbGoErrors` 类型，内含 `List<String> messages`）：
-
-```go
-func Validate(name string, age int) (string, error, error)
-func Load(id int) (error, int)     // error 不必在最后
-```
-
-```dart
-try {
-  validate(name: '', age: -1);
-} on FgbPlatformException catch (error) {
-  print(error.message);            // "name is required; age must not be negative"
-  for (final m in error.goErrors!.messages) print(m);
-}
-```
-
-只声明一个 `error` 时 `goErrors` 为 null，用 `message` 即可——行为与之前完全一致。
-只有 error、没有非 error 返回值的函数在 Dart 侧仍是 `void`。
-
-当前泛型函数、可变参数和复杂外部命名类型暂未支持。
-
-结构体分类与 FRB 一致：字段全部可序列化的结构体默认按字段翻译（指针 receiver 方法照常生成，
-但 receiver 按值序列化，Go 侧的修改不会写回 Dart 对象）；含不可序列化字段（func、chan、
-未桥接的接口、外部类型等）的结构体自动降级为 GoOpaque 并给出警告；**没有任何字段能上 wire 的
-结构体**（字段全部私有或被 `json:"-"` / `fgb:"ignore"` 排除，第三方包里最常见）同样自动降级为
-GoOpaque——否则只会生成一个空的 Dart class，既丢状态又编译不过。`//fgb:opaque` 可强制句柄
-语义——需要在 Go 侧保存内部状态、或私有字段承载状态的类型建议显式标记。GoOpaque 类型必须
-以 `*T` 出现在签名中。真正的空结构体 `struct{}`（一个字段都没声明）仍按值翻译为无字段的 Dart
-class。小写开头的私有类型、字段、方法、函数、常量一律不参与生成。
-
-`fgb.DartOpaque`（来自生成的支持包，见下）把任意 Dart 对象按句柄交给 Go 保存、之后原样传回；
-Go 侧最后一份拷贝被 GC 后会自动通知 Dart 释放。
-
-## 生成的支持包
-
-`DartOpaque`、`StreamSink` 这类必须出现在 Go API 签名里的类型，由生成器写进**你自己的模块**：
-
-```text
-go/
-├── go.mod                      # 始终零依赖
-├── bridge_generated.go
-├── internal/
-│   └── fgb/
-│       └── fgb_generated.go    # 支持包，DO NOT EDIT
-└── api/
-    └── api.go                  # import "<你的模块>/internal/fgb"
-```
-
-- **不需要任何外部依赖**：`go.mod` 里一行 require 都不会多。
-- 放在 `internal` 下，Go 的 internal 规则保证它不会成为你对外 API 的一部分。
-- 每次 `generate` 都会重写它，因此支持包与生成的 bridge 永远同版本，不存在版本错配。
-- 它在**解析 Go 输入之前**写出，所以第一次使用时不会出现「先 import 才能生成、先生成才能 import」的死锁。
-- `internal` 包一律不参与代码生成：把 `go_input` 指向 `internal/...` 会直接报错。
-
-## Stream
-
-Go 通过 `fgb.StreamSink[T]` 或一个 `chan<- T` 参数向 Dart 推送一串值。与 FRB 不同，
-**返回类型不会被无条件改写成 `Stream`**：只有签名里出现 sink 或 channel 才有 Stream，
-且分两种归属。
-
-### 最简形式：`chan<- T`（推荐先用这个）
+A send-only channel is enough to expose a Go-owned Dart stream:
 
 ```go
 //fgb:async
-func Ticks(count int, out chan<- int) error {
-	for i := 0; i < count; i++ {
-		out <- i          // 不需要 close，不需要处理错误
-	}
-	return nil
-}
-```
-
-**channel 完全由生成代码托管**：它创建 channel、起 goroutine 抽干并投递给 Dart、
-**在你的函数返回后自动关闭**（你自己 `close(out)` 也容忍）。零额外类型、零依赖，
-就是普通 Go 写法。
-
-想响应取消就再加一个 `context.Context` 参数——同样**不用你自己接线**，生成代码创建它，
-并在 Dart 取消订阅时自动 cancel：
-
-```go
-//fgb:async
-func Watch(ctx context.Context, out chan<- string) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil          // Dart 不再监听了
-		case out <- next():
-		}
+func Count(out chan<- int) {
+	for value := range 5 {
+		out <- value
 	}
 }
 ```
 
-`ctx` 和 `out` 都不会出现在 Dart 签名里：`Stream<String> watch()`。即使你完全忽略
-`ctx`，抽干 goroutine 在取消后也会继续丢弃数据，所以 `out <-` 永远不会永久阻塞。
-
-### 完整形式：`fgb.StreamSink[T]`
-
-需要 `AddError`、需要在函数返回后由后台 goroutine 继续推送、或者要把 sink 放进结构体字段时用它：
-
-```go
-//fgb:async
-func Ticks(count int, sink fgb.StreamSink[int]) error {
-	defer sink.Close()
-	for i := 0; i < count; i++ {
-		if err := sink.Add(i); err != nil {
-			return nil // Dart 取消了订阅，停止生产
-		}
-	}
-	return nil
+```dart
+await for (final value in count()) {
+  print(value);
 }
 ```
 
-### 两种归属（对 sink 和 channel 一致）
+Use `fgb.StreamSink[T]` when Go also needs to add error events or close the stream explicitly.
 
-**Go 拥有 Stream**（恰好一个 sink/channel + 没有非 error 返回值）：
-
-```dart
-await for (final tick in ticks(count: 5)) { print(tick); }
-```
-
-生成 `Stream<int> ticks({required int count})`——sink/channel 参数从 Dart 签名中消失，
-`StreamController` 由生成代码创建并持有，**dispose 由取消订阅驱动**。
-
-**Dart 拥有 Stream**（有非 error 返回值、多个 sink，或 sink 是结构体字段）：
-
-```dart
-final controller = StreamController<String>();
-controller.stream.listen(print);
-final id = await subscribe(name: 'abc', out: controller.sink);
-await controller.close(); // 由你 dispose
-```
-
-返回值原样保留，Stream 的创建与销毁完全由 Dart 掌握。结构体字段同理（仅 `StreamSink`，
-channel 不支持作为字段）。
-
-### 语义与限制
-
-- **Stream 是冷的**：`Stream<T>` 形式在**被 listen 时才**发起 Go 调用。拿到 Stream 却不监听，
-  Go 什么都不会做，也不会有数据堆在 controller 里。
-- 关闭时机：channel 形式在函数返回时自动关闭；sink 形式由 `sink.Close()`（推荐
-  `defer sink.Close()`）、Go 侧最后一份 sink 被 GC、或调用返回 error 触发。
-- **取消订阅**会释放 sink 注册（Go 侧随即得到 `ErrStreamClosed` / ctx cancel）并关闭生成代码
-  持有的 controller，它的 `done` 会正常完成，不会留下一个开着的 controller。
-  Dart 拥有的那种（Mode B）controller 由你自己 `close()`。
-- `sink.AddError(err)` 投递一个 stream error 但**不关闭**流；channel 形式没有这个能力
-  （这正是它「不会出错」的简单之处）。
-- `Add` / `out <-` 都不会因为 Dart 侧不监听而永久阻塞。
-- 只能 Dart→Go：作为返回值会在生成期报错；`//fgb:async` 是必需的；
-  `//fgb:nullable` 不适用；只接受 `chan<- T`（双向或只读 channel 会报错）。
-- **热重启是安全的**：热重启会直接杀掉 Dart isolate，它来不及取消任何 stream，而动态库不会被
-  卸载，Go 侧的生产者 goroutine 仍在运行。由于 stream 端口是全局的、Dart 的 handle 计数器又会
-  从头开始，旧生产者的事件本会被投递进**新** isolate，导致每热重启一次就多出一路重复数据。
-  运行时用「isolate 代际」隔离这一点：Dart 每次 attach 都会推进代际、取消上一代全部 stream，
-  并且生产者在创建时就记下自己的代际，跨代的投递一律丢弃——即使该生产者忽略 `ctx.Done()`。
-
-## 指令与字段 tag
-
-声明上的注释指令采用 Go 指令语法 `//fgb:xxx`（`//` 后不加空格，gofmt 不会改写，
-也不会混入文档注释）；多个指令可以分行写，或在一行内用逗号组合：
+### Dart closure callbacks
 
 ```go
-//fgb:ignore                       // 跳过该函数/方法/类型/常量；被忽略类型的方法一并跳过
-func InternalOnly() {}
-
-//fgb:async, rename = "fetchValue" // 异步 + 重命名，可逗号组合
-func LoadValue() Value { /* ... */ }
-
-//fgb:opaque                       // 强制 GoOpaque 句柄语义
-type Counter struct{ total int }
-
-//fgb:async, nullable = "onEvent"  // 指定参数在 Dart 侧可空（仅限自身可 nil 的类型）
-func Watch(id int, onEvent func(message string)) {}
+//fgb:async
+func Transform(input string, mapper func(string) string) string {
+	return mapper(input)
+}
 ```
 
-`nullable = "a,b"` 按 **Go 参数名**列出可为空的参数：生成的 Dart 签名带 `?` 且不加 `required`，
-Dart 传 `null` 或省略时 Go 侧收到 `nil`。它只适用于**在 Go 中不用指针也能为 nil 的类型**：
+```dart
+final value = await transform(
+  input: 'go',
+  mapper: (text) => text.toUpperCase(),
+);
+```
 
-| 可标记 | Dart 签名 |
+The generated callback type uses `FutureOr`, so both synchronous and asynchronous Dart closures are
+accepted.
+
+### Return values and errors
+
+- One non-error Go result stays a normal Dart value.
+- Multiple non-error results become a Dart record.
+- Named Go results become named record fields.
+- `error` may appear anywhere in the Go result list.
+- Non-nil errors throw `FgbPlatformException`; several error results are available through
+  `FgbPlatformException.goErrors`.
+
+## CLI overview
+
+| Command | Purpose |
 | --- | --- |
-| 回调 `func(...)` | `FutureOr<R> Function(...)?` |
-| slice `[]T` | `List<T>?` |
-| map `map[K]V` | `Map<K, V>?` |
-| `[]byte` / `[]int32` / `[]int64` / `[]float64` | `Uint8List?` / `Int32List?` / … |
+| `generate` | Generate the Go bridge and mirrored Dart API |
+| `generate --watch` | Regenerate when Go source changes |
+| `run` | Run Flutter, hot reload Dart, and restart after Go changes |
+| `create` | Create a new Flutter app or FFI plugin with Go integration |
+| `integrate` | Add the bridge to an existing Flutter project |
 
-`nil` 与空集合是两个不同的值，会如实传到 Go 侧（`nil` vs `len == 0`）。其他类型的可空性由
-Go 指针表达：把非上述类型的参数写进 `nullable` 会直接报错（数组 `[N]T` 是定长值，同样不能为
-nil），列了不存在的参数名也报错。
+The full command and flag reference is in the
+[CLI documentation](https://star4277.github.io/flutter_go_bridge/guide/cli).
 
-## Dart 闭包回调
+## Development
 
-Go 函数可以直接接收原生函数类型参数，Dart 侧传入闭包：
+Clone with submodules, then run the Go test suite:
 
-```go
-//fgb:async
-func Transform(input string, mapper func(s string) string) string {
-	return mapper(input) + "!"
-}
-```
-
-```dart
-await transform(input: 'go', mapper: (s) => s.toUpperCase());          // 同步闭包
-await transform(input: 'go', mapper: (s) async => await load(s));      // async 闭包
-```
-
-- Dart 参数类型是 `FutureOr<R> Function(...)`，**同步闭包和 async 闭包都能传**；
-  runtime 统一 `await`，async 闭包会等它完成后才把结果回传给 Go。
-- Go 侧拿到的是普通函数值，调用时会阻塞当前 goroutine 直到 Dart 返回，用起来与同步函数无异。
-- 因此**回调参数强制要求 `//fgb:async`**：同步调用期间 Dart 事件循环停转，闭包永远不会被执行，
-  生成期直接报错。
-- Dart 闭包抛异常时：回调签名最后一个返回值是 `error` 就转成该 error，否则整个调用以
-  `FgbPlatformException` 失败。
-- 闭包句柄与 DartOpaque 共用注册表，Go 侧最后一份引用被 GC 后自动通知 Dart 释放。
-- 当前限制：回调只能作为**函数的直接参数**出现（不能是返回值、slice/map 元素或结构体字段），
-  不支持嵌套函数类型、可变参数和泛型。
-
-结构体字段的 `fgb` tag（逗号组合；`defaultValue` 会吞掉其后的所有内容，须放最后）：
-
-```go
-type Item struct {
-	Name   string   `fgb:"rename:title"`             // Dart 字段与 wire key 改名
-	Count  int      `fgb:"non-final,defaultValue: 0"` // 非 final 字段 + 构造默认值
-	Hidden string   `fgb:"ignore"`                   // 不参与生成
-	Tags   []string `fgb:"nullable"`                 // 可为 nil，Dart 侧 List<String>?
-	Note   *string                                   // 指针字段：可空、构造参数不加 required
-}
-```
-
-字段上的 `fgb:"nullable"` 与参数指令 `//fgb:nullable` 规则完全一致——标在字段上所以不用再写
-名字——**适用类型也一样**：回调、slice、map、`[]byte` 等 typed list、接口，也就是在 Go 中
-不用指针就能为 nil 的类型；其他类型（含已经可空的指针字段）会直接报错。被标记的字段
-**两个方向都保留 nil**：Dart 传 null → Go 收到 nil，Go 的 nil → Dart 得到 null，不会像未标记
-字段那样把 nil 归一成空集合。
-
-## 验证
-
-```text
+```sh
+git clone --recurse-submodules https://github.com/star4277/flutter_go_bridge.git
+cd flutter_go_bridge
 go test ./...
-go run ./cmd/flutter_go_bridge_codegen generate --config-file example/flutter_go_bridge.yaml --no-dart-format
-(cd example/go && go build -buildvcs=false -buildmode=c-shared -o ../dart/example.dll .)
-(cd example/dart && dart run bin/smoke.dart example.dll)
 ```
+
+Build the CLI locally:
+
+```sh
+go build ./cmd/flutter_go_bridge_codegen
+```
+
+Build release archives with the Makefile:
+
+```sh
+make windows-amd64
+make linux-amd64
+make macos-arm64
+```
+
+The documentation site uses Bun:
+
+```sh
+cd docs
+bun install
+bun run typecheck
+bun run build
+```
+
+## License
+
+`flutter_go_bridge` is available under the [MIT License](./LICENSE).
+
+Generated codec code also incorporates or follows third-party components under their respective
+licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
