@@ -14,6 +14,10 @@ bun run typecheck
 bun run build
 ```
 
+Merging documentation changes into `main` does not deploy the site. Production documentation is
+published by the Release workflow after it creates a GitHub Release. The documentation workflow can
+also be started manually with `workflow_dispatch` when a deployment needs to be retried.
+
 The build treats dead links as errors. English pages live at the documentation root and Chinese
 pages mirror them under `zh/`. When adding a page, update both locale sidebar files under
 `.vitepress/locales/` and provide the translated counterpart where practical.
