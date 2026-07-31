@@ -1,0 +1,342 @@
+/**
+ * Bridge — the flutter_go_bridge documentation theme.
+ *
+ * The palette runs from Go cyan (#00ADD8) to Dart blue (#0175C2). Those two
+ * hues only ever appear on the hero, on accents and on interactive state; body
+ * surfaces stay neutral so that long bilingual prose and dense code samples
+ * remain the loudest thing on the page.
+ *
+ * Contrast note: #00ADD8 only reaches 2.4:1 on white, so it is never used for
+ * text in light mode. Light mode text accents are darkened to #00758F (4.9:1)
+ * and the hero gradient is darkened to keep large display text above 3:1.
+ */
+
+/* ------------------------------------------------------------------ *
+ * Typography
+ *
+ * No webfont CDN: VitePress already self-hosts Inter, and everything else
+ * falls back through locally installed faces. That keeps first paint fast and
+ * avoids a blocked Google Fonts request for readers in mainland China.
+ * ------------------------------------------------------------------ */
+:root {
+  --vp-font-family-base: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans CJK SC', 'Source Han Sans SC', sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, 'SF Mono',
+    Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+  --fgb-go: #00add8;
+  --fgb-dart: #0175c2;
+}
+
+/* Mixing CJK into a Latin mono face makes code comments jump around, so pin
+   the CJK fallback for inline and block code explicitly. */
+.vp-doc code,
+.vp-doc pre {
+  font-variant-ligatures: none;
+}
+
+/* ------------------------------------------------------------------ *
+ * Brand tokens
+ * ------------------------------------------------------------------ */
+:root {
+  /* brand-1 carries link and heading accents, so it must clear 4.5:1. */
+  --vp-c-brand-1: #00758f;
+  --vp-c-brand-2: #005d73;
+  --vp-c-brand-3: #0175c2; /* solid button fill, 4.6:1 against white text */
+  --vp-c-brand-soft: rgba(0, 173, 216, 0.14);
+
+  --vp-c-tip-1: var(--vp-c-brand-1);
+  --vp-c-tip-2: var(--vp-c-brand-2);
+  --vp-c-tip-3: var(--vp-c-brand-3);
+  --vp-c-tip-soft: var(--vp-c-brand-soft);
+
+  --fgb-hero-gradient: linear-gradient(115deg, #0091b5 5%, #0165ae 95%);
+  --fgb-rule: linear-gradient(90deg, var(--fgb-go), var(--fgb-dart));
+
+  --vp-layout-max-width: 1440px;
+  --vp-sidebar-width: 274px;
+}
+
+.dark {
+  --vp-c-brand-1: #4fd3f0;
+  --vp-c-brand-2: #7ce0f7;
+  --vp-c-brand-3: #1179c4; /* 4.6:1 against white text, 3.2:1 against the page */
+  --vp-c-brand-soft: rgba(0, 173, 216, 0.18);
+
+  /* A slightly cooler, deeper ground than the stock grey; it makes the cyan
+     accents read as light rather than as another shade of chrome. */
+  --vp-c-bg: #0d1117;
+  --vp-c-bg-alt: #090d13;
+  --vp-c-bg-soft: #151b23;
+  --vp-c-bg-elv: #151b23;
+
+  --fgb-hero-gradient: linear-gradient(115deg, #35c9ec 5%, #5fa8ff 95%);
+}
+
+/* ------------------------------------------------------------------ *
+ * Home hero
+ * ------------------------------------------------------------------ */
+.VPHome {
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: var(--fgb-hero-gradient);
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    rgba(0, 173, 216, 0.55),
+    rgba(1, 117, 194, 0.55)
+  );
+  --vp-home-hero-image-filter: blur(52px);
+  position: relative;
+  overflow: hidden;
+}
+
+/* A single wide, very low-opacity wash behind the hero. It reads as depth at
+   full size and disappears entirely on small screens, where it would otherwise
+   just muddy the text. */
+.VPHome::before {
+  content: '';
+  position: absolute;
+  inset: -20% -10% auto -10%;
+  height: 620px;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(42% 55% at 22% 12%, rgba(0, 173, 216, 0.16), transparent 70%),
+    radial-gradient(38% 50% at 78% 6%, rgba(1, 117, 194, 0.14), transparent 70%);
+}
+
+.dark .VPHome::before {
+  background:
+    radial-gradient(42% 55% at 22% 12%, rgba(0, 173, 216, 0.15), transparent 70%),
+    radial-gradient(38% 50% at 78% 6%, rgba(53, 137, 255, 0.13), transparent 70%);
+}
+
+.VPHome .VPHero,
+.VPHome .VPFeatures {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 768px) {
+  .VPHome::before {
+    display: none;
+  }
+}
+
+.VPHero .name {
+  letter-spacing: -0.02em;
+}
+
+.VPHero .tagline {
+  max-width: 52ch;
+}
+
+/* ------------------------------------------------------------------ *
+ * Feature cards
+ *
+ * 1px border, and hover changes colour only. Scale or translate on hover
+ * would shift the row and make the grid feel unstable under the cursor.
+ * ------------------------------------------------------------------ */
+.VPFeature {
+  border: 1px solid var(--vp-c-divider);
+  background-color: var(--vp-c-bg-soft);
+  border-radius: 12px;
+  transition:
+    border-color 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.VPFeature:hover {
+  border-color: var(--fgb-go);
+  background-color: var(--vp-c-bg-elv);
+}
+
+.VPFeature .title {
+  letter-spacing: -0.01em;
+}
+
+.VPFeature .icon {
+  background-color: var(--vp-c-brand-soft);
+  border-radius: 8px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Content
+ * ------------------------------------------------------------------ */
+
+/* 68ch keeps prose inside the 65–75 character band that stays comfortable to
+   read; tables and code are exempt because they carry their own structure. */
+.vp-doc p,
+.vp-doc li {
+  max-width: 68ch;
+}
+
+.vp-doc h2 {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+/* Hairline accent under the page title, tying every page back to the brand. */
+.vp-doc h1 {
+  position: relative;
+  padding-bottom: 0.55rem;
+  letter-spacing: -0.02em;
+}
+
+.vp-doc h1::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 68px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--fgb-rule);
+}
+
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
+
+.vp-doc th {
+  background-color: var(--vp-c-bg-soft);
+  font-weight: 600;
+}
+
+.vp-doc tr {
+  border-top: 1px solid var(--vp-c-divider);
+}
+
+/* Type-mapping tables are the densest thing on the site; a touch less padding
+   and a mono treatment for the Go column makes them scannable. */
+.vp-doc td code,
+.vp-doc th code {
+  font-size: 0.86em;
+}
+
+/* ------------------------------------------------------------------ *
+ * Code
+ * ------------------------------------------------------------------ */
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+}
+
+.dark .vp-doc div[class*='language-'] {
+  background-color: #0b0f14;
+  --vp-code-block-bg: #0b0f14;
+}
+
+.vp-doc [class*='language-'] > span.lang {
+  color: var(--vp-c-text-3);
+}
+
+.vp-doc .custom-block {
+  border-radius: 10px;
+  border-width: 1px;
+  border-left-width: 3px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Go → Dart pipeline diagram (home page, plain markup so no SFC is needed)
+ * ------------------------------------------------------------------ */
+/* VPHomeContent follows VPHomeFeatures without any built-in vertical gap.
+   Padding belongs to the content container rather than the first child so it
+   cannot collapse through VitePress' wrapper elements and touch the final
+   feature-card row. */
+.VPHome .vp-doc.container {
+  padding-top: clamp(3rem, 6vw, 4.5rem);
+}
+
+.fgb-flow {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  align-items: stretch;
+  gap: 0.75rem;
+  max-width: 1152px;
+  margin: 0 auto 5rem;
+  padding: 0 24px;
+}
+
+.fgb-flow-step {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background-color: var(--vp-c-bg-soft);
+  padding: 1.15rem 1.25rem;
+}
+
+.fgb-flow-step h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--vp-c-text-1);
+}
+
+.fgb-flow-step p {
+  margin: 0;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+.fgb-flow-step code {
+  font-size: 0.8rem;
+  color: var(--vp-c-text-1);
+}
+
+.fgb-flow-step--go {
+  border-top: 3px solid var(--fgb-go);
+}
+
+.fgb-flow-step--gen {
+  border-top: 3px solid var(--vp-c-divider);
+}
+
+.fgb-flow-step--dart {
+  border-top: 3px solid var(--fgb-dart);
+}
+
+.fgb-flow-arrow {
+  align-self: center;
+  color: var(--vp-c-text-3);
+  font-family: var(--vp-font-family-mono);
+  font-size: 1.1rem;
+  line-height: 1;
+  /* Decorative: the reading order already conveys the direction. */
+  user-select: none;
+}
+
+@media (max-width: 860px) {
+  .fgb-flow {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .fgb-flow-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Focus and motion
+ * ------------------------------------------------------------------ */
+:where(a, button, input, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,26 +1,33 @@
-## [LRN-20260729-001] correction
+# Learnings
 
-**Logged**: 2026-07-29T00:00:00+08:00
-**Priority**: high
+## [LRN-20260731-001] correction
+
+**Logged**: 2026-07-31T09:30:00+08:00
+**Priority**: medium
 **Status**: resolved
-**Area**: backend
+**Area**: docs
 
 ### Summary
-External-struct support must be validated against the real `example/mihomoui` API returning `*statistic.Snapshot`, not only synthetic local modules.
+
+The documentation site uses Bun, not npm.
 
 ### Details
-The initial implementation passed a simplified regression fixture but the actual generator invocation still failed for `GetAllConnections() *statistic.Snapshot` from `github.com/metacubex/mihomo/tunnel/statistic`.
+
+The repository contains `docs/bun.lock`, and Bun 1.3.13 is available. Documentation dependency, development, type-check, and build commands should use `bun install` and `bun run ...`.
 
 ### Suggested Action
-Reproduce generation in `example/mihomoui`, inspect the complete reachable field graph and generated Go/Dart output, then make that example a permanent regression test.
+
+Use Bun for all docs commands and document Bun as the package manager in contributor instructions.
 
 ### Metadata
+
 - Source: user_feedback
-- Related Files: example/mihomoui/go/api/connection.go, internal/generator/builder.go
-- Tags: external-struct, pointer, real-world-fixture
+- Related Files: docs/bun.lock, docs/package.json
+- Tags: bun, vitepress, docs
 
 ### Resolution
-- **Resolved**: 2026-07-29T00:00:00+08:00
-- **Notes**: The real mihomoui fixture now generates `Snapshot?`, scalar atomic fields, `InternetAddress`, and `UuidValue`; its generated Go bridge compiles and Dart analysis reports no errors or warnings.
+
+- **Resolved**: 2026-07-31T09:30:00+08:00
+- **Notes**: Switched validation and authored commands to Bun.
 
 ---

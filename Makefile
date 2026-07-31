@@ -1,4 +1,5 @@
 APP_NAME := flutter_go_bridge_codegen
+COMMAND_PACKAGE := ./cmd/flutter_go_bridge_codegen
 VERSION ?= 0.1.0
 CGO_ENABLED ?= 0
 
@@ -79,10 +80,10 @@ darwin-arm64: macos-arm64
 package-one:
 ifeq ($(OS),Windows_NT)
 	powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)', '$(DIST_DIR)', '$(GOCACHE)' | Out-Null"
-	powershell.exe -NoProfile -Command "$$env:GOOS='$(TARGET_OS)'; $$env:GOARCH='$(TARGET_ARCH)'; $$env:CGO_ENABLED='$(CGO_ENABLED)'; $$env:GOCACHE='$(GOCACHE)'; go build -trimpath -ldflags '$(LDFLAGS)' -o '$(EXECUTABLE_PATH)' ./command"
+	powershell.exe -NoProfile -Command "$$env:GOOS='$(TARGET_OS)'; $$env:GOARCH='$(TARGET_ARCH)'; $$env:CGO_ENABLED='$(CGO_ENABLED)'; $$env:GOCACHE='$(GOCACHE)'; go build -trimpath -ldflags '$(LDFLAGS)' -o '$(EXECUTABLE_PATH)' $(COMMAND_PACKAGE)"
 else
 	mkdir -p "$(BUILD_DIR)" "$(DIST_DIR)" "$(GOCACHE)"
-	GOOS="$(TARGET_OS)" GOARCH="$(TARGET_ARCH)" CGO_ENABLED="$(CGO_ENABLED)" GOCACHE="$(GOCACHE)" go build -trimpath -ldflags "$(LDFLAGS)" -o "$(EXECUTABLE_PATH)" ./command
+	GOOS="$(TARGET_OS)" GOARCH="$(TARGET_ARCH)" CGO_ENABLED="$(CGO_ENABLED)" GOCACHE="$(GOCACHE)" go build -trimpath -ldflags "$(LDFLAGS)" -o "$(EXECUTABLE_PATH)" $(COMMAND_PACKAGE)
 endif
 ifneq ($(NO_COMPRESS_ENABLED),)
 ifeq ($(OS),Windows_NT)
