@@ -6,6 +6,26 @@ Install the command with:
 go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
+## Version information
+
+Use either version flag:
+
+```sh
+flutter_go_bridge_codegen -v
+flutter_go_bridge_codegen --version
+```
+
+The output contains both the flutter_go_bridge version and the Go toolchain that built the executable:
+
+```text
+flutter_go_bridge_codegen version v1.2.3
+Build with go1.25.0
+```
+
+The build line is important when diagnosing source compatibility. Compare it with the Go version used by
+the project whose package is being parsed; a codegen executable built by an older Go toolchain may not
+understand syntax or type-system behavior introduced by a newer project toolchain.
+
 ## `generate`
 
 ```sh

@@ -6,6 +6,25 @@
 go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
+## 查询版本
+
+以下两种参数等价：
+
+```sh
+flutter_go_bridge_codegen -v
+flutter_go_bridge_codegen --version
+```
+
+输出同时包含 flutter_go_bridge 版本和构建当前可执行文件的 Go 工具链版本：
+
+```text
+flutter_go_bridge_codegen version v1.2.3
+Build with go1.25.0
+```
+
+排查源码兼容问题时应同时检查 Go 版本。若 codegen 可执行文件使用的 Go 工具链低于目标项目，可能
+无法理解较新 Go 版本引入的语法或类型系统行为，应改用更新工具链构建的 codegen。
+
 ## `generate`
 
 ```sh

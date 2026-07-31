@@ -12,6 +12,7 @@ const guide: DefaultTheme.SidebarItem = {
     { text: 'CLI', link: '/guide/cli' },
     { text: 'Dev server (run)', link: '/guide/dev-server' },
     { text: 'Building with Gokit', link: '/guide/gokit' },
+    { text: 'Releasing', link: '/guide/releasing' },
     { text: 'Contributing to docs', link: '/guide/docs-development' },
   ],
 }

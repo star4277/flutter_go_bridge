@@ -1,6 +1,9 @@
 APP_NAME := flutter_go_bridge_codegen
 COMMAND_PACKAGE := ./cmd/flutter_go_bridge_codegen
-VERSION ?= 0.1.0
+FLUTTER_GO_BRIDGE_VERSION ?=
+ifeq ($(strip $(FLUTTER_GO_BRIDGE_VERSION)),)
+override FLUTTER_GO_BRIDGE_VERSION := v0.0.1-snapshot
+endif
 CGO_ENABLED ?= 0
 
 BUILD_ROOT ?= build
@@ -31,14 +34,14 @@ GOOS_openharmony := openharmony
 
 ALL_RELEASE_TARGETS := $(foreach platform,$(PLATFORMS),$(foreach arch,$(ARCHS_$(platform)),$(platform)-$(arch)))
 
-LDFLAGS ?= -s -w -X main.version=$(VERSION)
+LDFLAGS ?= -s -w -X main.version=$(FLUTTER_GO_BRIDGE_VERSION)
 
 EXECUTABLE_EXT = $(if $(filter windows,$(TARGET_SYSTEM)),.exe,)
 ARCHIVE_EXT = $(if $(filter windows,$(TARGET_SYSTEM)),zip,tgz)
 EXECUTABLE = $(APP_NAME)$(EXECUTABLE_EXT)
 BUILD_DIR = $(BUILD_ROOT)/.tmp/$(TARGET_SYSTEM)-$(TARGET_ARCH)
 EXECUTABLE_PATH = $(BUILD_DIR)/$(EXECUTABLE)
-OUTPUT_BASENAME = $(APP_NAME)-$(TARGET_ARCH)-$(TARGET_SYSTEM)-$(VERSION)
+OUTPUT_BASENAME = $(APP_NAME)-$(TARGET_ARCH)-$(TARGET_SYSTEM)-$(FLUTTER_GO_BRIDGE_VERSION)
 DIRECT_OUTPUT = $(DIST_DIR)/$(OUTPUT_BASENAME)$(EXECUTABLE_EXT)
 ARCHIVE_OUTPUT = $(DIST_DIR)/$(OUTPUT_BASENAME).$(ARCHIVE_EXT)
 
@@ -131,6 +134,6 @@ help:
 	@echo "make openharmony                Build all OpenHarmony architectures"
 	@echo "make all                        Build every platform and architecture"
 	@echo "make windows-amd64 NO_COMPRESS=1  Output the executable without compression"
-	@echo "make all VERSION=1.2.3          Override the release version"
+	@echo "FLUTTER_GO_BRIDGE_VERSION=v1.2.3 make all  Override the release version"
 	@echo "make list                       List all release targets"
 	@echo "make clean                      Remove build outputs"

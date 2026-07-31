@@ -341,6 +341,9 @@ accepted.
 The full command and flag reference is in the
 [CLI documentation](https://star4277.github.io/flutter_go_bridge/guide/cli).
 
+Release workflow and version management are documented in the
+[releasing guide](https://star4277.github.io/flutter_go_bridge/guide/releasing).
+
 ## Development
 
 Clone with submodules, then run the Go test suite:
