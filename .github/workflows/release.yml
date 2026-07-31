@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Base release version, for example v1.2.3
+        required: true
+        type: string
+      pre_release:
+        description: Publish the next beta pre-release for this base version
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flutter-go-bridge-release
+  cancel-in-progress: false
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate and resolve release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_VERSION: ${{ inputs.version }}
+          PRE_RELEASE: ${{ inputs.pre_release }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base_version="${INPUT_VERSION#v}"
+          if [[ ! "$base_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version '$INPUT_VERSION'. Use a semantic version such as v1.2.3." >&2
+            exit 1
+          fi
+          base_version="v$base_version"
+
+          if [[ "$PRE_RELEASE" == "true" ]]; then
+            highest=0
+            beta_prefix="${base_version}-beta"
+            while IFS= read -r tag; do
+              if [[ "$tag" == "$beta_prefix"* ]]; then
+                number="${tag#"$beta_prefix"}"
+              else
+                continue
+              fi
+              if [[ "$number" =~ ^[0-9]+$ ]]; then
+                if (( number > highest )); then
+                  highest=$number
+                fi
+              fi
+            done < <(gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name')
+            release_version="${base_version}-beta$((highest + 1))"
+          else
+            release_version="$base_version"
+          fi
+
+          echo "version=$release_version" >> "$GITHUB_OUTPUT"
+          echo "FLUTTER_GO_BRIDGE_VERSION=$release_version" >> "$GITHUB_ENV"
+          echo "Resolved release version: $release_version"
+
+  build:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    env:
+      FLUTTER_GO_BRIDGE_VERSION: ${{ needs.resolve-version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release archives
+        run: make all
+
+      - name: Verify CLI version
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="build/flutter_go_bridge_codegen-amd64-linux-$FLUTTER_GO_BRIDGE_VERSION.tgz"
+          test -f "$archive"
+          mkdir verify-version
+          tar -xzf "$archive" -C verify-version
+          output="$(env -u FLUTTER_GO_BRIDGE_VERSION ./verify-version/flutter_go_bridge_codegen --version)"
+          echo "$output"
+          grep -F "$FLUTTER_GO_BRIDGE_VERSION" <<< "$output"
+          grep -E '^Build with go[0-9]+' <<< "$output"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            build/*.zip
+            build/*.tgz
+          if-no-files-found: error
+
+  release:
+    needs:
+      - resolve-version
+      - build
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FLUTTER_GO_BRIDGE_VERSION: ${{ needs.resolve-version.outputs.version }}
+      PRE_RELEASE: ${{ inputs.pre_release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Replace existing release and tag
+        env:
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$FLUTTER_GO_BRIDGE_VERSION" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release delete "$FLUTTER_GO_BRIDGE_VERSION" --repo "$GH_REPO" --yes --cleanup-tag
+          elif git ls-remote --exit-code --tags origin "refs/tags/$FLUTTER_GO_BRIDGE_VERSION" >/dev/null 2>&1; then
+            git push origin ":refs/tags/$FLUTTER_GO_BRIDGE_VERSION"
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          prerelease_args=()
+          if [[ "$PRE_RELEASE" == "true" ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+
+          mapfile -t assets < <(find release-assets -type f -print | sort)
+          if (( ${#assets[@]} == 0 )); then
+            echo "No release assets were downloaded." >&2
+            exit 1
+          fi
+
+          gh release create "$FLUTTER_GO_BRIDGE_VERSION" \
+            --repo "$GH_REPO" \
+            --target "$GITHUB_SHA" \
+            --title "$FLUTTER_GO_BRIDGE_VERSION" \
+            --generate-notes \
+            "${prerelease_args[@]}" \
+            "${assets[@]}"

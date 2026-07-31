@@ -332,6 +332,8 @@ final value = await transform(
 
 完整参数见 [CLI 文档](https://star4277.github.io/flutter_go_bridge/zh/guide/cli)。
 
+版本发布和版本号管理见[版本发布文档](https://star4277.github.io/flutter_go_bridge/zh/guide/releasing)。
+
 ## 开发
 
 克隆仓库并初始化子模块：

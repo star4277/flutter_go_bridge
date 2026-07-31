@@ -12,6 +12,7 @@ const guide: DefaultTheme.SidebarItem = {
     { text: 'CLI', link: '/zh/guide/cli' },
     { text: '开发服务器（run）', link: '/zh/guide/dev-server' },
     { text: '用 Gokit 构建', link: '/zh/guide/gokit' },
+    { text: '版本发布', link: '/zh/guide/releasing' },
     { text: '文档站开发', link: '/zh/guide/docs-development' },
   ],
 }

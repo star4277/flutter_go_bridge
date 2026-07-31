@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,15 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/watcher"
 )
 
-var version = "0.1.0"
+const (
+	versionEnvironment = "FLUTTER_GO_BRIDGE_VERSION"
+	defaultVersion     = "v0.0.1-snapshot"
+)
+
+// version is replaced by the release build's ldflags. Runtime environment
+// configuration still wins so local development can override it without a
+// rebuild.
+var version = defaultVersion
 
 func main() {
 	if err := newRootCommand().Execute(); err != nil {
@@ -53,14 +62,25 @@ func newRootCommand() *cobra.Command {
 	flags := &generateFlags{}
 	root := &cobra.Command{
 		Use:     "flutter_go_bridge_codegen",
-		Version: version,
+		Version: resolvedVersion(),
 		Short:   "Generate pure-Dart bindings for a Go library built by Gokit",
 	}
+	root.SetVersionTemplate("{{.DisplayName}} version {{.Version}}\nBuild with " + runtime.Version() + "\n")
 	root.AddCommand(newGenerateCommand(flags))
 	root.AddCommand(newRunCommand(&generateFlags{}))
 	root.AddCommand(newCreateCommand())
 	root.AddCommand(newIntegrateCommand())
 	return root
+}
+
+func resolvedVersion() string {
+	if value := strings.TrimSpace(os.Getenv(versionEnvironment)); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(version); value != "" {
+		return value
+	}
+	return defaultVersion
 }
 
 type runFlags struct {
