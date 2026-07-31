@@ -8,10 +8,27 @@ The code-generation architecture and project organization of
 including its approach to generator structure, generated bridge separation,
 and cross-language API workflow.
 
-`flutter_go_bridge` is an independent Go-to-Dart implementation built for
-Gokit and is not affiliated with or endorsed by the flutter_rust_bridge
-project. flutter_rust_bridge is distributed under the MIT License, copyright
-(c) 2021 fzyzcjy.
+`flutter_go_bridge` is a Go-to-Dart implementation inspired by the
+flutter_rust_bridge architecture. flutter_rust_bridge is distributed under the
+MIT License, copyright (c) 2021 fzyzcjy.
+
+The native build layer used by `flutter_go_bridge` is Gokit. Gokit's origin
+and relationship to CargoKit are described separately below.
+
+## Gokit / CargoKit build integration
+
+The Gokit build integration bundled by this project was designed with
+reference to and adapted from
+[`irondash/cargokit`](https://github.com/irondash/cargokit). It carries
+CargoKit's approach to integrating native library builds into Flutter's
+platform build systems, with the Rust/Cargo-specific build flow adapted for
+Go/CGO projects.
+
+Gokit is an independent adaptation and is not affiliated with or endorsed by
+the CargoKit project. CargoKit is copyright (c) 2022 Matej Knopp and is
+distributed under the MIT License and the Apache License, Version 2.0. The
+complete license text is retained in the Gokit submodules at
+`template/plugin/gokit/LICENSE` and `template/app/go_builder/gokit/LICENSE`.
 
 ## go-flutter StandardMessageCodec / StandardMethodCodec
 
