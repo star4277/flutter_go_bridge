@@ -4,8 +4,7 @@
 write ordinary Go, run one command, and get a Dart API that calls into it over FFI.
 
 It borrows the CLI shape and the generated-project layout from
-`flutter_rust_bridge_codegen`, but it deliberately does not depend on Flutter Native Assets, and
-the code it generates does not import `package:flutter/services.dart`. Everything it emits runs on
+`flutter_rust_bridge_codegen`, but it deliberately does not depend on Flutter Native Assets, Everything it emits runs on
 a plain Dart VM as happily as it does inside a Flutter app.
 
 ## What you write, what you get

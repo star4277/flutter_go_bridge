@@ -12,6 +12,7 @@ const guide: DefaultTheme.SidebarItem = {
     { text: 'CLI', link: '/zh/guide/cli' },
     { text: '开发服务器（run）', link: '/zh/guide/dev-server' },
     { text: '用 Gokit 构建', link: '/zh/guide/gokit' },
+    { text: '文档站开发', link: '/zh/guide/docs-development' },
   ],
 }
 
@@ -51,6 +52,7 @@ export const zh: LocaleSpecificConfig<DefaultTheme.Config> & { label: string; li
       { text: '概念', link: '/zh/concepts/', activeMatch: '^/zh/concepts/' },
       { text: '参考', link: '/zh/reference/type-mapping', activeMatch: '^/zh/reference/' },
       { text: 'Gokit', link: '/zh/guide/gokit' },
+      { text: '文档开发', link: '/zh/guide/docs-development' },
     ],
 
     sidebar: {

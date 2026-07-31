@@ -113,7 +113,7 @@ Dart 侧的目录结构**镜像 Go 的包结构**，锚点是 Go 模块根：`go
 ## CLI
 
 ```text
-go install github.com/star4277/flutter_go_bridge/command@latest
+go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 flutter_go_bridge_codegen generate
 ```
 

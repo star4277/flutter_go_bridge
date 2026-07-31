@@ -12,6 +12,7 @@ const guide: DefaultTheme.SidebarItem = {
     { text: 'CLI', link: '/guide/cli' },
     { text: 'Dev server (run)', link: '/guide/dev-server' },
     { text: 'Building with Gokit', link: '/guide/gokit' },
+    { text: 'Contributing to docs', link: '/guide/docs-development' },
   ],
 }
 
@@ -51,6 +52,7 @@ export const en: LocaleSpecificConfig<DefaultTheme.Config> & { label: string; li
       { text: 'Concepts', link: '/concepts/', activeMatch: '^/concepts/' },
       { text: 'Reference', link: '/reference/type-mapping', activeMatch: '^/reference/' },
       { text: 'Gokit', link: '/guide/gokit' },
+      { text: 'Docs development', link: '/guide/docs-development' },
     ],
 
     sidebar: {

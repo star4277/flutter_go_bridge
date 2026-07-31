@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: flutter_go_bridge
-  text: Go 类型，直达 Dart
-  tagline: 面向 Gokit 的 Go → Dart/Flutter 代码生成器。不依赖 Flutter Native Assets，也不依赖 package:flutter/services.dart —— 生成的代码只需要 Dart SDK。
+  text: 连接 Go 与 Dart 的代码生成桥梁
+  tagline: 基于 Gokit 的 Go → Dart/Flutter 代码生成工具，将 Go 服务能力转换为 Dart 可用接口。通过自动生成代码，降低跨语言开发成本，保持类型一致性。
   actions:
     - theme: brand
       text: 快速开始

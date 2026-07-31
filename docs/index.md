@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: flutter_go_bridge
-  text: Go types, straight into Dart
-  tagline: A Go → Dart/Flutter code generator for Gokit. No Flutter Native Assets, no package:flutter/services.dart — the generated code only needs the Dart SDK.
+  text: A code-generation bridge between Go and Dart
+  tagline: A Gokit-based Go → Dart/Flutter code generator that turns Go service capabilities into Dart-ready APIs. Automated bindings reduce cross-language development costs while keeping types consistent.
   actions:
     - theme: brand
       text: Get started

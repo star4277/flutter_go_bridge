@@ -3,7 +3,7 @@
 ## Install the CLI
 
 ```sh
-go install github.com/star4277/flutter_go_bridge/command@latest
+go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
 That installs `flutter_go_bridge_codegen`.

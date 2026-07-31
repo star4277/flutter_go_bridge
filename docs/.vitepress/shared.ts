@@ -3,6 +3,16 @@ import { defineConfig } from 'vitepress'
 /** Canonical repository, reused by nav links, edit links and social links. */
 export const repo = 'https://github.com/star4277/flutter_go_bridge'
 
+declare const process: { env: Record<string, string | undefined> }
+
+function normalizeBase(value: string | undefined): string {
+  if (!value || value === '/') return '/'
+  return `/${value.replace(/^\/+|\/+$/g, '')}/`
+}
+
+/** Root in local development; repository subpath in the GitHub Pages build. */
+export const docsBase = normalizeBase(process.env.DOCS_BASE)
+
 /**
  * Locale-independent configuration. Anything that reads as prose lives in
  * `locales/en.ts` and `locales/zh.ts` instead, so a new language only has to
@@ -10,6 +20,7 @@ export const repo = 'https://github.com/star4277/flutter_go_bridge'
  */
 export const shared = defineConfig({
   title: 'flutter_go_bridge',
+  base: docsBase,
   lastUpdated: true,
   cleanUrls: true,
   metaChunk: true,
@@ -19,7 +30,7 @@ export const shared = defineConfig({
   ignoreDeadLinks: false,
 
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: `${docsBase}logo.svg` }],
     ['meta', { name: 'theme-color', content: '#0175C2' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'flutter_go_bridge' }],
