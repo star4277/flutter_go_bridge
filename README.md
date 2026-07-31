@@ -380,13 +380,3 @@ bun run build
 
 Generated codec code also incorporates or follows third-party components under their respective
 licenses. See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
-
-## Star history
-
-<a href="https://www.star-history.com/?repos=StarHistory%2FStarHistory&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=StarHistory/StarHistory&type=date&theme=dark&legend=top-left&sealed_token=8-XdVIGYbLUMT2OW1UD3vhaPTXAYI-xmNygNomKQG0TEe55jBQ4b58v8TnuAk5oOXjmoOFoXTY4VF4eOxv_sjz6VFm-1bOxcifQHdNsO1wVh4Ev7j4rAxy8ilGaiQN28FTirR1onjT4e8JTAXIl8j9utInP5dfwDn_ZveiEIF1_Nav_TcbyafatZszB7" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=StarHistory/StarHistory&type=date&legend=top-left&sealed_token=8-XdVIGYbLUMT2OW1UD3vhaPTXAYI-xmNygNomKQG0TEe55jBQ4b58v8TnuAk5oOXjmoOFoXTY4VF4eOxv_sjz6VFm-1bOxcifQHdNsO1wVh4Ev7j4rAxy8ilGaiQN28FTirR1onjT4e8JTAXIl8j9utInP5dfwDn_ZveiEIF1_Nav_TcbyafatZszB7" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=StarHistory/StarHistory&type=date&legend=top-left&sealed_token=8-XdVIGYbLUMT2OW1UD3vhaPTXAYI-xmNygNomKQG0TEe55jBQ4b58v8TnuAk5oOXjmoOFoXTY4VF4eOxv_sjz6VFm-1bOxcifQHdNsO1wVh4Ev7j4rAxy8ilGaiQN28FTirR1onjT4e8JTAXIl8j9utInP5dfwDn_ZveiEIF1_Nav_TcbyafatZszB7" />
- </picture>
-</a>
