@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" role="img" aria-label="flutter_go_bridge">
+  <defs>
+    <linearGradient id="fgb" x1="2" y1="26" x2="30" y2="6" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00ADD8"/>
+      <stop offset="1" stop-color="#0175C2"/>
+    </linearGradient>
+  </defs>
+  <!-- Two piers and a deck: the bridge between the Go and Dart sides. -->
+  <path d="M3 21c5.5 0 8-10 13-10s10.5 10 13 10" stroke="url(#fgb)" stroke-width="3"
+        stroke-linecap="round" fill="none"/>
+  <circle cx="5" cy="25" r="2.6" fill="#00ADD8"/>
+  <circle cx="27" cy="25" r="2.6" fill="#0175C2"/>
+</svg>

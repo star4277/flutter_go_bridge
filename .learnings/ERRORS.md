@@ -1,34 +1,42 @@
-## [ERR-20260729-001] combined-rg-discovery
+# Errors
 
-**Logged**: 2026-07-29T00:00:00+08:00
+## [ERR-20260731-001] powershell-rg-scan
+
+**Logged**: 2026-07-31T09:20:00+08:00
 **Priority**: low
 **Status**: resolved
-**Area**: infra
+**Area**: docs
 
 ### Summary
-A combined PowerShell discovery command returned exit code 1 when an optional `rg` search had no matches.
+
+A repository inspection script exited with code 1 because a later `rg` query returned no matches or was truncated by the pipeline, even though the useful scan output was produced.
 
 ### Error
-```
+
+```text
 Script error: Exit code: 1
 ```
 
 ### Context
-- The command combined directory listing, an optional `AGENTS.md` search, and source searches.
-- `rg` returns exit code 1 for no matches, which marked the whole tool call as failed.
+
+- The command combined several independent scans in one PowerShell invocation.
+- Ripgrep uses exit code 1 for “no matches”, which PowerShell propagated as the command result.
 
 ### Suggested Fix
-Run optional searches separately or explicitly handle the no-match exit code.
+
+Run independent scans separately, exclude generated dependency folders explicitly, and normalize expected `rg` exit code 1 before returning.
 
 ### Metadata
+
 - Reproducible: yes
-- Related Files: none
+- Related Files: docs/
 - Recurrence-Count: 2
 - Last-Seen: 2026-07-30
 
 ### Resolution
-- **Resolved**: 2026-07-29T00:00:00+08:00
-- **Notes**: Subsequent discovery commands handle optional results explicitly. On Windows, pass directories to `rg` with `-g` filters instead of shell-style path globs such as `internal/*.go`.
+
+- **Resolved**: 2026-07-31T09:20:00+08:00
+- **Notes**: Subsequent scans use focused commands and explicitly handle expected no-match results.
 
 ---
 
@@ -98,128 +106,191 @@ On Windows, check `py -3 --version` when `python` is unavailable and invoke Pyth
 
 ## [ERR-20260729-004] multi-file-special-type-patch
 
-**Logged**: 2026-07-29T00:00:00+08:00
+**Logged**: 2026-07-31T09:52:00+08:00
 **Priority**: low
-**Status**: resolved
-**Area**: backend
-
-### Summary
-A large multi-file patch for InternetAddress and UUID mappings failed context verification.
-
-### Error
-```
-apply_patch verification failed: Failed to find expected lines in render_go_cst.go
-```
-
-### Context
-- No part of the patch was applied.
-- The DCO renderer used different indentation/text than the patch context assumed.
-
-### Suggested Fix
-Apply the model and each renderer change in small patches using exact local context.
-
-### Metadata
-- Reproducible: yes
-- Related Files: internal/generator/render_go_cst.go
-
-### Resolution
-- **Resolved**: 2026-07-29T00:00:00+08:00
-- **Notes**: Switched to small, independently verifiable patches.
-
----
-
-## [ERR-20260729-003] mihomoui-flutter-analyze-timeout
-
-**Logged**: 2026-07-29T00:00:00+08:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-Full Flutter analysis of `example/mihomoui` exceeded the 120-second command timeout without producing output.
-
-### Error
-```
-command timed out after 120221 milliseconds
-```
-
-### Context
-- Command: `fvm flutter analyze`
-- The generated Go bridge had already compiled successfully.
-
-### Suggested Fix
-Run a focused Dart analysis on `lib/src` with a larger timeout, then retry broader validation only if necessary.
-
-### Metadata
-- Reproducible: unknown
-- Related Files: example/mihomoui/lib/src/_generated.dart
-
-### Resolution
-- **Resolved**: 2026-07-29T00:00:00+08:00
-- **Notes**: User ran focused format and analysis successfully; only existing informational lints were reported.
-
----
-
-## [ERR-20260729-005] flutter-pub-add-partial-write
-
-**Logged**: 2026-07-29T00:00:00+08:00
-**Priority**: medium
 **Status**: resolved
 **Area**: config
 
 ### Summary
-`flutter pub add uuid` timed out after modifying `pubspec.yaml`, leaving a successful partial write despite a failed command result.
+
+A ripgrep regex containing escaped HTML double quotes was again parsed as PowerShell syntax.
 
 ### Error
-```
-mapping key "uuid" already defined
+
+```text
+src=\/ : The module 'src=' could not be loaded.
 ```
 
 ### Context
-- The timed-out command inserted `uuid: ^4.6.0`.
-- A subsequent manual dependency edit added a second UUID entry.
+
+- Operation: scan documentation for root-absolute links before GitHub Pages deployment.
 
 ### Suggested Fix
-After a pub-add failure or timeout, re-read `pubspec.yaml` before retrying or applying a fallback edit.
+
+Use single-quoted regex arguments and separate searches rather than embedding escaped double quotes.
 
 ### Metadata
-- Reproducible: unknown
-- Related Files: example/mihomoui/pubspec.yaml, command/main.go
+
+- Reproducible: yes
+- Related Files: docs/.vitepress/shared.ts
+- See Also: ERR-20260731-005
 
 ### Resolution
-- **Resolved**: 2026-07-29T00:00:00+08:00
-- **Notes**: Kept the pub-added `uuid: ^4.6.0` entry and removed the duplicate.
+
+- **Resolved**: 2026-07-31T09:52:00+08:00
+- **Notes**: Replaced with focused single-quoted searches.
 
 ---
 
-## [ERR-20260729-002] go-test-cache-miss
+## [ERR-20260731-005] powershell-nested-quote
 
-**Logged**: 2026-07-29T00:00:00+08:00
-**Priority**: medium
+**Logged**: 2026-07-31T09:42:00+08:00
+**Priority**: low
 **Status**: resolved
-**Area**: tests
+**Area**: frontend
 
 ### Summary
-Go tests failed because the shared Windows build cache referenced missing compiled source-list entries.
+
+A PowerShell source-inspection command failed because a nested quoted ripgrep pattern was not terminated correctly.
 
 ### Error
-```
-loading compiled Go files from cache: reading srcfiles list: cache entry not found
+
+```text
+The string is missing the terminator: ".
 ```
 
 ### Context
-- `go test ./internal/generator ./internal/parser`
-- Failures occurred inside `go/packages` while loading temporary fixture modules.
+
+- The command searched VitePress component sources for quoted HTML class names.
 
 ### Suggested Fix
-Run validation with an isolated `GOCACHE` inside the writable workspace.
+
+Use single-quoted PowerShell patterns or split source inspection into focused commands.
 
 ### Metadata
-- Reproducible: unknown
-- Related Files: internal/parser/parser.go
+
+- Reproducible: yes
+- Related Files: docs/.vitepress/theme/style.css
 
 ### Resolution
-- **Resolved**: 2026-07-29T00:00:00+08:00
-- **Notes**: Full validation passed with `GOCACHE` pointed at an isolated temporary directory.
+
+- **Resolved**: 2026-07-31T09:42:00+08:00
+- **Notes**: Replaced the combined query with simple literal-pattern searches.
+
+---
+
+## [ERR-20260731-004] ui-ux-skill-python-missing
+
+**Logged**: 2026-07-31T09:39:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+
+The optional UI/UX recommendation search script could not run because Python is not installed or not on PATH.
+
+### Error
+
+```text
+python: The term 'python' is not recognized as the name of a cmdlet, function, script file, or operable program.
+```
+
+### Context
+
+- Operation: UI/UX design-system lookup for the VitePress home-page overlap fix.
+- The skill's embedded responsive-layout guidance remains available without the script.
+
+### Suggested Fix
+
+Proceed using the skill's documented layout rules. Install Python only if database-backed UI recommendations are needed later.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: docs/.vitepress/theme/style.css
+
+### Resolution
+
+- **Resolved**: 2026-07-31T09:39:00+08:00
+- **Notes**: Continued with direct CSS inspection and viewport validation.
+
+---
+
+## [ERR-20260731-003] volta-npm-installation
+
+**Logged**: 2026-07-31T09:28:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+The system `npm` launcher is broken because its Volta image cannot locate npm's bundled `npm-prefix.js`.
+
+### Error
+
+```text
+Could not determine Node.js install directory
+Error: Cannot find module 'C:\Users\Administrator\AppData\Local\Volta\tools\image\npm\11.10.1\bin\node_modules\npm\bin\npm-prefix.js'
+```
+
+### Context
+
+- Operation: `npm run build` inside `docs/`.
+- Node itself runs (`v25.6.1`), and project dependencies are already installed.
+
+### Suggested Fix
+
+Use the repository's actual package manager: Bun. The npm installation is outside this project's documentation workflow.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: docs/package.json, docs/bun.lock
+
+### Resolution
+
+- **Resolved**: 2026-07-31T09:30:00+08:00
+- **Notes**: The user clarified that docs use Bun. `bun run typecheck` and `bun run build` both pass.
+
+---
+
+## [ERR-20260731-002] ripgrep-windows-glob
+
+**Logged**: 2026-07-31T09:24:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+Ripgrep rejected a Unix-style wildcard embedded in a Windows path argument.
+
+### Error
+
+```text
+rg: template/plugin/gokit/docs/*.md: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+### Context
+
+- PowerShell passed the wildcard path through without expanding it.
+- Ripgrep treated `*` as part of a Windows filename.
+
+### Suggested Fix
+
+Pass the directory as the search root and use `-g '*.md'` for file filtering.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: template/plugin/gokit/docs/
+- See Also: ERR-20260731-001
+
+### Resolution
+
+- **Resolved**: 2026-07-31T09:24:00+08:00
+- **Notes**: All later ripgrep scans use `-g` globs instead of wildcard path arguments.
 
 ---
