@@ -1,5 +1,18 @@
 # Third-party notices
 
+## flutter_rust_bridge architecture
+
+The code-generation architecture and project organization of
+`flutter_go_bridge` were designed with reference to
+[`fzyzcjy/flutter_rust_bridge`](https://github.com/fzyzcjy/flutter_rust_bridge),
+including its approach to generator structure, generated bridge separation,
+and cross-language API workflow.
+
+`flutter_go_bridge` is an independent Go-to-Dart implementation built for
+Gokit and is not affiliated with or endorsed by the flutter_rust_bridge
+project. flutter_rust_bridge is distributed under the MIT License, copyright
+(c) 2021 fzyzcjy.
+
 ## go-flutter StandardMessageCodec / StandardMethodCodec
 
 The generated Go codec follows the binary format and implementation approach
