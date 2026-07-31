@@ -1,11 +1,47 @@
 ---
 name: fgb-develop-feature
-description: Develop, fix, or refactor flutter_go_bridge features with the project's required Git branching, code analysis, documentation, and staged validation workflow. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, or bridge behavior that must progress through unit tests, integration tests, smoke tests, and a feature-branch commit.
+description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Docs-only and skill-only changes skip code tests; code behavior changes and new features must update the development documentation.
 ---
 
 # FGB Feature Development
 
-Follow every gate in order. Do not commit code that has not passed unit, integration, and smoke testing.
+Classify the final diff before selecting validation. Code changes follow the staged analysis and test
+workflow. Docs-only and skill-only changes do not run code tests.
+
+## 0. Classify the Change
+
+Classify from the files and behavior in the final diff, not only from the task title.
+
+### Docs-only
+
+A change is docs-only when every changed file is under `docs/`.
+
+- Do not run Go, Dart, Flutter, integration, or smoke tests.
+- Run only documentation-relevant checks when available, such as Markdown review, link checks, or the
+  docs site's own type-check/build commands.
+- If the repository's docs tooling is unavailable, review the rendered structure and report that no
+  code tests were needed.
+
+Changes to `README.md`, `README.zh-CN.md`, examples, templates, or source comments are not docs-only
+under this rule because they are outside `docs/`.
+
+### Skill-only
+
+A change is skill-only when every changed file creates, modifies, moves, or deletes Skill content,
+including `.agents/skills/**` and the Skill's own metadata/resources.
+
+- Do not run Go, Dart, Flutter, integration, or smoke tests.
+- Review the Skill instructions and metadata for consistency.
+- Run Skill-specific validation only when it exists and is currently usable. If that validation is
+  unavailable or intentionally disabled, state that it was skipped; do not substitute code tests.
+
+### Code or product behavior
+
+All other changes use the applicable analysis and test phases below. This includes parser,
+generator, runtime, CLI, template, example, configuration, and generated API behavior changes.
+
+If a docs-only or skill-only task also changes code or product behavior, it is no longer exempt:
+run the code validation required by the affected area.
 
 ## 1. Prepare Git Before Editing
 
@@ -54,16 +90,31 @@ For generated-code changes, determine whether these areas also need updates:
 
 Implement the smallest complete change. Preserve user edits and avoid unrelated refactors.
 
-When adding a feature or changing user-visible behavior, update `README.md` in the same branch. Document:
+When adding a feature or changing any code behavior, update the development documentation under
+`docs/` in the same change. This requirement applies even when the implementation already has tests
+or comments. Update both English and Chinese pages when both versions cover the changed area.
+
+Document:
 
 - supported syntax and types;
 - generated Dart/Go behavior;
 - limitations and ownership rules;
+- migration or compatibility impact when existing behavior changes;
 - a concise usage example when useful.
+
+Choose the page that owns the behavior instead of appending unrelated notes to a convenient file.
+Create a new page only when no existing page can explain the feature clearly. Update navigation or
+cross-links when a new page is added.
+
+Update `README.md` and `README.zh-CN.md` as well when the change affects installation, the quick start,
+the high-level feature list, or other repository-front-page information. README updates do not replace
+the required detailed development documentation under `docs/`.
 
 Regenerate checked-in generated output when the repository treats it as source. Never hand-edit generated files when the generator is the source of truth.
 
 ## 4. Run Code Analysis
+
+Skip this section for a docs-only or skill-only diff.
 
 Run analysis before declaring unit tests ready, and repeat it after relevant fixes.
 
@@ -112,6 +163,8 @@ Prefer `fvm dart` / `fvm flutter` when the project pins Flutter with FVM. For Fl
 
 ## 5. Unit Test Gate
 
+Skip this section for a docs-only or skill-only diff.
+
 Write focused unit tests for the changed behavior. Cover success, failure, boundary, nullability, range, and platform-sensitive cases that apply.
 
 Run the narrowest affected tests first, then the full unit suite:
@@ -132,6 +185,8 @@ Do not weaken, skip, or delete existing assertions to get green results. Do not 
 
 ## 6. Integration Test Gate
 
+Skip this section for a docs-only or skill-only diff.
+
 After unit tests pass, validate the complete generation/build boundary rather than only inspecting strings.
 
 For parser, generator, codec, type-mapping, or runtime changes:
@@ -139,7 +194,7 @@ For parser, generator, codec, type-mapping, or runtime changes:
 1. Generate from a realistic Go package through the CLI:
 
 ```text
-go run ./command generate --config-file <fixture>/flutter_go_bridge.yaml
+go run ./cmd/flutter_go_bridge_codegen generate --config-file <fixture>/flutter_go_bridge.yaml
 ```
 
 2. Compile the generated Go package, using `-buildmode=c-shared` when FFI ABI behavior is involved:
@@ -157,6 +212,8 @@ For Flutter-facing changes, run the relevant `integration_test` flow on an avail
 Do not proceed to smoke tests until integration generation, compilation, and analysis pass.
 
 ## 7. Smoke Test Gate
+
+Skip this section for a docs-only or skill-only diff.
 
 Run an end-to-end smoke test with a real dynamic library and a real Dart process:
 
@@ -178,7 +235,7 @@ For type or codec features, include both bridge directions and at least one fail
 
 ## 8. Review and Commit
 
-After every test gate passes:
+After every applicable validation phase passes:
 
 1. Run `git diff --check`.
 2. Review `git diff` and `git status --short`.
@@ -198,7 +255,10 @@ Push only when the user requests remote publication or the requested workflow ex
 git push -u origin <branch-name>
 ```
 
-Report the branch, commit, analysis commands, unit tests, integration tests, smoke result, and any residual platform coverage gaps.
+Report the branch and commit when created. For code changes, report analysis commands, unit tests,
+integration tests, smoke results, documentation updates, and residual platform coverage gaps. For a
+docs-only or skill-only change, explicitly report that code tests were not required by this workflow
+and list only the relevant documentation or Skill checks performed.
 
 ## Failure Rules
 
@@ -206,3 +266,7 @@ Report the branch, commit, analysis commands, unit tests, integration tests, smo
 - Re-read files after formatters, generators, package managers, or timed-out commands because they may have partially modified the worktree.
 - Do not claim a test passed when it was skipped, timed out, or only compiled.
 - Keep generated-code compile tests and runtime smoke tests separate in the final report.
+- Do not use the docs-only or skill-only exemption when the same diff changes code, templates,
+  examples, configuration behavior, or generated API behavior.
+- Do not finish a code behavior change or new feature without updating its owning development
+  documentation under `docs/`.
