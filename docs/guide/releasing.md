@@ -82,3 +82,20 @@ application's native-library build flags.
 
 The release matrix currently includes Windows, Linux, and macOS targets. Archives are uploaded as
 GitHub Release assets with names based on command, architecture, operating system, and version.
+
+## Documentation deployment
+
+Documentation is no longer deployed when changes are merged into `main`. After the GitHub Release is
+created successfully, the Release workflow directly calls the reusable documentation workflow to:
+
+1. install dependencies with Bun;
+2. type-check and build the VitePress site;
+3. upload and deploy the GitHub Pages artifact.
+
+The direct workflow call is intentional. A Release created with the workflow's `GITHUB_TOKEN` does
+not reliably start another workflow from a `release` event, so the Release workflow owns the entire
+release-and-documentation sequence.
+
+The documentation workflow still supports `workflow_dispatch` for manual recovery. Running it
+manually republishes the documentation from the selected branch or revision, but ordinary merges no
+longer deploy the site.

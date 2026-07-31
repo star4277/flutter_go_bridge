@@ -83,3 +83,19 @@ cgo 动态库的 Gokit 构建；应用 native library 的构建参数仍由 Goki
 
 当前发布矩阵包含 Windows、Linux 和 macOS。压缩包名称包含命令名、架构、操作系统和版本，并作为
 GitHub Release 附件上传。
+
+## 文档发布
+
+文档不再在改动合并到 `main` 后自动部署。GitHub Release 创建成功后，Release workflow 会直接调用
+可复用的文档 workflow，依次完成：
+
+1. 使用 Bun 安装依赖；
+2. 执行 VitePress 类型检查和生产构建；
+3. 上传并部署 GitHub Pages artifact。
+
+这里使用 workflow 直接调用，而不是监听 `release` 事件。由 workflow 的 `GITHUB_TOKEN` 创建 Release
+时，不应依赖它再次触发另一个 workflow；将文档 job 直接接在 Release 后面可以保证发布链路实际
+执行。
+
+文档 workflow 仍保留 `workflow_dispatch`，用于发布失败后的手动恢复。手动运行时会从选择的分支或
+revision 重新发布文档，但普通合并不再触发站点部署。

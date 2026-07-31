@@ -14,6 +14,9 @@ bun run typecheck
 bun run build
 ```
 
+文档改动合并到 `main` 后不会直接部署站点。生产文档由 Release workflow 在 GitHub Release 创建成功
+后发布；如果部署失败，也可以通过文档 workflow 的 `workflow_dispatch` 手动重新执行。
+
 构建会把死链视为错误。英文页面位于 `docs/` 根目录，中文页面在 `docs/zh/` 下保持对应结构。
 新增页面时，需要同步更新 `.vitepress/locales/en.ts` 和 `zh.ts` 中的导航；条件允许时同时提供双语页面。
 
