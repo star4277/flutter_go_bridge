@@ -62,3 +62,29 @@ For documentation rewrite requests, first define a new information architecture 
 - **Notes**: Replaced the migration approach with fresh English and Chinese README outlines and content.
 
 ---
+## [LRN-20260730-002] correction
+
+**Logged**: 2026-07-30T09:14:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Codecov `ignore` filters uploaded coverage paths but does not remove a Go package from `go test ./...` or its CI log.
+
+### Details
+The workflow still enumerated `github.com/star4277/flutter_go_bridge/template` because the Go command selected every package before Codecov processed the coverage profile. Excluding a package from test execution requires filtering the package list passed to `go test`.
+
+### Suggested Action
+Keep `.codecov.yml` ignore rules for uploaded paths, and separately build the Go package list with `go list ./... | grep -v '/template$'` before running tests.
+
+### Metadata
+- Source: user_feedback
+- Related Files: .github/workflows/test.yml, .codecov.yml
+- Tags: codecov, go-test, coverage, github-actions
+
+### Resolution
+- **Resolved**: 2026-07-30T09:14:00+08:00
+- **Notes**: The workflow now passes an explicitly filtered package array to `go test`.
+
+---
