@@ -30,11 +30,56 @@ Build codegen from the repository root, run generation/Go validation from the fi
 
 - Reproducible: yes
 - Related Files: build/audit_smoke/ (temporary)
+- Recurrence-Count: 2
+- Last-Seen: 2026-08-01
 
 ### Resolution
 
 - **Resolved**: 2026-08-01T12:50:00+09:00
 - **Notes**: The corrected flow passed two generations, Go vet, Dart analyze, DLL build, and runtime smoke.
+
+---
+
+## [ERR-20260801-006] powershell-go-coverprofile-argument
+
+**Logged**: 2026-08-01T19:20:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+PowerShell passed the inline relative `go test -coverprofile=build/coverage.out` value incorrectly,
+causing Go to treat `.out` as an extra package.
+
+### Error
+
+```text
+FAIL .out [setup failed]
+no required module provides package .out
+too many arguments
+```
+
+### Context
+
+- Operation: aggregate coverage across all packages except `cmd/**` and `template/**`.
+- All intended package tests passed, but the malformed invocation made the coverage gate fail.
+- The same inline-value form also broke `go tool cover -func=build/coverage.out` under PowerShell.
+
+### Suggested Fix
+
+Resolve the build directory, pass `-coverprofile`/`-func` and the absolute profile path as separate
+native command arguments, and check `go tool cover` only after `go test` succeeds.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .agents/skills/fgb-develop-feature/SKILL.md
+
+### Resolution
+
+- **Resolved**: 2026-08-01T19:21:00+09:00
+- **Notes**: Updated the skill command and reran the gate successfully at 95.1% total coverage.
 
 ---
 

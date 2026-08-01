@@ -242,10 +242,10 @@ dispose，但如果业务把 callback 存在全局变量中，它会一直保留
 - 每次 callback 调用都会阻塞发起它的 Go goroutine，直到 Dart 返回；
 - Dart 闭包在 isolate 事件循环中执行；
 - async 闭包等待 Future 时，其他 Dart 任务仍可运行；
-- runtime 为单次 callback 提供 30 秒超时；
-- 如果 Dart 没有完成返回的 Future，等待会在超时后以 error 结束；无 error 返回位时会按前述规则 panic。
+- runtime 不为 callback 或异步桥接调用设置固定超时，避免 Stream 和合法的长耗时操作被提前终止；
+- 如果 Dart 永远不完成返回的 Future，对应 Go goroutine 会一直等待。
 
-业务需要更短超时时，仍可在 Dart 闭包内部对 Future 使用 timeout，或在 Go 业务协议中设计取消机制。
+业务需要超时时，应在 Dart 闭包内部对 Future 使用 timeout，或在 Go 业务协议中设计取消机制。
 
 ## 初始化要求
 
@@ -332,6 +332,6 @@ func Variadic(callback func(values ...int))
 | Dart async 闭包是否支持 | 支持，Go goroutine 会等待 Future 完成 |
 | Dart throw 后 Go 为什么 panic | callback 签名没有末尾 error；添加 error 结果即可在 Go 中处理 |
 | Go 收到 nil callback | Dart 省略/传 null，且参数被标记 nullable；调用前先判 nil |
-| Go goroutine 长时间等待 | Dart Future 未完成或回调未回复；runtime 会在 30 秒后超时，业务可设置更短超时 |
+| Go goroutine 一直等待 | Dart Future 未完成或回调未回复；runtime 没有固定超时，业务应按需设置超时或取消机制 |
 | callback 一直不释放 | Go 仍持有函数值，清空全局/结构体中的引用并允许 GC |
 | hot restart 后旧 callback 异常 | 旧闭包属于已销毁 isolate，重新注册 |

@@ -58,8 +58,10 @@ When the last Go reference becomes unreachable, cleanup releases the Dart regist
 long-lived global references explicitly when no longer needed.
 
 Multiple goroutines may invoke the same callback; each request has its own ID and waiter. Every call
-blocks its initiating goroutine until Dart completes, for at most 30 seconds. A timeout returns an
-error when the callback signature has a trailing `error`; otherwise the synthesized callback panics.
+blocks its initiating goroutine until Dart completes. The runtime does not impose a timeout on
+callbacks or asynchronous bridge calls, because streams and legitimate long-running operations may
+remain active for longer than a fixed deadline. Apply a timeout in the Dart closure or design an
+explicit cancellation protocol when the application requires one.
 
 Callbacks belong to the Dart isolate that created them. Hot restart retires old callbacks and wakes
 their waiters with an error. Re-register callbacks instead of invoking retained handles.

@@ -784,8 +784,7 @@ final class __FGB_BRIDGE_CLASS__ {
     final port = ReceivePort();
     try {
       _bindings.cstAsync(method, args, port.sendPort.nativePort);
-      final message = await port.first.timeout(const Duration(seconds: 30));
-      return _decodeDcoEnvelope(message);
+      return _decodeDcoEnvelope(await port.first);
     } finally {
       port.close();
     }
@@ -895,7 +894,7 @@ final class __FGB_BRIDGE_CLASS__ {
       } finally {
         _bindings.free(pointer);
       }
-      final message = await port.first.timeout(const Duration(seconds: 30));
+      final message = await port.first;
       if (message is Uint8List) return message;
       if (message is List<int>) return Uint8List.fromList(message);
       throw StateError('fgb_async returned an invalid message');
