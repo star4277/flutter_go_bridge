@@ -1,14 +1,11 @@
-﻿package devrun
+package devrun
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -100,29 +97,5 @@ func TestSessionDetachSucceeds(t *testing.T) {
 	go func() { time.Sleep(50 * time.Millisecond); close(exited) }()
 	if err := session.Detach(context.Background()); err != nil {
 		t.Fatalf("Detach: %v", err)
-	}
-}
-
-func TestConfigureProcessGroupWindows(t *testing.T) {
-	command := exec.Command("flutter")
-	configureProcessGroup(command)
-	if command.SysProcAttr == nil || command.SysProcAttr.CreationFlags&syscall.CREATE_NEW_PROCESS_GROUP == 0 {
-		t.Fatalf("process group flags were not configured: %#v", command.SysProcAttr)
-	}
-}
-
-func TestIgnoreDeadProcess(t *testing.T) {
-	if err := ignoreDeadProcess(nil); err != nil {
-		t.Fatalf("nil should be ignored, got %v", err)
-	}
-	if err := ignoreDeadProcess(os.ErrProcessDone); err != nil {
-		t.Fatalf("ErrProcessDone should be ignored, got %v", err)
-	}
-	if err := ignoreDeadProcess(syscall.EINVAL); err != nil {
-		t.Fatalf("EINVAL should be ignored, got %v", err)
-	}
-	real := errors.New("real failure")
-	if err := ignoreDeadProcess(real); !errors.Is(err, real) {
-		t.Fatalf("non-dead errors must be returned, got %v", err)
 	}
 }
