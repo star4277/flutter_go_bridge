@@ -183,6 +183,8 @@ wire 上扁平化。
 
 识别依据是行为和包名，不只硬编码标准库类型：包名必须是 `atomic`，pointer method set 中必须存在
 匹配的 `Load`/`Store`。atomic 值按一次快照传输，不会让 Dart 和 Go 共享原子变量。
+生成 codec 内部使用指针，避免复制 `sync/atomic` 的 `noCopy` 状态。因此包含 atomic 值的函数入参
+必须使用指针；slice、map 或 array 中的 atomic 值会因为元素赋值需要复制而被拒绝。
 
 ## error
 
@@ -240,3 +242,6 @@ callback 和可变参数 callback。详见[Dart 闭包回调](/zh/reference/call
 - 无法递归映射字段的复杂外部类型；它们可能报错或按结构体规则退化为 `GoOpaque`。
 
 私有函数、方法、类型和常量不进入生成 API；结构体私有字段也不会跨 bridge。
+
+所有生成编码器最多接受 64 层嵌套。超过限制或运行时对象图出现循环时，会返回 codec 错误，而不是
+继续递归直至栈溢出。

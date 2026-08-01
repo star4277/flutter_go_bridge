@@ -1,6 +1,8 @@
 package integrate
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -8,18 +10,27 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
+
+const externalCommandTimeout = 10 * time.Minute
 
 // runCommand executes an external tool, streaming its output to the console.
 // It is a variable so tests can stub out flutter/dart invocations.
 var runCommand = func(dir string, name string, args ...string) error {
 	log.Printf("execute `%s %s` in %s (this may take a while)", name, strings.Join(args, " "), dir)
-	command := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), externalCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
+	command.Stdin = nil
 	command.Env = append(os.Environ(), "DART_SUPPRESS_ANALYTICS=true", "CI=true")
 	if err := command.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("`%s %s` timed out after %s", name, strings.Join(args, " "), externalCommandTimeout)
+		}
 		return fmt.Errorf("`%s %s` failed: %w", name, strings.Join(args, " "), err)
 	}
 	return nil
@@ -27,10 +38,15 @@ var runCommand = func(dir string, name string, args ...string) error {
 
 // captureCommand runs a tool and returns its stdout; also stubbed in tests.
 var captureCommand = func(dir string, name string, args ...string) (string, error) {
-	command := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), externalCommandTimeout)
+	defer cancel()
+	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = dir
 	command.Env = append(os.Environ(), "DART_SUPPRESS_ANALYTICS=true", "CI=true")
 	out, err := command.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "", fmt.Errorf("`%s %s` timed out after %s", name, strings.Join(args, " "), externalCommandTimeout)
+	}
 	return string(out), err
 }
 

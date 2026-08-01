@@ -11,7 +11,7 @@ import (
 // (the per-source Dart files remain ordinary Dart APIs).
 func (r *splitDartRenderer) renderCstEncoders() {
 	for _, typ := range r.unit.Types {
-		if !typ.supportsCodec(codecModeCST, map[int]bool{}) {
+		if !typ.supportsCodecCached(codecModeCST, map[int]bool{}, r.unit.codecSupport) {
 			continue
 		}
 		if cstStorageFor(typ).DartType == "" {
@@ -23,7 +23,8 @@ func (r *splitDartRenderer) renderCstEncoders() {
 }
 
 func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
-	r.line("%s fgbCstEncode%d(%s value, _FgbArena arena, String path) {", cstDartEncoderReturnType(typ), typ.ID, dartEncoderValueType(typ))
+	r.line("%s fgbCstEncode%d(%s value, _FgbArena arena, String path, int depth) {", cstDartEncoderReturnType(typ), typ.ID, dartEncoderValueType(typ))
+	r.line("  if (depth > 64) throw FormatException('$path: value nesting exceeds 64 levels (cyclic reference?)');")
 	// Nilable compound values (slices and the typed lists) travel as arena
 	// pointers, so a null value is simply a null pointer. Closures encode
 	// their own null case as handle 0.
@@ -65,10 +66,10 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		inner := cstStorageFor(typ.Elem)
 		if inner.Scalar {
 			r.line("  final result = arena.allocate<%s>(ffi.sizeOf<%s>());", inner.DartType, inner.DartType)
-			r.line("  result.value = fgbCstEncode%d(value, arena, path);", typ.Elem.ID)
+			r.line("  result.value = fgbCstEncode%d(value, arena, path, depth + 1);", typ.Elem.ID)
 			r.line("  return result;")
 		} else {
-			r.line("  return fgbCstEncode%d(value, arena, path);", typ.Elem.ID)
+			r.line("  return fgbCstEncode%d(value, arena, path, depth + 1);", typ.Elem.ID)
 		}
 	case kindBytes:
 		r.renderCstTypedListBody(typ, "ffi.Uint8")
@@ -83,7 +84,7 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 	case kindStruct:
 		r.line("  final result = arena.allocate<%s>(ffi.sizeOf<%s>());", cstDartTypeName(typ), cstDartTypeName(typ))
 		for _, field := range typ.Struct.allFields() {
-			r.line("  result.ref.%s = fgbCstEncode%d(value.%s, arena, path + %s);", field.CName, field.Type.ID, field.DartName, strconv.Quote("."+field.WireName))
+			r.line("  result.ref.%s = fgbCstEncode%d(value.%s, arena, path + %s, depth + 1);", field.CName, field.Type.ID, field.DartName, strconv.Quote("."+field.WireName))
 		}
 		r.line("  return result;")
 	case kindOpaque:
@@ -97,9 +98,9 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 	case kindCallback:
 		r.renderCallbackRegistration(typ, "arena.bridge")
 	case kindNamed:
-		r.line("  return fgbCstEncode%d(value.value, arena, path);", typ.Named.Underlying.ID)
+		r.line("  return fgbCstEncode%d(value.value, arena, path, depth + 1);", typ.Named.Underlying.ID)
 	case kindAtomic:
-		r.line("  return fgbCstEncode%d(value, arena, path);", typ.Atomic.Value.ID)
+		r.line("  return fgbCstEncode%d(value, arena, path, depth + 1);", typ.Atomic.Value.ID)
 	default:
 		// Unsupported types are intentionally omitted by renderCstEncoders.
 		r.line("  throw UnsupportedError('CST does not support %s');", typ.Kind)
@@ -155,7 +156,7 @@ func (r *splitDartRenderer) renderCstGenericList(typ *wireType) {
 	r.line("  final data = arena.allocate<%s>(ffi.sizeOf<%s>() * (length == 0 ? 1 : length));", elem.DartType, elem.DartType)
 	r.line("  result.ref.ptr = data;")
 	r.line("  for (var index = 0; index < length; index++) {")
-	r.line("    (data + index).value = fgbCstEncode%d(value[index], arena, '$path[' + index.toString() + ']');", typ.Elem.ID)
+	r.line("    (data + index).value = fgbCstEncode%d(value[index], arena, '$path[' + index.toString() + ']', depth + 1);", typ.Elem.ID)
 	r.line("  }")
 	r.line("  return result;")
 }
@@ -181,11 +182,11 @@ func (r *splitDartRenderer) renderCentralCstCall(call *callModel, arguments []st
 	r.line("    final args = arena.allocate<%s>(ffi.sizeOf<%s>());", cstDartArgsName(call), cstDartArgsName(call))
 	argIndex := 0
 	if call.Receiver != nil {
-		r.line("    args.ref.receiver = fgbCstEncode%d(%s, arena, 'receiver');", call.Receiver.ID, arguments[argIndex])
+		r.line("    args.ref.receiver = fgbCstEncode%d(%s, arena, 'receiver', 0);", call.Receiver.ID, arguments[argIndex])
 		argIndex++
 	}
 	for _, param := range call.Params {
-		r.line("    args.ref.%s = fgbCstEncode%d(%s, arena, %s);", param.CName, param.Type.ID, arguments[argIndex], strconv.Quote(param.DartName))
+		r.line("    args.ref.%s = fgbCstEncode%d(%s, arena, %s, 0);", param.CName, param.Type.ID, arguments[argIndex], strconv.Quote(param.DartName))
 		argIndex++
 	}
 	if len(call.Results) != 0 {

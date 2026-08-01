@@ -6,8 +6,11 @@
 package watcher
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
+	"io"
 	"io/fs"
 	"log"
 	"os"
@@ -43,6 +46,10 @@ type Options struct {
 // failing runInner is reported as a warning and watching continues; only
 // watcher errors (e.g. an unreadable root) abort the loop.
 func Run(options Options, runInner func() error) error {
+	return RunContext(context.Background(), options, runInner)
+}
+
+func RunContext(ctx context.Context, options Options, runInner func() error) error {
 	interval := options.Interval
 	if interval <= 0 {
 		interval = 400 * time.Millisecond
@@ -55,6 +62,9 @@ func Run(options Options, runInner func() error) error {
 		return err
 	}
 	for count := 1; ; count++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := runInner(); err != nil {
 			log.Printf("warning: code generator failed: %v", err)
 		}
@@ -63,7 +73,13 @@ func Run(options Options, runInner func() error) error {
 		}
 		log.Printf("watching for file changes on %s ...", strings.Join(options.Roots, ", "))
 		for {
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 			changed, err := tracker.Changed()
 			if err != nil {
 				return err
@@ -248,16 +264,22 @@ func takeSnapshotWith(roots []string, exclude map[string]struct{}, previous snap
 	return result, nil
 }
 
-// hashFile returns a content hash, or 0 when the file cannot be read. An
-// unreadable file is reported as a stable value rather than an error: it is
-// usually a transient state during an editor's atomic save, and the next poll
-// picks up the final content.
+// hashFile streams file contents and uses metadata as a failure sentinel so a
+// persistently unreadable file can still be observed changing.
 func hashFile(path string) uint64 {
-	content, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
-		return 0
+		if info, statErr := os.Stat(path); statErr == nil {
+			digest := fnv.New64a()
+			_, _ = fmt.Fprintf(digest, "%d:%d", info.Size(), info.ModTime().UnixNano())
+			return digest.Sum64()
+		}
+		return ^uint64(0)
 	}
+	defer file.Close()
 	digest := fnv.New64a()
-	_, _ = digest.Write(content)
+	if _, err := io.Copy(digest, file); err != nil {
+		return ^uint64(0)
+	}
 	return digest.Sum64()
 }

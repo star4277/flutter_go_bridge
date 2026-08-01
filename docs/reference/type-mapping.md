@@ -142,7 +142,10 @@ implementor discovery, and restrictions.
 | `sync/atomic.Uint32`<br>`sync/atomic.Uint64`<br>`sync/atomic.Uintptr` | `int` or `BigInt` | Determined by the concrete `Load()` result type |
 | Compatible wrapper in an `atomic` package | `T` | Requires `Load() T` and `Store(T)` for a supported basic `T` |
 
-Atomic values cross as snapshots. Dart and Go do not share the same atomic variable.
+Atomic values cross as snapshots. Dart and Go do not share the same atomic variable. Generated
+codecs use pointers internally to avoid copying `sync/atomic`'s `noCopy` state. Function parameters
+that contain atomic values must therefore be pointers; atomic values inside slices, maps, or arrays
+are rejected because element assignment would copy them.
 
 ## Error
 
@@ -199,3 +202,6 @@ arrays, and value structs are not nil-capable without a Go pointer. See
 
 Private functions, methods, types, and constants are omitted. Private struct fields never cross the
 bridge.
+
+All generated encoders reject values nested beyond 64 levels. This bounds malicious inputs and
+turns cyclic runtime object graphs into a codec error instead of a stack overflow.

@@ -12,6 +12,12 @@ func TestDartNames(t *testing.T) {
 	if got := UpperCamel("hello_world"); got != "HelloWorld" {
 		t.Fatalf("got %q", got)
 	}
+	if got := LowerCamel("123-value"); got != "n123Value" {
+		t.Fatalf("numeric lower camel name must not start with underscore, got %q", got)
+	}
+	if got := UpperCamel("123-value"); got != "Generated123Value" {
+		t.Fatalf("numeric upper camel name must not start with underscore, got %q", got)
+	}
 }
 
 func TestLibraryBase(t *testing.T) {

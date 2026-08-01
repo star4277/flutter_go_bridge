@@ -34,14 +34,11 @@ func renderGo(unit *unit) ([]byte, error) {
 	r.line("import (")
 	imports := []string{
 		"bytes", "encoding/binary", "fmt", "io", "math/big", "reflect",
-		"runtime", "runtime/debug", "sync", "sync/atomic", "unsafe",
+		"os", "runtime", "runtime/debug", "sync", "sync/atomic", "time", "unsafe",
 	}
 	// The stream runtime always carries the cancellation plumbing, so context
 	// is part of the fixed import set.
 	imports = append(imports, "context")
-	if unit.UsesTime {
-		imports = append(imports, "time")
-	}
 	if unit.UsesInternetIP || unit.UsesIPPrefix {
 		imports = append(imports, "net/netip")
 	}
@@ -113,7 +110,11 @@ func renderGo(unit *unit) ([]byte, error) {
 
 func (r *goRenderer) renderDecoder(typ *wireType) error {
 	goType := r.goType(typ.Original)
-	r.line("func fgbDecode%d(value any, path string) (%s, error) {", typ.ID, goType)
+	decodeType := goType
+	if typ.usesPointerCodec(map[int]bool{}) {
+		decodeType = "*" + goType
+	}
+	r.line("func fgbDecode%d(value any, path string) (%s, error) {", typ.ID, decodeType)
 	switch typ.Kind {
 	case kindBool:
 		r.line("\tresult, ok := value.(bool)")
@@ -179,7 +180,11 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Elem.ID)
 		r.line("\tif err != nil { return nil, err }")
-		r.line("\treturn &decoded, nil")
+		if typ.Elem.usesPointerCodec(map[int]bool{}) {
+			r.line("\treturn decoded, nil")
+		} else {
+			r.line("\treturn &decoded, nil")
+		}
 	case kindBytes:
 		r.line("\tif value == nil { return nil, nil }")
 		r.line("\traw, ok := value.([]byte)")
@@ -242,11 +247,30 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		} else {
 			r.line("\traw, ok := value.(map[any]any)")
 		}
-		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Map\", value) }", goType)
-		r.line("\tvar result %s", goType)
+		if typ.usesPointerCodec(map[int]bool{}) {
+			r.line("\tif !ok { return nil, fgbTypeError(path, \"Map\", value) }")
+			r.line("\tresult := new(%s)", goType)
+		} else {
+			r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Map\", value) }", goType)
+			r.line("\tvar result %s", goType)
+		}
 		for _, field := range fields {
+			if field.Type.Kind == kindAtomic {
+				r.line("\tdecoded%s, err := fgbDecode%d(raw[%s], path+%s)", field.GoName, field.Type.Atomic.Value.ID, strconv.Quote(field.WireName), strconv.Quote("."+field.WireName))
+				if typ.usesPointerCodec(map[int]bool{}) {
+					r.line("\tif err != nil { return nil, err }")
+				} else {
+					r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+				}
+				r.line("\tresult.%s.Store(decoded%s)", field.GoName, field.GoName)
+				continue
+			}
 			r.line("\tdecoded%s, err := fgbDecode%d(raw[%s], path+%s)", field.GoName, field.Type.ID, strconv.Quote(field.WireName), strconv.Quote("."+field.WireName))
-			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+			if typ.usesPointerCodec(map[int]bool{}) {
+				r.line("\tif err != nil { return nil, err }")
+			} else {
+				r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+			}
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
 		}
 		r.line("\treturn result, nil")
@@ -263,7 +287,8 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\traw, err := fgbAsInt64(value, path)")
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 		r.line("\tif raw == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid DartOpaque handle 0\", path) }", goType)
-		r.line("\treturn fgbrt.NewDartOpaque(raw, fgbReleaseDartOpaque), nil")
+		r.line("\tgeneration := fgbCurrentDartOpaqueGeneration()")
+		r.line("\treturn fgbrt.NewDartOpaque(raw, func(handle int64) { fgbReleaseDartOpaque(generation, handle) }), nil")
 	case kindCallback:
 		r.line("\traw, err := fgbAsInt64(value, path)")
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -273,7 +298,7 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 			// Channel streams are wired up by the dispatcher, which owns the
 			// channel; there is nothing to decode from a value here.
 			r.line("\tvar zero %s", goType)
-			r.line("\treturn zero, fmt.Errorf(\"%%s: channel streams are only supported as direct call parameters\", path)")
+			r.raw("\treturn zero, fmt.Errorf(\"%s: channel streams are only supported as direct call parameters\", path)\n")
 			break
 		}
 		r.line("\traw, err := fgbAsInt64(value, path)")
@@ -300,8 +325,8 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\treturn %s(decoded), nil", goType)
 	case kindAtomic:
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Atomic.Value.ID)
-		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
-		r.line("\tvar result %s", goType)
+		r.line("\tif err != nil { return nil, err }")
+		r.line("\tresult := new(%s)", goType)
 		r.line("\tresult.Store(decoded)")
 		r.line("\treturn result, nil")
 	default:
@@ -322,7 +347,12 @@ func (r *goRenderer) renderTypedListCopy(goType string) {
 
 func (r *goRenderer) renderEncoder(typ *wireType) error {
 	goType := r.goType(typ.Original)
-	r.line("func fgbEncode%d(value %s) (any, error) {", typ.ID, goType)
+	encodeType := goType
+	if typ.usesPointerCodec(map[int]bool{}) {
+		encodeType = "*" + goType
+	}
+	r.line("func fgbEncode%d(value %s, depth int) (any, error) {", typ.ID, encodeType)
+	r.line("\tif depth > 64 { return nil, fmt.Errorf(\"value nesting exceeds 64 levels (cyclic reference?)\") }")
 	switch typ.Kind {
 	case kindBool, kindString:
 		r.line("\treturn value, nil")
@@ -362,10 +392,14 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindDuration:
 		r.line("\treturn int64(value / time.Microsecond), nil")
 	case kindAny:
-		r.line("\treturn fgbNormalize(value, 0)")
+		r.line("\treturn fgbNormalize(value, depth)")
 	case kindPointer:
 		r.line("\tif value == nil { return nil, nil }")
-		r.line("\treturn fgbEncode%d(*value)", typ.Elem.ID)
+		if typ.Elem.usesPointerCodec(map[int]bool{}) {
+			r.line("\treturn fgbEncode%d(value, depth+1)", typ.Elem.ID)
+		} else {
+			r.line("\treturn fgbEncode%d(*value, depth+1)", typ.Elem.ID)
+		}
 	case kindBytes, kindInt32List, kindInt64List, kindFloat64List:
 		r.line("\tif value == nil { return %s{}, nil }", goType)
 		r.line("\treturn value, nil")
@@ -373,7 +407,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\tif value == nil { return []any{}, nil }")
 		r.line("\tresult := make([]any, len(value))")
 		r.line("\tfor index, item := range value {")
-		r.line("\t\tencoded, err := fgbEncode%d(item)", typ.Elem.ID)
+		r.line("\t\tencoded, err := fgbEncode%d(item, depth+1)", typ.Elem.ID)
 		r.raw("\t\tif err != nil { return nil, fmt.Errorf(\"element %d: %w\", index, err) }")
 		r.line("\t\tresult[index] = encoded")
 		r.line("\t}")
@@ -381,7 +415,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindArray:
 		r.line("\tresult := make([]any, len(value))")
 		r.line("\tfor index, item := range value {")
-		r.line("\t\tencoded, err := fgbEncode%d(item)", typ.Elem.ID)
+		r.line("\t\tencoded, err := fgbEncode%d(item, depth+1)", typ.Elem.ID)
 		r.raw("\t\tif err != nil { return nil, fmt.Errorf(\"element %d: %w\", index, err) }")
 		r.line("\t\tresult[index] = encoded")
 		r.line("\t}")
@@ -390,40 +424,48 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\tif value == nil { return map[any]any{}, nil }")
 		r.line("\tresult := make(map[any]any, len(value))")
 		r.line("\tfor key, item := range value {")
-		r.line("\t\tencodedKey, err := fgbEncode%d(key)", typ.Key.ID)
+		r.line("\t\tencodedKey, err := fgbEncode%d(key, depth+1)", typ.Key.ID)
 		r.raw("\t\tif err != nil { return nil, fmt.Errorf(\"map key: %w\", err) }")
-		r.line("\t\tencoded, err := fgbEncode%d(item)", typ.Elem.ID)
+		r.line("\t\tencoded, err := fgbEncode%d(item, depth+1)", typ.Elem.ID)
 		r.raw("\t\tif err != nil { return nil, fmt.Errorf(\"map value: %w\", err) }")
 		r.line("\t\tresult[encodedKey] = encoded")
 		r.line("\t}")
 		r.line("\treturn result, nil")
 	case kindStruct:
+		if typ.usesPointerCodec(map[int]bool{}) {
+			r.line("\tif value == nil { return nil, nil }")
+		}
 		fields := typ.Struct.allFields()
 		r.line("\tresult := make(map[any]any, %d)", len(fields))
 		for _, field := range fields {
+			encodeID := field.Type.ID
+			encodeExpr := fmt.Sprintf("value.%s", field.GoName)
+			if field.Type.Kind == kindAtomic {
+				encodeID = field.Type.Atomic.Value.ID
+				encodeExpr = fmt.Sprintf("value.%s.Load()", field.GoName)
+			}
 			// A nullable field keeps its nil: the shared encoders normalize a
 			// nil slice or map to an empty one, which would erase exactly the
 			// distinction the field was marked for.
 			if field.Nullable {
 				r.line("\tvar encoded%s any", field.GoName)
 				r.line("\tif value.%s != nil {", field.GoName)
-				r.line("\t\traw, err := fgbEncode%d(value.%s)", field.Type.ID, field.GoName)
+				r.line("\t\traw, err := fgbEncode%d(value.%s, depth+1)", field.Type.ID, field.GoName)
 				r.line("\t\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 				r.line("\t\tencoded%s = raw", field.GoName)
 				r.line("\t}")
 				r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
 				continue
 			}
-			r.line("\tencoded%s, err := fgbEncode%d(value.%s)", field.GoName, field.Type.ID, field.GoName)
+			r.line("\tencoded%s, err := fgbEncode%d(%s, depth+1)", field.GoName, encodeID, encodeExpr)
 			r.line("\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 			r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
 		}
 		r.line("\treturn result, nil")
 	case kindOpaque:
 		r.line("\tif value == nil { return nil, nil }")
-		r.line("\thandle := fgbNextHandle.Add(1)")
-		r.line("\tif handle == 0 { return nil, fmt.Errorf(\"opaque handle space exhausted\") }")
-		r.line("\tfgbHandles.Store(handle, value)")
+		r.line("\thandle, err := fgbStoreOpaque(value)")
+		r.line("\tif err != nil { return nil, err }")
 		r.line("\treturn int64(handle), nil")
 	case kindDartOpaque:
 		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
@@ -440,7 +482,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\tswitch typed := value.(type) {")
 		for index, implementor := range typ.Interface.Implementors {
 			r.line("\tcase %s:", r.goType(implementor.Type.Original))
-			r.line("\t\tencoded, err := fgbEncode%d(typed)", implementor.Type.ID)
+			r.line("\t\tencoded, err := fgbEncode%d(typed, depth+1)", implementor.Type.ID)
 			r.line("\t\tif err != nil { return nil, err }")
 			r.line("\t\treturn []any{int64(%d), encoded}, nil", index)
 		}
@@ -448,9 +490,10 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.raw("\treturn nil, fmt.Errorf(\"%T does not implement a bridged " + typ.Interface.GoName + " implementation\", value)")
 	case kindNamed:
 		underlyingGo := r.goType(typ.Named.Underlying.Original)
-		r.line("\treturn fgbEncode%d(%s(value))", typ.Named.Underlying.ID, underlyingGo)
+		r.line("\treturn fgbEncode%d(%s(value), depth+1)", typ.Named.Underlying.ID, underlyingGo)
 	case kindAtomic:
-		r.line("\treturn fgbEncode%d(value.Load())", typ.Atomic.Value.ID)
+		r.line("\tif value == nil { return nil, nil }")
+		r.line("\treturn fgbEncode%d(value.Load(), depth+1)", typ.Atomic.Value.ID)
 	default:
 		return fmt.Errorf("no Go encoder for %s", typ.Kind)
 	}
@@ -470,6 +513,7 @@ func (r *goRenderer) renderCallbackFactory(typ *wireType) {
 	r.line("func fgbMakeCallback%d(handle int64) %s {", typ.ID, goType)
 	r.line("\t// Handle 0 means Dart passed null for a //fgb:nullable callback.")
 	r.line("\tif handle == 0 { return nil }")
+	r.line("\tgeneration := fgbCurrentDartOpaqueGeneration()")
 	r.line("\tref := fgbNewCallbackRef(handle)")
 
 	params := make([]string, len(callback.Params))
@@ -505,11 +549,11 @@ func (r *goRenderer) renderCallbackFactory(typ *wireType) {
 
 	arguments := make([]string, len(callback.Params))
 	for index, param := range callback.Params {
-		r.line("\t\tencoded%d, err := fgbEncode%d(a%d)", index, param.ID, index)
+		r.line("\t\tencoded%d, err := fgbEncode%d(a%d, 0)", index, param.ID, index)
 		fail(fmt.Sprintf("fmt.Errorf(\"callback argument %d: %%w\", err)", index))
 		arguments[index] = fmt.Sprintf("encoded%d", index)
 	}
-	r.line("\t\treply, err := fgbInvokeCallback(handle, []any{%s})", strings.Join(arguments, ", "))
+	r.line("\t\treply, err := fgbInvokeCallback(generation, handle, []any{%s})", strings.Join(arguments, ", "))
 	r.line("\t\truntime.KeepAlive(ref)")
 	fail("err")
 	if callback.Result != nil {
@@ -538,7 +582,7 @@ func (r *goRenderer) renderStreamSinkFactory(typ *wireType) {
 	r.line("\t// retires this sink even if its producer goroutine keeps running.")
 	r.line("\tgeneration := fgbCurrentStreamGeneration()")
 	r.line("\treturn fgbrt.NewStreamSink(handle, func(value %s) (any, error) {", r.goType(typ.Stream.Original))
-	r.line("\t\treturn fgbEncode%d(value)", typ.Stream.ID)
+	r.line("\t\treturn fgbEncode%d(value, 0)", typ.Stream.ID)
 	r.line("\t}, func(handle int64, kind int32, payload any) bool {")
 	r.line("\t\treturn fgbPostStreamEvent(generation, handle, kind, payload)")
 	r.line("\t}, func(handle int64) {")
@@ -618,13 +662,21 @@ func (r *goRenderer) renderDispatch() {
 		case 0:
 			r.line("\t\treturn nil, nil")
 		case 1:
-			r.line("\t\tencoded, err := fgbEncode%d(result0)", call.Results[0].Type.ID)
+			if call.Results[0].Type.usesPointerCodec(map[int]bool{}) {
+				r.line("\t\tencoded, err := fgbEncode%d(&result0, 0)", call.Results[0].Type.ID)
+			} else {
+				r.line("\t\tencoded, err := fgbEncode%d(result0, 0)", call.Results[0].Type.ID)
+			}
 			r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: map[any]any{\"method\": call.Method}} }")
 			r.line("\t\treturn encoded, nil")
 		default:
 			// Several results travel as one list and become a Dart record.
 			for index, result := range call.Results {
-				r.line("\t\tencoded%d, err := fgbEncode%d(result%d)", index, result.Type.ID, index)
+				if result.Type.usesPointerCodec(map[int]bool{}) {
+					r.line("\t\tencoded%d, err := fgbEncode%d(&result%d, 0)", index, result.Type.ID, index)
+				} else {
+					r.line("\t\tencoded%d, err := fgbEncode%d(result%d, 0)", index, result.Type.ID, index)
+				}
 				r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: map[any]any{\"method\": call.Method}} }")
 			}
 			encoded := make([]string, len(call.Results))
@@ -671,7 +723,7 @@ func (r *goRenderer) goCallExpression(call *callModel) string {
 // here and closed once the call returns, and the context is cancelled as soon
 // as the Dart side stops listening.
 func (r *goRenderer) renderStreamChannelSetup(call *callModel, indent string, handleExpr func(index int) string) {
-	streamHandle := ""
+	var streamHandles []string
 	for index, param := range call.Params {
 		if param.Type.Kind != kindStreamSink {
 			continue
@@ -681,8 +733,8 @@ func (r *goRenderer) renderStreamChannelSetup(call *callModel, indent string, ha
 		needsHandle := param.Type.ChannelStream || call.ContextIndex >= 0
 		if needsHandle {
 			r.line("%shandle%d := %s", indent, index, handleExpr(index))
-			if streamHandle == "" {
-				streamHandle = fmt.Sprintf("handle%d", index)
+			if call.ContextIndex >= 0 {
+				streamHandles = append(streamHandles, fmt.Sprintf("handle%d", index))
 			}
 		}
 		if param.Type.ChannelStream {
@@ -695,13 +747,16 @@ func (r *goRenderer) renderStreamChannelSetup(call *callModel, indent string, ha
 	}
 	r.line("%sfgbCtx, fgbCancel := context.WithCancel(context.Background())", indent)
 	r.line("%sdefer fgbCancel()", indent)
-	if streamHandle != "" {
+	if len(streamHandles) != 0 {
 		// Cancelling the Dart subscription cancels the Go context, which is
-		// how a cooperative producer learns to stop early. Capture the
+		// how a cooperative producer learns to stop early. Register every
+		// sink so cancelling any subscription stops the call. Capture the
 		// generation once so the deferred cleanup cannot target a later one.
 		r.line("%sfgbStreamGen := fgbCurrentStreamGeneration()", indent)
-		r.line("%sfgbRegisterStreamCancel(fgbStreamGen, %s, fgbCancel)", indent, streamHandle)
-		r.line("%sdefer fgbUnregisterStreamCancel(fgbStreamGen, %s)", indent, streamHandle)
+		for _, handle := range streamHandles {
+			r.line("%sfgbRegisterStreamCancel(fgbStreamGen, %s, fgbCancel)", indent, handle)
+			r.line("%sdefer fgbUnregisterStreamCancel(fgbStreamGen, %s)", indent, handle)
+		}
 	}
 }
 
@@ -718,7 +773,7 @@ func (r *goRenderer) renderStreamChannelHelpers(typ *wireType) {
 	r.line("\t\t// Keep draining even after the Dart side stopped listening, so a")
 	r.line("\t\t// producer that ignores ctx.Done() never blocks forever.")
 	r.line("\t\tfor value := range ch {")
-	r.line("\t\t\tencoded, err := fgbEncode%d(value)", typ.Stream.ID)
+	r.line("\t\t\tencoded, err := fgbEncode%d(value, 0)", typ.Stream.ID)
 	r.line("\t\t\tif err != nil { continue }")
 	r.line("\t\t\tfgbPostStreamEvent(generation, handle, 0, encoded)")
 	r.line("\t\t}")

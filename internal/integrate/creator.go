@@ -188,19 +188,18 @@ func removeClassesDir(platformDir string) error {
 	return removeFilesInDir(platformDir)
 }
 
-// removeFilesInDir deletes every file in dir and refuses to touch nested
-// directories, mirroring FRB's defensive remove_files_in_dir.
+// removeFilesInDir deletes top-level files and preserves nested directories.
+// Flutter templates may add nested platform files that belong to the user.
 func removeFilesInDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
-		path := filepath.Join(dir, entry.Name())
 		if entry.IsDir() {
-			return fmt.Errorf("directory %s was expected to contain only files but directory %s was encountered", dir, path)
+			continue
 		}
-		if err := os.Remove(path); err != nil {
+		if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
 			return err
 		}
 	}

@@ -136,7 +136,6 @@ func Run(ctx context.Context, options Options) error {
 	}()
 	var pending <-chan Key = incoming
 
-
 	// The generator reports progress through the standard logger. Route it
 	// through the same writer so it picks up the newline translation, and drop
 	// the timestamps, which are noise in an interactive dev loop.
@@ -316,7 +315,7 @@ func (l *loop) poll(ctx context.Context) error {
 		return err
 	}
 	if goChanged {
-		l.settle(l.goTracker)
+		l.settle(ctx, l.goTracker)
 		return l.regenerateAndRestart(ctx, "Go sources changed")
 	}
 	dartChanged, err := l.dartTracker.Changed()
@@ -324,7 +323,7 @@ func (l *loop) poll(ctx context.Context) error {
 		return err
 	}
 	if dartChanged {
-		l.settle(l.dartTracker)
+		l.settle(ctx, l.dartTracker)
 		return l.hotReload(ctx)
 	}
 	return nil
@@ -332,13 +331,25 @@ func (l *loop) poll(ctx context.Context) error {
 
 // settle waits for the tree to go quiet before acting, so a save-all or a
 // gofmt-on-save burst produces one restart instead of several.
-func (l *loop) settle(tracker *watcher.Tracker) {
+
+func (l *loop) settle(ctx context.Context, tracker *watcher.Tracker) {
+	timer := time.NewTimer(l.interval)
+	defer timer.Stop()
+	deadline := time.NewTimer(30 * time.Second)
+	defer deadline.Stop()
 	for {
-		time.Sleep(l.interval)
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			return
+		case <-timer.C:
+		}
 		changed, err := tracker.Changed()
 		if err != nil || !changed {
 			return
 		}
+		timer.Reset(l.interval)
 	}
 }
 

@@ -1,6 +1,7 @@
 package integrate
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -114,6 +115,9 @@ func overlayDir(templates fs.FS, root string, replacements map[string]string, da
 				return err
 			}
 			existing, readErr := os.ReadFile(target)
+			if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+				return fmt.Errorf("read existing %s: %w", target, readErr)
+			}
 			data, write := modifyFile(rel, target, reference, existing, readErr == nil, replacements, commentOutFiles)
 			if !write {
 				continue

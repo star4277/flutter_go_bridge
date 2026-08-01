@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -406,7 +407,11 @@ func sameFilePath(left, right string) bool {
 	if leftErr != nil || rightErr != nil {
 		return filepath.Clean(left) == filepath.Clean(right)
 	}
-	return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
+	leftClean, rightClean := filepath.Clean(leftAbs), filepath.Clean(rightAbs)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(leftClean, rightClean)
+	}
+	return leftClean == rightClean
 }
 
 func packageErrors(pkgs []*packages.Package) error {
@@ -427,6 +432,7 @@ var nullableDirectivePattern = regexp.MustCompile(`^nullable\s*=\s*(.+)$`)
 // declaration.
 type directiveSet struct {
 	Mode     model.CallMode
+	HasMode  bool
 	Ignore   bool
 	Opaque   bool
 	Rename   string
@@ -485,7 +491,7 @@ func parseDirectives(group *ast.CommentGroup) (directiveSet, error) {
 		if modeSeen && value != result.Mode {
 			return fmt.Errorf("conflicting fgb call mode directives")
 		}
-		result.Mode, modeSeen = value, true
+		result.Mode, result.HasMode, modeSeen = value, true, true
 		return nil
 	}
 	applyToken := func(token string) error {
@@ -561,6 +567,9 @@ func mergeSpecDirectives(specDoc, declDoc *ast.CommentGroup) (directiveSet, erro
 	fromDecl, err := parseDirectives(declDoc)
 	if err != nil {
 		return fromDecl, err
+	}
+	if fromSpec.HasMode || fromDecl.HasMode || len(fromSpec.Nullable) != 0 || len(fromDecl.Nullable) != 0 {
+		return fromSpec, fmt.Errorf("call mode and nullable directives apply to functions, not type declarations")
 	}
 	result := fromSpec
 	result.Ignore = fromSpec.Ignore || fromDecl.Ignore

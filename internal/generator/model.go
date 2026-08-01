@@ -81,6 +81,7 @@ type unit struct {
 	ExternalImports []goImportModel
 	// GoPackageAliases is the renderer lookup paired with ExternalImports.
 	GoPackageAliases map[string]string
+	codecSupport     map[codecCacheKey]bool
 }
 
 type goImportModel struct {
@@ -150,8 +151,6 @@ type resultModel struct {
 	Type    *wireType
 }
 
-func (c *callModel) hasError() bool { return c != nil && c.ErrorCount > 0 }
-
 // resultShape reports, in Go result order, whether each result is an error.
 // Errors may appear anywhere in the signature.
 func (c *callModel) resultShape() []bool {
@@ -169,15 +168,6 @@ func (c *callModel) resultShape() []bool {
 		shape = append(shape, true)
 	}
 	return shape
-}
-
-// singleResult is the only non-error result, or nil when the call returns
-// nothing or a record.
-func (c *callModel) singleResult() *wireType {
-	if c == nil || len(c.Results) != 1 {
-		return nil
-	}
-	return c.Results[0].Type
 }
 
 type paramModel struct {
@@ -224,6 +214,56 @@ type wireType struct {
 // represented by the ordinary kindPointer wrapper.
 type atomicModel struct {
 	Value *wireType
+}
+
+// usesPointerCodec reports whether passing this Go value to a generated codec
+// by value would copy an atomic wrapper (or a struct containing one).
+func (t *wireType) usesPointerCodec(seen map[int]bool) bool {
+	if t == nil || seen[t.ID] {
+		return false
+	}
+	seen[t.ID] = true
+	defer delete(seen, t.ID)
+	switch t.Kind {
+	case kindAtomic:
+		return true
+	case kindStruct:
+		for _, field := range t.Struct.allFields() {
+			if field.Type.usesPointerCodec(seen) {
+				return true
+			}
+		}
+	case kindNamed:
+		return t.Named.Underlying.usesPointerCodec(seen)
+	case kindArray:
+		return t.Elem.usesPointerCodec(seen)
+	}
+	return false
+}
+
+func (t *wireType) containsAtomic(seen map[int]bool) bool {
+	if t == nil || seen[t.ID] {
+		return false
+	}
+	seen[t.ID] = true
+	defer delete(seen, t.ID)
+	switch t.Kind {
+	case kindAtomic:
+		return true
+	case kindPointer, kindSlice, kindArray:
+		return t.Elem.containsAtomic(seen)
+	case kindMap:
+		return t.Key.containsAtomic(seen) || t.Elem.containsAtomic(seen)
+	case kindStruct:
+		for _, field := range t.Struct.allFields() {
+			if field.Type.containsAtomic(seen) {
+				return true
+			}
+		}
+	case kindNamed:
+		return t.Named.Underlying.containsAtomic(seen)
+	}
+	return false
 }
 
 // nilableWithoutPointer reports whether the Go type can be nil on its own,

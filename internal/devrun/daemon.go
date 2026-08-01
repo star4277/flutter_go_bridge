@@ -62,8 +62,10 @@ type Client struct {
 	nextID  int
 	pending map[int]chan response
 
-	done    chan struct{}
-	readErr error
+	done      chan struct{}
+	closing   chan struct{}
+	closeOnce sync.Once
+	readErr   error
 }
 
 // NewClient starts reading messages from reader and sends requests to writer.
@@ -75,9 +77,16 @@ func NewClient(reader io.Reader, writer io.Writer, passthrough io.Writer) *Clien
 		events:  make(chan Event, 256),
 		pending: map[int]chan response{},
 		done:    make(chan struct{}),
+		closing: make(chan struct{}),
 	}
 	go client.readLoop(reader, passthrough)
 	return client
+}
+
+// Close stops event delivery when the consumer is leaving. The underlying
+// process/pipe owner is still responsible for closing the transport.
+func (c *Client) Close() {
+	c.closeOnce.Do(func() { close(c.closing) })
 }
 
 // Events yields decoded daemon events until the transport ends, at which point
@@ -122,7 +131,11 @@ func (c *Client) readLoop(reader io.Reader, passthrough io.Writer) {
 			if len(message.Params) > 0 {
 				_ = json.Unmarshal(message.Params, &params)
 			}
-			c.events <- Event{Name: message.Event, Params: params}
+			select {
+			case c.events <- Event{Name: message.Event, Params: params}:
+			case <-c.closing:
+				return
+			}
 		case message.ID != nil:
 			c.complete(*message.ID, message)
 		}

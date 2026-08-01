@@ -8,7 +8,7 @@ import (
 
 func (r *goRenderer) renderCstDecoders() {
 	for _, typ := range r.unit.Types {
-		if !typ.supportsCodec(codecModeCST, map[int]bool{}) || cstGoTypeForSignature(typ) == "unsafe.Pointer" {
+		if !typ.supportsCodecCached(codecModeCST, map[int]bool{}, r.unit.codecSupport) || cstGoTypeForSignature(typ) == "unsafe.Pointer" {
 			continue
 		}
 		r.renderCstDecoder(typ)
@@ -18,7 +18,11 @@ func (r *goRenderer) renderCstDecoders() {
 
 func (r *goRenderer) renderCstDecoder(typ *wireType) {
 	goType := r.goType(typ.Original)
-	r.line("func fgbCstDecode%d(value %s, path string) (%s, error) {", typ.ID, cstGoTypeForSignature(typ), goType)
+	decodeType := goType
+	if typ.usesPointerCodec(map[int]bool{}) {
+		decodeType = "*" + goType
+	}
+	r.line("func fgbCstDecode%d(value %s, path string) (%s, error) {", typ.ID, cstGoTypeForSignature(typ), decodeType)
 	switch typ.Kind {
 	case kindBool:
 		r.line("\tif value != 0 && value != 1 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid bool value\", path) }", goType)
@@ -106,9 +110,13 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 			r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Elem.ID)
 		}
 		r.line("\tif err != nil { return nil, err }")
-		r.line("\treturn &decoded, nil")
+		if typ.Elem.usesPointerCodec(map[int]bool{}) {
+			r.line("\treturn decoded, nil")
+		} else {
+			r.line("\treturn &decoded, nil")
+		}
 	case kindBytes:
-		r.renderCstByteListDecoder(typ, "byte", "[]byte")
+		r.renderCstByteListDecoder(typ, "[]byte")
 	case kindInt32List:
 		r.renderCstTypedListDecoder(typ, "C.int32_t", "int32", "[]int32")
 	case kindInt64List:
@@ -120,11 +128,30 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 	case kindArray:
 		r.renderCstSliceDecoder(typ, true)
 	case kindStruct:
-		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null struct\", path) }", goType)
-		r.line("\tvar result %s", goType)
+		if typ.usesPointerCodec(map[int]bool{}) {
+			r.raw("\tif value == nil { return nil, fmt.Errorf(\"%s: null struct\", path) }\n")
+			r.line("\tresult := new(%s)", goType)
+		} else {
+			r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null struct\", path) }", goType)
+			r.line("\tvar result %s", goType)
+		}
 		for _, field := range typ.Struct.allFields() {
+			if field.Type.Kind == kindAtomic {
+				r.line("\tdecoded%s, err := fgbCstDecode%d(value.%s, path+%s)", field.GoName, field.Type.Atomic.Value.ID, field.CName, strconv.Quote("."+field.WireName))
+				if typ.usesPointerCodec(map[int]bool{}) {
+					r.line("\tif err != nil { return nil, err }")
+				} else {
+					r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+				}
+				r.line("\tresult.%s.Store(decoded%s)", field.GoName, field.GoName)
+				continue
+			}
 			r.line("\tdecoded%s, err := fgbCstDecode%d(value.%s, path+%s)", field.GoName, field.Type.ID, field.CName, strconv.Quote("."+field.WireName))
-			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+			if typ.usesPointerCodec(map[int]bool{}) {
+				r.line("\tif err != nil { return nil, err }")
+			} else {
+				r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+			}
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
 		}
 		r.line("\treturn result, nil")
@@ -138,13 +165,14 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\treturn result, nil")
 	case kindDartOpaque:
 		r.line("\tif value == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid DartOpaque handle 0\", path) }", goType)
-		r.line("\treturn fgbrt.NewDartOpaque(int64(value), fgbReleaseDartOpaque), nil")
+		r.line("\tgeneration := fgbCurrentDartOpaqueGeneration()")
+		r.line("\treturn fgbrt.NewDartOpaque(int64(value), func(handle int64) { fgbReleaseDartOpaque(generation, handle) }), nil")
 	case kindCallback:
 		r.line("\treturn fgbMakeCallback%d(int64(value)), nil", typ.ID)
 	case kindStreamSink:
 		if typ.ChannelStream {
 			r.line("\tvar zero %s", goType)
-			r.line("\treturn zero, fmt.Errorf(\"%%s: channel streams are only supported as direct call parameters\", path)")
+			r.raw("\treturn zero, fmt.Errorf(\"%s: channel streams are only supported as direct call parameters\", path)\n")
 			break
 		}
 		r.line("\tif value == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid stream handle 0\", path) }", goType)
@@ -155,18 +183,12 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\treturn %s(decoded), nil", goType)
 	case kindAtomic:
 		r.line("\tdecoded, err := fgbCstDecode%d(value, path)", typ.Atomic.Value.ID)
-		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
-		r.line("\tvar result %s", goType)
+		r.line("\tif err != nil { return nil, err }")
+		r.line("\tresult := new(%s)", goType)
 		r.line("\tresult.Store(decoded)")
 		r.line("\treturn result, nil")
 	}
 	r.line("}")
-}
-
-func (r *goRenderer) renderSignedRangeCheckFromInt64(typ *wireType, goType, expression string) {
-	// Kept as a separate helper for generated expressions used by aliases.
-	_ = expression
-	r.renderSignedRangeCheck(typ, goType)
 }
 
 func (r *goRenderer) renderUnsignedRangeCheckFromUint64(typ *wireType, goType, expression string) {
@@ -182,7 +204,7 @@ func (r *goRenderer) renderUnsignedRangeCheckFromUint64(typ *wireType, goType, e
 	}
 }
 
-func (r *goRenderer) renderCstByteListDecoder(typ *wireType, _element, resultType string) {
+func (r *goRenderer) renderCstByteListDecoder(typ *wireType, resultType string) {
 	goType := r.goType(typ.Original)
 	r.line("\tif value == nil { return nil, nil }")
 	r.line("\traw, err := fgbCstReadBytes(unsafe.Pointer(value.ptr), value.len, path)")
@@ -237,7 +259,7 @@ func (r *goRenderer) renderCstSliceDecoder(typ *wireType, array bool) {
 
 func (r *goRenderer) renderDcoEncoders() {
 	for _, typ := range r.unit.Types {
-		if !typ.supportsCodec(codecModeDCO, map[int]bool{}) {
+		if !typ.supportsCodecCached(codecModeDCO, map[int]bool{}, r.unit.codecSupport) {
 			continue
 		}
 		r.renderDcoEncoder(typ)
@@ -247,7 +269,12 @@ func (r *goRenderer) renderDcoEncoders() {
 
 func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 	goType := r.goType(typ.Original)
-	r.line("func fgbDcoEncode%d(value %s) (*C.FgbDartCObject, error) {", typ.ID, goType)
+	encodeType := goType
+	if typ.usesPointerCodec(map[int]bool{}) {
+		encodeType = "*" + goType
+	}
+	r.line("func fgbDcoEncode%d(value %s, depth int) (*C.FgbDartCObject, error) {", typ.ID, encodeType)
+	r.line("\tif depth > 64 { return nil, fmt.Errorf(\"value nesting exceeds 64 levels (cyclic reference?)\") }")
 	switch typ.Kind {
 	case kindBool:
 		r.line("\treturn fgbDcoBool(value)")
@@ -292,7 +319,11 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\treturn fgbDcoInt64(int64(value / time.Microsecond))")
 	case kindPointer:
 		r.line("\tif value == nil { return fgbDcoNull() }")
-		r.line("\treturn fgbDcoEncode%d(*value)", typ.Elem.ID)
+		if typ.Elem.usesPointerCodec(map[int]bool{}) {
+			r.line("\treturn fgbDcoEncode%d(value, depth+1)", typ.Elem.ID)
+		} else {
+			r.line("\treturn fgbDcoEncode%d(*value, depth+1)", typ.Elem.ID)
+		}
 	case kindBytes:
 		r.line("\treturn fgbDcoBytes(value)")
 	case kindInt32List:
@@ -304,12 +335,14 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 	case kindSlice, kindArray:
 		r.renderDcoArrayEncoder(typ)
 	case kindStruct:
+		if typ.usesPointerCodec(map[int]bool{}) {
+			r.line("\tif value == nil { return fgbDcoNull() }")
+		}
 		r.renderDcoStructEncoder(typ)
 	case kindOpaque:
 		r.line("\tif value == nil { return fgbDcoNull() }")
-		r.line("\thandle := fgbNextHandle.Add(1)")
-		r.line("\tif handle == 0 || uint64(handle) > uint64(^uint64(0)>>1) { return nil, fmt.Errorf(\"opaque handle space exhausted\") }")
-		r.line("\tfgbHandles.Store(handle, value)")
+		r.line("\thandle, err := fgbStoreOpaque(value)")
+		r.line("\tif err != nil || uint64(handle) > uint64(^uint64(0)>>1) { return nil, fmt.Errorf(\"opaque handle space exhausted\") }")
 		r.line("\treturn fgbDcoInt64(int64(handle))")
 	case kindDartOpaque:
 		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
@@ -319,9 +352,10 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 	case kindStreamSink:
 		r.line("\treturn nil, fmt.Errorf(\"stream sinks cannot be sent to Dart\")")
 	case kindNamed:
-		r.line("return fgbDcoEncode%d(%s(value))", typ.Named.Underlying.ID, r.goType(typ.Named.Underlying.Original))
+		r.line("return fgbDcoEncode%d(%s(value), depth+1)", typ.Named.Underlying.ID, r.goType(typ.Named.Underlying.Original))
 	case kindAtomic:
-		r.line("return fgbDcoEncode%d(value.Load())", typ.Atomic.Value.ID)
+		r.line("if value == nil { return fgbDcoNull() }")
+		r.line("return fgbDcoEncode%d(value.Load(), depth+1)", typ.Atomic.Value.ID)
 	default:
 		r.line("return nil, fmt.Errorf(\"DCO does not support %s\")", typ.Kind)
 	}
@@ -333,7 +367,7 @@ func (r *goRenderer) renderDcoArrayEncoder(typ *wireType) {
 	r.line("\tresult := C.fgb_dco_array_new(C.int64_t(len(value)))")
 	r.line("\tif result == nil { return nil, fmt.Errorf(\"DCO array allocation failed\") }")
 	r.line("\tfor index, item := range value {")
-	r.line("\t\tchild, err := fgbDcoEncode%d(item)", typ.Elem.ID)
+	r.line("\t\tchild, err := fgbDcoEncode%d(item, depth+1)", typ.Elem.ID)
 	r.raw("\t\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(\"element %d: %w\", index, err) }")
 	r.line("\t\tC.fgb_dco_array_set(result, C.int64_t(index), child)")
 	r.line("\t}")
@@ -346,6 +380,12 @@ func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
 	r.line("\tresult := C.fgb_dco_array_new(%d)", len(fields))
 	r.line("\tif result == nil { return nil, fmt.Errorf(\"DCO struct allocation failed\") }")
 	for index, field := range fields {
+		encodeID := field.Type.ID
+		encodeExpr := fmt.Sprintf("value.%s", field.GoName)
+		if field.Type.Kind == kindAtomic {
+			encodeID = field.Type.Atomic.Value.ID
+			encodeExpr = fmt.Sprintf("value.%s.Load()", field.GoName)
+		}
 		if field.Nullable {
 			// Keep nil distinct from empty for a field marked fgb:"nullable".
 			r.line("\tvar child%d *C.FgbDartCObject", index)
@@ -354,14 +394,14 @@ func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
 			r.line("\t\tif err != nil { C.fgb_internal_dco_free(result); return nil, err }")
 			r.line("\t\tchild%d = encoded", index)
 			r.line("\t} else {")
-			r.line("\t\tencoded, err := fgbDcoEncode%d(value.%s)", field.Type.ID, field.GoName)
+			r.line("\t\tencoded, err := fgbDcoEncode%d(value.%s, depth+1)", field.Type.ID, field.GoName)
 			r.line("\t\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 			r.line("\t\tchild%d = encoded", index)
 			r.line("\t}")
 			r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)
 			continue
 		}
-		r.line("\tchild%d, err := fgbDcoEncode%d(value.%s)", index, field.Type.ID, field.GoName)
+		r.line("\tchild%d, err := fgbDcoEncode%d(%s, depth+1)", index, encodeID, encodeExpr)
 		r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 		r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)
 	}
@@ -403,7 +443,11 @@ func (r *goRenderer) renderCstDispatch() {
 		case 0:
 			r.line("\t\treturn nil, nil")
 		case 1:
-			r.line("\t\tencoded, err := fgbDcoEncode%d(result0)", call.Results[0].Type.ID)
+			if call.Results[0].Type.usesPointerCodec(map[int]bool{}) {
+				r.line("\t\tencoded, err := fgbDcoEncode%d(&result0, 0)", call.Results[0].Type.ID)
+			} else {
+				r.line("\t\tencoded, err := fgbDcoEncode%d(result0, 0)", call.Results[0].Type.ID)
+			}
 			r.line("\t\tif err != nil { return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: %s} }", encodeError)
 			r.line("\t\treturn encoded, nil")
 		default:
@@ -412,7 +456,11 @@ func (r *goRenderer) renderCstDispatch() {
 			r.line("\t\tencoded := C.fgb_dco_array_new(%d)", len(call.Results))
 			r.line("\t\tif encoded == nil { return nil, &fgbCallError{Code: \"encode_error\", Message: \"DCO array allocation failed\", Details: %s} }", encodeError)
 			for index, result := range call.Results {
-				r.line("\t\tchild%d, err := fgbDcoEncode%d(result%d)", index, result.Type.ID, index)
+				if result.Type.usesPointerCodec(map[int]bool{}) {
+					r.line("\t\tchild%d, err := fgbDcoEncode%d(&result%d, 0)", index, result.Type.ID, index)
+				} else {
+					r.line("\t\tchild%d, err := fgbDcoEncode%d(result%d, 0)", index, result.Type.ID, index)
+				}
 				r.line("\t\tif err != nil { C.fgb_internal_dco_free(encoded); return nil, &fgbCallError{Code: \"encode_error\", Message: err.Error(), Details: %s} }", encodeError)
 				r.line("\t\tC.fgb_dco_array_set(encoded, %d, child%d)", index, index)
 			}

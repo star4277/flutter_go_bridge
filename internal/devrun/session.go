@@ -100,6 +100,7 @@ func StartSession(ctx context.Context, options SessionOptions) (*Session, error)
 
 	if err := session.awaitStarted(ctx); err != nil {
 		// Leave nothing behind when startup fails half-way.
+		session.client.Close()
 		_ = killProcessTree(command)
 		<-session.exited
 		return nil, err

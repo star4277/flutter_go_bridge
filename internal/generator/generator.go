@@ -5,6 +5,7 @@ import (
 	"go/format"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -70,16 +71,46 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 		files[path] = content
 	}
 	result := Result{Warnings: warnings, DartDependencies: dartDependencies}
-	for path, content := range files {
+	paths := make([]string, 0, len(files))
+	for path := range files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	temporary := make(map[string]string, len(paths))
+	defer func() {
+		for _, path := range temporary {
+			_ = os.Remove(path)
+		}
+	}()
+	for _, path := range paths {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return result, err
 		}
-		if err := os.WriteFile(path, content, 0o644); err != nil {
+		file, err := os.CreateTemp(filepath.Dir(path), ".fgb-*")
+		if err != nil {
 			return result, err
 		}
+		tempPath := file.Name()
+		if _, err := file.Write(files[path]); err != nil {
+			file.Close()
+			return result, err
+		}
+		if err := file.Chmod(0o644); err != nil {
+			file.Close()
+			return result, err
+		}
+		if err := file.Close(); err != nil {
+			return result, err
+		}
+		temporary[path] = tempPath
+	}
+	for _, path := range paths {
+		if err := os.Rename(temporary[path], path); err != nil {
+			return result, err
+		}
+		delete(temporary, path)
 		result.Files = append(result.Files, path)
 	}
-	sort.Strings(result.Files)
 	return result, nil
 }
 
@@ -89,7 +120,11 @@ func samePath(left, right string) bool {
 	if leftErr != nil || rightErr != nil {
 		return filepath.Clean(left) == filepath.Clean(right)
 	}
-	return strings.EqualFold(filepath.Clean(leftAbs), filepath.Clean(rightAbs))
+	leftClean, rightClean := filepath.Clean(leftAbs), filepath.Clean(rightAbs)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return strings.EqualFold(leftClean, rightClean)
+	}
+	return leftClean == rightClean
 }
 
 func numberedSource(source []byte) string {

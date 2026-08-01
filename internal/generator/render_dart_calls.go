@@ -56,11 +56,11 @@ func (r *splitDartRenderer) renderCentralStandardCall(call *callModel, arguments
 	encoded := make([]string, 0, len(arguments))
 	argIndex := 0
 	if call.Receiver != nil {
-		encoded = append(encoded, fmt.Sprintf("fgbEncode%d(receiver, this, %s)", call.Receiver.ID, strconv.Quote("receiver")))
+		encoded = append(encoded, fmt.Sprintf("fgbEncode%d(receiver, this, %s, 0)", call.Receiver.ID, strconv.Quote("receiver")))
 		argIndex++
 	}
 	for _, param := range call.Params {
-		encoded = append(encoded, fmt.Sprintf("fgbEncode%d(%s, this, %s)", param.Type.ID, param.DartName, strconv.Quote(param.DartName)))
+		encoded = append(encoded, fmt.Sprintf("fgbEncode%d(%s, this, %s, 0)", param.Type.ID, param.DartName, strconv.Quote(param.DartName)))
 		argIndex++
 	}
 	_ = argIndex

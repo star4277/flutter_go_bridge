@@ -73,6 +73,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		GoPreamble:       resolved.GoPreamble,
 		DartPreamble:     resolved.DartPreamble,
 		GoPackageAliases: map[string]string{},
+		codecSupport:     map[codecCacheKey]bool{},
 	}
 	// Mirror the Dart tree from the Go module root so a package directory such
 	// as api/ shows up as api/ on the Dart side too.
@@ -94,6 +95,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			b.dartTypeNames[declaration.DartName] = declaration.Named
 		}
 	}
+	usedTopCallNames := map[string]int{}
 	if module := api.Package.Module; module != nil {
 		b.supportImportPath = supportPackageImportPath(module.Path, module.Dir, SupportPackageDir(resolved))
 	}
@@ -110,16 +112,24 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		}
 		b.unit.Calls = append(b.unit.Calls, call)
 		call.ID = len(b.unit.Calls) - 1
-		call.Codec = preferredCodecForCall(call)
+		call.Codec = preferredCodecForCall(call, b.unit.codecSupport)
 		if call.Receiver == nil {
+			original := call.DartName
+			call.DartName = uniqueName(original, usedTopCallNames)
+			if call.DartName != original {
+				b.warnings = append(b.warnings, fmt.Errorf("top-level Dart name %q collides after sanitization; renamed %s to %q", original, call.GoName, call.DartName))
+			}
 			b.unit.TopCalls = append(b.unit.TopCalls, call)
 		} else {
 			switch call.Receiver.Kind {
 			case kindOpaque:
+				b.disambiguateMethod(call, call.Receiver.Opaque.Methods)
 				call.Receiver.Opaque.Methods = append(call.Receiver.Opaque.Methods, call)
 			case kindStruct:
+				b.disambiguateMethod(call, call.Receiver.Struct.Methods)
 				call.Receiver.Struct.Methods = append(call.Receiver.Struct.Methods, call)
 			case kindNamed:
+				b.disambiguateMethod(call, call.Receiver.Named.Methods)
 				call.Receiver.Named.Methods = append(call.Receiver.Named.Methods, call)
 			default:
 				return nil, b.warnings, fmt.Errorf("method receiver %s maps to unsupported Dart receiver %s", callable.Receiver.Obj().Name(), call.Receiver.Kind)
@@ -132,6 +142,28 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		return nil, b.warnings, err
 	}
 	return b.unit, b.warnings, nil
+}
+
+func (b *builder) disambiguateMethod(call *callModel, existing []*callModel) {
+	base := call.DartName
+	candidate := base
+	for suffix := 2; ; suffix++ {
+		collision := false
+		for _, other := range existing {
+			if other.DartName == candidate {
+				collision = true
+				break
+			}
+		}
+		if !collision {
+			break
+		}
+		candidate = fmt.Sprintf("%s%d", base, suffix)
+	}
+	if candidate != base {
+		b.warnings = append(b.warnings, fmt.Errorf("method Dart name %q collides after sanitization; renamed %s to %q", base, call.GoName, candidate))
+		call.DartName = candidate
+	}
 }
 
 // checkMethodOverrides reconciles Go method shadowing with Dart's override
@@ -247,6 +279,17 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parameter %d (%s): %w", i, variable.Name(), err)
 		}
+		if mapped.containsAtomic(map[int]bool{}) {
+			switch mapped.Kind {
+			case kindSlice, kindArray, kindMap:
+				return nil, fmt.Errorf("parameter %d (%s) contains atomic values inside a collection; this would copy sync/atomic state", i, variable.Name())
+			}
+		}
+		if mapped.usesPointerCodec(map[int]bool{}) {
+			if _, pointer := types.Unalias(variable.Type()).(*types.Pointer); !pointer {
+				return nil, fmt.Errorf("parameter %d (%s) contains an atomic value and must be passed by pointer to avoid copying sync/atomic state", i, variable.Name())
+			}
+		}
 		goName := variable.Name()
 		if goName == "" || goName == "_" {
 			goName = fmt.Sprintf("arg%d", i)
@@ -289,6 +332,12 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		mapped, err := b.mapType(variable.Type())
 		if err != nil {
 			return nil, fmt.Errorf("result %d: %w", i, err)
+		}
+		if mapped.containsAtomic(map[int]bool{}) {
+			switch mapped.Kind {
+			case kindSlice, kindArray, kindMap:
+				return nil, fmt.Errorf("result %d contains atomic values inside a collection; this would copy sync/atomic state", i)
+			}
 		}
 		if containsStreamSink(mapped, map[int]bool{}) {
 			return nil, errors.New("a stream sink cannot be returned to Dart; take it as a parameter instead")
@@ -959,6 +1008,14 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 		mapped, err := b.mapType(field.Type())
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", field.Name(), err)
+		}
+		if mapped.containsAtomic(map[int]bool{}) {
+			switch mapped.Kind {
+			case kindSlice, kindArray, kindMap:
+				return nil, fmt.Errorf("field %s contains atomic values inside a collection; this would copy sync/atomic state", field.Name())
+			case kindStruct:
+				return nil, fmt.Errorf("field %s contains a value struct with atomic state; make the field a pointer to avoid copying it", field.Name())
+			}
 		}
 		dartName := options.Rename
 		if dartName == "" {

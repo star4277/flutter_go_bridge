@@ -371,7 +371,7 @@ func runGenerateWatch(command *cobra.Command, flags *generateFlags) error {
 	if _, err := os.Stat(resolved.GoInput); err != nil {
 		return fmt.Errorf("--watch requires go_input to be a local file or directory, got %q", resolved.GoInput)
 	}
-	return watcher.Run(watcher.Options{
+	return watcher.RunContext(command.Context(), watcher.Options{
 		Roots:   []string{resolved.GoInput},
 		Exclude: []string{resolved.GoOutput, resolved.DartOutput},
 	}, func() error {
