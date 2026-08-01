@@ -168,3 +168,44 @@ func TestDecodeLineRejectsNonProtocolLines(t *testing.T) {
 		t.Fatal("a padded protocol line must still decode")
 	}
 }
+
+func TestClientCompleteNotFound(t *testing.T) {
+	client, _ := fakeDaemon(t, func(string) string { return "" })
+	// A response referencing an unregistered id is dropped by complete.
+	client.complete(999, wireMessage{ID: intPtr(999)})
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestClientRequestNilParams(t *testing.T) {
+	client, sent := fakeDaemon(t, func(string) string {
+		return `[{"id":1,"result":true}]`
+	})
+	raw, err := client.Request(context.Background(), "app.stop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result bool
+	if err := json.Unmarshal(raw, &result); err != nil || !result {
+		t.Fatalf("result = %s (%v)", raw, err)
+	}
+	line := <-sent
+	if !strings.Contains(line, `"params":{}`) {
+		t.Fatalf("nil params should marshal to {}: got %s", line)
+	}
+}
+
+func TestClientRequestWriteError(t *testing.T) {
+	reader, _ := io.Pipe()
+	client := NewClient(reader, &failWriter{}, io.Discard)
+	_, err := client.Request(context.Background(), "app.restart", map[string]any{"a": "b"})
+	if err == nil {
+		t.Fatal("expected the write error to surface")
+	}
+}
+
+func TestDecodeLineJSONError(t *testing.T) {
+	if _, ok := decodeLine(`[{not-json}]`); ok {
+		t.Fatal("malformed JSON must be rejected")
+	}
+}
