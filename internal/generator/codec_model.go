@@ -1,19 +1,19 @@
 package generator
 
-func preferredCodecForCall(call *callModel) codecModePack {
+func preferredCodecForCall(call *callModel, cache map[codecCacheKey]bool) codecModePack {
 	if call == nil {
 		return codecModePack{DartToGo: codecModeStandard, GoToDart: codecModeStandard}
 	}
 	cst := true
 	if call.Receiver != nil {
-		cst = call.Receiver.supportsCodec(codecModeCST, map[int]bool{})
+		cst = call.Receiver.supportsCodecCached(codecModeCST, map[int]bool{}, cache)
 	}
 	for _, param := range call.Params {
-		cst = cst && param.Type.supportsCodec(codecModeCST, map[int]bool{})
+		cst = cst && param.Type.supportsCodecCached(codecModeCST, map[int]bool{}, cache)
 	}
 	dco := true
 	for _, result := range call.Results {
-		dco = dco && result.Type.supportsCodec(codecModeDCO, map[int]bool{})
+		dco = dco && result.Type.supportsCodecCached(codecModeDCO, map[int]bool{}, cache)
 	}
 	if cst && dco {
 		return codecModePack{DartToGo: codecModeCST, GoToDart: codecModeDCO}
@@ -21,15 +21,38 @@ func preferredCodecForCall(call *callModel) codecModePack {
 	return codecModePack{DartToGo: codecModeStandard, GoToDart: codecModeStandard}
 }
 
+type codecCacheKey struct {
+	id   int
+	mode codecMode
+}
+
 func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
+	return t.supportsCodecCached(mode, seen, nil)
+}
+
+func (t *wireType) supportsCodecCached(mode codecMode, seen map[int]bool, cache map[codecCacheKey]bool) bool {
+	result, _ := t.codecSupportResult(mode, seen, cache)
+	return result
+}
+
+// codecSupportResult also reports whether the answer relied on the optimistic
+// assumption used to break a recursive type cycle. Such a true result cannot
+// be cached until the outer traversal has checked the rest of the cycle.
+func (t *wireType) codecSupportResult(mode codecMode, seen map[int]bool, cache map[codecCacheKey]bool) (bool, bool) {
 	if t == nil {
-		return true
+		return true, false
 	}
 	if mode == codecModeStandard {
-		return true
+		return true, false
 	}
 	if seen[t.ID] {
-		return true
+		return true, true
+	}
+	key := codecCacheKey{id: t.ID, mode: mode}
+	if cache != nil {
+		if result, ok := cache[key]; ok {
+			return result, false
+		}
 	}
 	seen[t.ID] = true
 	defer delete(seen, t.ID)
@@ -38,29 +61,60 @@ func (t *wireType) supportsCodec(mode codecMode, seen map[int]bool) bool {
 	case kindBool, kindString, kindSigned, kindUnsigned, kindFloat, kindBigInt,
 		kindTime, kindInternetIP, kindIPPrefix, kindURL, kindUUID, kindDuration, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
 		kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
-		return true
+		if cache != nil {
+			cache[key] = true
+		}
+		return true, false
 	case kindPointer:
-		return t.Elem.supportsCodec(mode, seen)
+		result, cyclic := t.Elem.codecSupportResult(mode, seen, cache)
+		if cache != nil && (!cyclic || !result) {
+			cache[key] = result
+		}
+		return result, cyclic
 	case kindSlice, kindArray:
-		return t.Elem.supportsCodec(mode, seen)
+		result, cyclic := t.Elem.codecSupportResult(mode, seen, cache)
+		if cache != nil && (!cyclic || !result) {
+			cache[key] = result
+		}
+		return result, cyclic
 	case kindStruct:
+		cyclic := false
 		for _, field := range t.Struct.allFields() {
-			if !field.Type.supportsCodec(mode, seen) {
-				return false
+			supported, childCyclic := field.Type.codecSupportResult(mode, seen, cache)
+			cyclic = cyclic || childCyclic
+			if !supported {
+				if cache != nil {
+					cache[key] = false
+				}
+				return false, cyclic
 			}
 		}
-		return true
+		if cache != nil && !cyclic {
+			cache[key] = true
+		}
+		return true, cyclic
 	case kindNamed:
-		return t.Named.Underlying.supportsCodec(mode, seen)
+		result, cyclic := t.Named.Underlying.codecSupportResult(mode, seen, cache)
+		if cache != nil && (!cyclic || !result) {
+			cache[key] = result
+		}
+		return result, cyclic
 	case kindAtomic:
-		return t.Atomic.Value.supportsCodec(mode, seen)
+		result, cyclic := t.Atomic.Value.codecSupportResult(mode, seen, cache)
+		if cache != nil && (!cyclic || !result) {
+			cache[key] = result
+		}
+		return result, cyclic
 	case kindMap, kindAny, kindInterface:
 		// Dart_CObject has no map representation, a C struct cannot safely
 		// represent arbitrary dynamic values, and an interface is a tagged
 		// union. These remain on the fallback StandardMethodCodec path.
-		return false
+		if cache != nil {
+			cache[key] = false
+		}
+		return false, false
 	default:
-		return false
+		return false, false
 	}
 }
 

@@ -26,14 +26,19 @@ const (
 
 var fgbEndian binary.ByteOrder = binary.LittleEndian
 var fgbHandles sync.Map
+var fgbHandlesByValue sync.Map
 var fgbNextHandle atomic.Uintptr
-var fgbDartAPIData unsafe.Pointer
-var fgbDartOpaquePort atomic.Int64
-var fgbCallbackPort atomic.Int64
+var fgbDartAPIData atomic.Pointer[byte]
+type fgbPortTarget struct { generation int64; port int64 }
+var fgbDartOpaqueTargetRef atomic.Pointer[fgbPortTarget]
+var fgbCallbackTargetRef atomic.Pointer[fgbPortTarget]
 var fgbCallbackWaiters sync.Map
 var fgbNextCallbackCall atomic.Int64
 var fgbCancelledStreams sync.Map
 var fgbStreamCancels sync.Map
+var fgbAsyncTasks = make(chan func(), 1024)
+
+const fgbCallbackTimeout = 30 * time.Second
 
 // fgbStreamKey identifies a stream within one Dart isolate. The generation is
 // part of the key because Dart restarts its handle counter at 1 in every new
@@ -61,6 +66,39 @@ func init() {
 	if *(*byte)(unsafe.Pointer(&marker)) == 0 {
 		fgbEndian = binary.BigEndian
 	}
+	workers := runtime.GOMAXPROCS(0) * 4
+	for range workers {
+		go func() { for task := range fgbAsyncTasks { task() } }()
+	}
+}
+
+func fgbSchedule(task func()) bool {
+	select {
+	case fgbAsyncTasks <- task:
+		return true
+	default:
+		return false
+	}
+}
+
+func fgbStoreOpaque(value any) (uintptr, error) {
+	if existing, ok := fgbHandlesByValue.Load(value); ok { return existing.(uintptr), nil }
+	handle := fgbNextHandle.Add(1)
+	if handle == 0 { return 0, fmt.Errorf("opaque handle space exhausted") }
+	actual, loaded := fgbHandlesByValue.LoadOrStore(value, handle)
+	if loaded { return actual.(uintptr), nil }
+	fgbHandles.Store(handle, value)
+	return handle, nil
+}
+
+func fgbDeleteOpaque(handle uintptr) {
+	if value, ok := fgbHandles.LoadAndDelete(handle); ok {
+		fgbHandlesByValue.CompareAndDelete(value, handle)
+	}
+}
+
+func fgbClearOpaqueHandles() {
+	fgbHandles.Range(func(key, _ any) bool { fgbDeleteOpaque(key.(uintptr)); return true })
 }
 
 type fgbMethodCall struct {
@@ -292,6 +330,15 @@ func (codec fgbStandardMethodCodec) readBytes(buffer *bytes.Buffer) ([]byte, err
 	return append([]byte(nil), buffer.Next(length)...), nil
 }
 
+func (codec fgbStandardMethodCodec) readCount(buffer *bytes.Buffer, elementSize int) (int, error) {
+	length, err := codec.readSize(buffer)
+	if err != nil { return 0, err }
+	if length < 0 || elementSize > 0 && length > buffer.Len()/elementSize {
+		return 0, io.ErrUnexpectedEOF
+	}
+	return length, nil
+}
+
 func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize int) (any, error) {
 	valueType, err := buffer.ReadByte()
 	if err != nil {
@@ -332,7 +379,7 @@ func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize
 	case fgbMessageUint8List:
 		return codec.readBytes(buffer)
 	case fgbMessageInt32List:
-		length, err := codec.readSize(buffer)
+		length, err := codec.readCount(buffer, 4)
 		if err != nil {
 			return nil, err
 		}
@@ -342,7 +389,7 @@ func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize
 		result := make([]int32, length)
 		return result, binary.Read(buffer, fgbEndian, result)
 	case fgbMessageInt64List:
-		length, err := codec.readSize(buffer)
+		length, err := codec.readCount(buffer, 8)
 		if err != nil {
 			return nil, err
 		}
@@ -352,7 +399,7 @@ func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize
 		result := make([]int64, length)
 		return result, binary.Read(buffer, fgbEndian, result)
 	case fgbMessageFloat32List:
-		length, err := codec.readSize(buffer)
+		length, err := codec.readCount(buffer, 4)
 		if err != nil {
 			return nil, err
 		}
@@ -362,7 +409,7 @@ func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize
 		result := make([]float32, length)
 		return result, binary.Read(buffer, fgbEndian, result)
 	case fgbMessageFloat64List:
-		length, err := codec.readSize(buffer)
+		length, err := codec.readCount(buffer, 8)
 		if err != nil {
 			return nil, err
 		}
@@ -372,7 +419,7 @@ func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize
 		result := make([]float64, length)
 		return result, binary.Read(buffer, fgbEndian, result)
 	case fgbMessageList:
-		length, err := codec.readSize(buffer)
+		length, err := codec.readCount(buffer, 1)
 		if err != nil {
 			return nil, err
 		}
@@ -385,7 +432,7 @@ func (codec fgbStandardMethodCodec) readValue(buffer *bytes.Buffer, originalSize
 		}
 		return result, nil
 	case fgbMessageMap:
-		length, err := codec.readSize(buffer)
+		length, err := codec.readCount(buffer, 2)
 		if err != nil {
 			return nil, err
 		}
@@ -901,7 +948,7 @@ func fgbHandle(request []byte) (response []byte) {
 		if recovered := recover(); recovered != nil {
 			response = fgbEncodeCallError(codec, &fgbCallError{
 				Code: "panic", Message: fmt.Sprintf("panic: %v", recovered),
-				Details: map[any]any{"stack": debug.Stack()},
+			Details: map[any]any{"stack": fgbPanicStack()},
 			})
 		}
 	}()
@@ -918,6 +965,13 @@ func fgbHandle(request []byte) (response []byte) {
 		return fgbEncodeCallError(codec, &fgbCallError{Code: "encode_error", Message: err.Error()})
 	}
 	return response
+}
+
+func fgbPanicStack() []byte {
+	if os.Getenv("FGB_DEBUG_PANIC_STACK") == "1" {
+		return debug.Stack()
+	}
+	return nil
 }
 
 func fgbCopyInput(data unsafe.Pointer, length int64) ([]byte, error) {
@@ -945,20 +999,22 @@ func fgbToCData(data []byte) C.FgbData {
 	return C.FgbData{data: (*C.uint8_t)(C.CBytes(data)), len: C.int64_t(len(data))}
 }
 
-func fgbPost(port int64, data []byte) {
+func fgbPost(port int64, data []byte) bool {
 	var pointer *C.uint8_t
 	if len(data) != 0 {
 		pointer = (*C.uint8_t)(unsafe.Pointer(&data[0]))
 	}
-	C.fgb_internal_post_bytes(fgbDartAPIData, C.int64_t(port), pointer, C.int64_t(len(data)))
+	ok := bool(C.fgb_internal_post_bytes(unsafe.Pointer(fgbDartAPIData.Load()), C.int64_t(port), pointer, C.int64_t(len(data))))
 	runtime.KeepAlive(data)
+	if !ok { fgbClearOpaqueHandles() }
+	return ok
 }
 
 //export fgb_init
 func fgb_init(data unsafe.Pointer) C.int32_t {
 	status := C.int32_t(C.fgb_internal_init_dart_api(data))
 	if status == 0 {
-		fgbDartAPIData = data
+		fgbDartAPIData.Store((*byte)(data))
 	}
 	return status
 }
@@ -997,15 +1053,17 @@ func fgb(data unsafe.Pointer, length C.int64_t) C.FgbData {
 func fgb_async(data unsafe.Pointer, length C.int64_t, port C.int64_t) {
 	request, err := fgbCopyInput(data, int64(length))
 	if err != nil {
-		go fgbPost(int64(port), fgbErrorResponse(err))
+		fgbPost(int64(port), fgbErrorResponse(err))
 		return
 	}
 	// The dispatch must run inside the goroutine: "go f(g(x))" would evaluate
 	// g(x) on this thread, keeping the Dart isolate blocked inside the FFI
 	// call for the whole computation (and deadlocking any Dart callback).
-	go func() {
+	if !fgbSchedule(func() {
 		fgbPost(int64(port), fgbHandle(request))
-	}()
+	}) {
+		fgbPost(int64(port), fgbEncodeCallError(fgbStandardMethodCodec{}, &fgbCallError{Code: "busy", Message: "native async queue is full"}))
+	}
 }
 
 func fgbHandleCst(callID int32, args unsafe.Pointer) (response *C.FgbDartCObject) {
@@ -1025,11 +1083,12 @@ func fgbHandleCst(callID int32, args unsafe.Pointer) (response *C.FgbDartCObject
 
 func fgbPostDco(port int64, object *C.FgbDartCObject) {
 	if object == nil {
+		if !bool(C.fgb_internal_post_alloc_failure(unsafe.Pointer(fgbDartAPIData.Load()), C.int64_t(port))) { fgbClearOpaqueHandles() }
 		return
 	}
 	// Dart_PostCObject copies the graph during this call.  Once it returns the
 	// native graph is ours again regardless of delivery success.
-	C.fgb_internal_post_object(fgbDartAPIData, C.int64_t(port), object)
+	if !bool(C.fgb_internal_post_object(unsafe.Pointer(fgbDartAPIData.Load()), C.int64_t(port), object)) { fgbClearOpaqueHandles() }
 	C.fgb_internal_dco_free(object)
 }
 
@@ -1044,9 +1103,11 @@ func fgb_cst_async(callID C.int32_t, args unsafe.Pointer, port C.int64_t) {
 	// happen inside the goroutine, otherwise the calling Dart isolate stays
 	// blocked until the Go function returns. The CST arena stays alive on the
 	// Dart side until the reply lands on the port, so reading args here is safe.
-	go func() {
+	if !fgbSchedule(func() {
 		fgbPostDco(int64(port), fgbHandleCst(int32(callID), args))
-	}()
+	}) {
+		fgbPostDco(int64(port), fgbDcoEnvelopeError(&fgbCallError{Code: "busy", Message: "native async queue is full"}))
+	}
 }
 
 //export fgb_dco_free
@@ -1064,34 +1125,53 @@ func fgb_drop(handle unsafe.Pointer) {
 //export fgb_internal_drop_go
 func fgb_internal_drop_go(handle unsafe.Pointer) {
 	if handle != nil {
-		fgbHandles.Delete(uintptr(handle))
+		fgbDeleteOpaque(uintptr(handle))
 	}
 }
 
 //export fgb_dart_opaque_port
 func fgb_dart_opaque_port(port C.int64_t) {
-	fgbDartOpaquePort.Store(int64(port))
+	generation := int64(1)
+	if previous := fgbDartOpaqueTargetRef.Load(); previous != nil {
+		generation = previous.generation + 1
+	}
+	fgbDartOpaqueTargetRef.Store(&fgbPortTarget{generation: generation, port: int64(port)})
+	// The previous isolate is gone, so none of its opaque Go handles can ever
+	// receive a Dart finalizer notification.
+	fgbClearOpaqueHandles()
+}
+
+func fgbCurrentDartOpaqueGeneration() int64 {
+	if target := fgbDartOpaqueTargetRef.Load(); target != nil { return target.generation }
+	return 0
 }
 
 // fgbReleaseDartOpaque tells the Dart side that the last Go copy of a
 // DartOpaque was collected, so its registry entry can be dropped. Used by
 // generated decoders via fgb.NewDartOpaque; safe to call from cleanup
 // goroutines.
-func fgbReleaseDartOpaque(handle int64) {
-	port := fgbDartOpaquePort.Load()
-	if port == 0 || handle == 0 {
+func fgbReleaseDartOpaque(generation int64, handle int64) {
+	target := fgbDartOpaqueTargetRef.Load()
+	if target == nil || target.generation != generation || target.port == 0 || handle == 0 {
 		return
 	}
 	object, err := fgbDcoInt64(handle)
 	if err != nil {
 		return
 	}
-	fgbPostDco(port, object)
+	fgbPostDco(target.port, object)
 }
 
 //export fgb_callback_port
 func fgb_callback_port(port C.int64_t) {
-	fgbCallbackPort.Store(int64(port))
+	generation := int64(1)
+	if previous := fgbCallbackTargetRef.Load(); previous != nil { generation = previous.generation + 1 }
+	fgbCallbackTargetRef.Store(&fgbPortTarget{generation: generation, port: int64(port)})
+	fgbCallbackWaiters.Range(func(key, value any) bool {
+		fgbCallbackWaiters.Delete(key)
+		if waiter, ok := value.(chan []byte); ok { close(waiter) }
+		return true
+	})
 }
 
 //export fgb_callback_result
@@ -1109,12 +1189,13 @@ func fgb_callback_result(id C.int64_t, data unsafe.Pointer, length C.int64_t) {
 // synthesized Go func value is reachable; afterwards the shared DartOpaque
 // release path drops the registry entry.
 type fgbCallbackRef struct {
-	handle int64
+	generation int64
+	handle     int64
 }
 
 func fgbNewCallbackRef(handle int64) *fgbCallbackRef {
-	ref := &fgbCallbackRef{handle: handle}
-	runtime.AddCleanup(ref, fgbReleaseDartOpaque, handle)
+	ref := &fgbCallbackRef{generation: fgbCurrentDartOpaqueGeneration(), handle: handle}
+	runtime.AddCleanup(ref, func(value fgbCallbackRef) { fgbReleaseDartOpaque(value.generation, value.handle) }, *ref)
 	return ref
 }
 
@@ -1123,11 +1204,12 @@ func fgbNewCallbackRef(handle int64) *fgbCallbackRef {
 // run inside //fgb:async calls: during a synchronous call the Dart thread is
 // blocked inside the FFI call and could never execute the closure. Arguments
 // are pre-encoded standard-codec values; the decoded reply value is returned.
-func fgbInvokeCallback(handle int64, arguments []any) (any, error) {
-	port := fgbCallbackPort.Load()
-	if port == 0 {
+func fgbInvokeCallback(generation int64, handle int64, arguments []any) (any, error) {
+	target := fgbCallbackTargetRef.Load()
+	if target == nil || target.port == 0 {
 		return nil, fmt.Errorf("callback port is not initialized; was the bridge opened via initialize()?")
 	}
+	if target.generation != generation { return nil, fmt.Errorf("callback belongs to a retired Dart isolate") }
 	id := fgbNextCallbackCall.Add(1)
 	waiter := make(chan []byte, 1)
 	fgbCallbackWaiters.Store(id, waiter)
@@ -1138,9 +1220,17 @@ func fgbInvokeCallback(handle int64, arguments []any) (any, error) {
 		fgbCallbackWaiters.Delete(id)
 		return nil, fmt.Errorf("encode callback request: %w", err)
 	}
-	fgbPost(port, buffer.Bytes())
+	fgbPost(target.port, buffer.Bytes())
 
-	payload := <-waiter
+	timer := time.NewTimer(fgbCallbackTimeout)
+	defer timer.Stop()
+	var payload []byte
+	select {
+	case payload = <-waiter:
+	case <-timer.C:
+		fgbCallbackWaiters.Delete(id)
+		return nil, fmt.Errorf("dart callback %d timed out after %s", id, fgbCallbackTimeout)
+	}
 	if payload == nil {
 		return nil, fmt.Errorf("callback reply was empty")
 	}

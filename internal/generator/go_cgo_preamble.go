@@ -284,21 +284,60 @@ static bool fgb_internal_post_object(void* api_data, int64_t port, FgbDartCObjec
   return post(port, object);
 }
 
+static bool fgb_internal_post_alloc_failure(void* api_data, int64_t port) {
+  FgbDartPostCObject post = fgb_lookup_post_c_object(api_data);
+  if (post == NULL) return false;
+  FgbDartCObject message;
+  memset(&message, 0, sizeof(message));
+  message.type = FgbDartCObjectInt32;
+  message.value.as_int32 = -1;
+  return post(port, &message);
+}
+
 extern void fgb_internal_drop_go(void* handle);
 
 #if defined(__APPLE__)
-static void* fgb_drop_thread(void* handle) {
-  fgb_internal_drop_go(handle);
-  return NULL;
+#define FGB_DROP_QUEUE_CAPACITY 4096
+static void* fgb_drop_queue[FGB_DROP_QUEUE_CAPACITY];
+static size_t fgb_drop_head, fgb_drop_tail;
+static pthread_mutex_t fgb_drop_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t fgb_drop_cond = PTHREAD_COND_INITIALIZER;
+static pthread_once_t fgb_drop_once = PTHREAD_ONCE_INIT;
+
+static void* fgb_drop_worker(void* unused) {
+  (void)unused;
+  for (;;) {
+    pthread_mutex_lock(&fgb_drop_mutex);
+    while (fgb_drop_head == fgb_drop_tail) {
+      pthread_cond_wait(&fgb_drop_cond, &fgb_drop_mutex);
+    }
+    void* handle = fgb_drop_queue[fgb_drop_head];
+    fgb_drop_head = (fgb_drop_head + 1) % FGB_DROP_QUEUE_CAPACITY;
+    pthread_mutex_unlock(&fgb_drop_mutex);
+    fgb_internal_drop_go(handle);
+  }
+}
+
+static void fgb_drop_start(void) {
+  pthread_t thread;
+  if (pthread_create(&thread, NULL, fgb_drop_worker, NULL) == 0) {
+    pthread_detach(thread);
+  }
 }
 
 static void fgb_drop_impl(void* handle) {
-  pthread_t thread;
-  if (pthread_create(&thread, NULL, fgb_drop_thread, handle) == 0) {
-    pthread_detach(thread);
-  } else {
+  pthread_once(&fgb_drop_once, fgb_drop_start);
+  pthread_mutex_lock(&fgb_drop_mutex);
+  size_t next = (fgb_drop_tail + 1) % FGB_DROP_QUEUE_CAPACITY;
+  if (next == fgb_drop_head) {
+    pthread_mutex_unlock(&fgb_drop_mutex);
     fgb_internal_drop_go(handle);
+    return;
   }
+  fgb_drop_queue[fgb_drop_tail] = handle;
+  fgb_drop_tail = next;
+  pthread_cond_signal(&fgb_drop_cond);
+  pthread_mutex_unlock(&fgb_drop_mutex);
 }
 #else
 static void fgb_drop_impl(void* handle) {

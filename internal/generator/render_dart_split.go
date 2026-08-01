@@ -618,7 +618,7 @@ func (r *splitDartRenderer) renderCallbackRegistration(typ *wireType, bridge str
 	invocation := fmt.Sprintf("value(%s)", strings.Join(arguments, ", "))
 	if callback.Result != nil {
 		r.line("    final result = await Future.sync(() => %s);", invocation)
-		r.line("    return fgbEncode%d(result, %s, 'callback result');", callback.Result.ID, bridge)
+		r.line("    return fgbEncode%d(result, %s, 'callback result', 0);", callback.Result.ID, bridge)
 	} else {
 		r.line("    await Future.sync(() => %s);", invocation)
 		r.line("    return null;")
@@ -788,7 +788,8 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 }
 
 func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
-	r.line("Object? fgbEncode%d(%s value, __FGB_BRIDGE_CLASS__ bridge, String path) {", typ.ID, dartEncoderValueType(typ))
+	r.line("Object? fgbEncode%d(%s value, __FGB_BRIDGE_CLASS__ bridge, String path, int depth) {", typ.ID, dartEncoderValueType(typ))
+	r.line("  if (depth > 64) throw FormatException('$path: value nesting exceeds 64 levels (cyclic reference?)');")
 	// Closures encode their own null case (as handle 0); every other nilable
 	// type maps null straight through to a null wire value.
 	if typ.Kind != kindCallback && typ.nilableWithoutPointer() {
@@ -818,21 +819,21 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  return value.inMicroseconds;")
 	case kindPointer:
 		r.line("  if (value == null) return null;")
-		r.line("  return fgbEncode%d(value, bridge, path);", typ.Elem.ID)
+		r.line("  return fgbEncode%d(value, bridge, path, depth + 1);", typ.Elem.ID)
 	case kindBytes, kindInt32List, kindInt64List, kindFloat64List:
 		r.line("  return value;")
 	case kindSlice, kindArray:
-		r.line("  return value.map((item) => fgbEncode%d(item, bridge, path)).toList(growable: false);", typ.Elem.ID)
+		r.line("  return value.map((item) => fgbEncode%d(item, bridge, path, depth + 1)).toList(growable: false);", typ.Elem.ID)
 	case kindMap:
 		r.line("  final result = <Object?, Object?>{};")
 		r.line("  value.forEach((key, item) {")
-		r.line("    result[fgbEncode%d(key, bridge, path)] = fgbEncode%d(item, bridge, path);", typ.Key.ID, typ.Elem.ID)
+		r.line("    result[fgbEncode%d(key, bridge, path, depth + 1)] = fgbEncode%d(item, bridge, path, depth + 1);", typ.Key.ID, typ.Elem.ID)
 		r.line("  });")
 		r.line("  return result;")
 	case kindStruct:
 		r.line("  return <Object?, Object?>{")
 		for _, field := range typ.Struct.allFields() {
-			r.line("    %s: fgbEncode%d(value.%s, bridge, path + %s),", strconv.Quote(field.WireName), field.Type.ID, field.DartName, strconv.Quote("."+field.WireName))
+			r.line("    %s: fgbEncode%d(value.%s, bridge, path + %s, depth + 1),", strconv.Quote(field.WireName), field.Type.ID, field.DartName, strconv.Quote("."+field.WireName))
 		}
 		r.line("  };")
 	case kindOpaque:
@@ -847,15 +848,15 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		// Most-derived first: a subclass also passes its superclass check.
 		r.line("  if (value == null) return null;")
 		for _, implementor := range sortedImplementors(typ.Interface) {
-			r.line("  if (value is %s) return <Object?>[%d, fgbEncode%d(value, bridge, path)];", implementor.DartName, implementor.Index, implementor.Type.ID)
+			r.line("  if (value is %s) return <Object?>[%d, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, implementor.Index, implementor.Type.ID)
 		}
 		r.line("  throw ArgumentError('$path: ${value.runtimeType} is not a Go implementation of %s');", typ.Interface.DartName)
 	case kindCallback:
 		r.renderCallbackRegistration(typ, "bridge")
 	case kindNamed:
-		r.line("  return fgbEncode%d(value.value, bridge, path);", typ.Named.Underlying.ID)
+		r.line("  return fgbEncode%d(value.value, bridge, path, depth + 1);", typ.Named.Underlying.ID)
 	case kindAtomic:
-		r.line("  return fgbEncode%d(value, bridge, path);", typ.Atomic.Value.ID)
+		r.line("  return fgbEncode%d(value, bridge, path, depth + 1);", typ.Atomic.Value.ID)
 	default:
 		return fmt.Errorf("no Dart encoder for %s", typ.Kind)
 	}

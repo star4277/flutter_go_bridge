@@ -1,5 +1,81 @@
 # Errors
 
+## [ERR-20260801-004] audit-smoke-working-directory
+
+**Logged**: 2026-08-01T12:45:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first integration-smoke commands used the fixture root for repository build paths and Dart bin paths.
+
+### Error
+
+```text
+stat ...\build\audit_smoke\cmd\flutter_go_bridge_codegen: directory not found
+Could not find file `bin\smoke.dart`
+```
+
+### Context
+
+- The codegen binary belongs to the repository module, while the smoke script belongs to the nested Dart package.
+
+### Suggested Fix
+
+Build codegen from the repository root, run generation/Go validation from the fixture root, and run Dart commands from the Dart package root.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: build/audit_smoke/ (temporary)
+
+### Resolution
+
+- **Resolved**: 2026-08-01T12:50:00+09:00
+- **Notes**: The corrected flow passed two generations, Go vet, Dart analyze, DLL build, and runtime smoke.
+
+---
+
+## [ERR-20260801-003] go-test-sandbox-cache
+
+**Logged**: 2026-08-01T11:00:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The initial Go test could not write the default build cache while filesystem permissions were restricted.
+
+### Error
+
+```text
+open C:\Users\Administrator\AppData\Local\go-build\...: Access is denied.
+```
+
+### Context
+
+- Operation: `go test ./internal/generator`.
+- The workspace was writable, but Go's default cache directory was outside the allowed roots.
+
+### Suggested Fix
+
+Use an approved unrestricted test run or place `GOCACHE` under a writable temporary directory.
+
+### Metadata
+
+- Reproducible: yes under the restricted permission profile
+- Related Files: internal/generator/
+
+### Resolution
+
+- **Resolved**: 2026-08-01T11:05:00+09:00
+- **Notes**: The user enabled unrestricted filesystem access and the same test passed.
+
+---
+
 ## [ERR-20260731-001] powershell-rg-scan
 
 **Logged**: 2026-07-31T09:20:00+08:00
@@ -37,6 +113,83 @@ Run independent scans separately, exclude generated dependency folders explicitl
 
 - **Resolved**: 2026-07-31T09:20:00+08:00
 - **Notes**: Subsequent scans use focused commands and explicitly handle expected no-match results.
+
+---
+
+## [ERR-20260801-001] ripgrep-windows-glob
+
+**Logged**: 2026-08-01T10:30:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Ripgrep rejected a wildcard embedded in a Windows path argument.
+
+### Error
+
+```text
+rg: internal/generator/*_test.go: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+### Context
+
+- Operation: search generator tests for atomic-related coverage.
+- PowerShell passed the wildcard path literally to ripgrep.
+
+### Suggested Fix
+
+Search the directory and filter files with `-g '*_test.go'`.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/
+- See Also: ERR-20260731-002
+
+### Resolution
+
+- **Resolved**: 2026-08-01T10:31:00+08:00
+- **Notes**: Re-ran the search with a ripgrep glob filter.
+
+---
+
+## [ERR-20260801-002] apply-patch-context
+
+**Logged**: 2026-08-01T10:34:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+A combined patch used the wrong indentation context for the generated nullable-field branch.
+
+### Error
+
+```text
+apply_patch verification failed: Failed to find expected lines in internal/generator/render_go.go
+```
+
+### Context
+
+- Operation: add atomic field-specific codec generation in two distant sections.
+- The patch mixed a nullable branch line with a non-nullable branch line.
+
+### Suggested Fix
+
+Read the exact local sections and apply small independent patches.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: internal/generator/render_go.go
+
+### Resolution
+
+- **Resolved**: 2026-08-01T10:36:00+08:00
+- **Notes**: Split the edit into exact decoder and encoder patches.
 
 ---
 
@@ -292,5 +445,44 @@ Pass the directory as the search root and use `-g '*.md'` for file filtering.
 
 - **Resolved**: 2026-07-31T09:24:00+08:00
 - **Notes**: All later ripgrep scans use `-g` globs instead of wildcard path arguments.
+
+---
+
+## [ERR-20260801-005] parallel-verification-exit-state
+
+**Logged**: 2026-08-01T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+A parallel final-verification script failed as a whole because one PowerShell child check intentionally returned exit code 1.
+
+### Error
+
+```text
+Script error:
+Exit code: 1
+```
+
+### Context
+
+- Operation: verify PR metadata, worktree status, and confirm `CODE_AUDIT.md` was absent from the commit in parallel.
+- The file check used `Select-String` plus `$LASTEXITCODE`; PowerShell cmdlet match state is not reliably represented by `$LASTEXITCODE`.
+
+### Suggested Fix
+
+Capture `Select-String` output in a variable and branch on whether the result is `$null`, without deliberately returning a failing process exit code.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md
+
+### Resolution
+
+- **Resolved**: 2026-08-01T00:00:00+08:00
+- **Notes**: Replaced the combined check with independent read-only commands that do not use `$LASTEXITCODE` for PowerShell cmdlet state.
 
 ---

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"sync"
 
 	"golang.org/x/term"
 )
@@ -50,13 +51,15 @@ Editing Go sources triggers "g" automatically; editing Dart sources triggers
 // CI -- it degrades to line mode, where the first character of each line is
 // taken as the command.
 type keyboard struct {
-	keys    chan Key
-	raw     bool
-	restore func()
+	keys      chan Key
+	raw       bool
+	restore   func()
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func newKeyboard() *keyboard {
-	board := &keyboard{keys: make(chan Key, 16), restore: func() {}}
+	board := &keyboard{keys: make(chan Key, 16), restore: func() {}, closed: make(chan struct{})}
 	fd := int(os.Stdin.Fd())
 	if term.IsTerminal(fd) {
 		if state, err := term.MakeRaw(fd); err == nil {
@@ -75,7 +78,21 @@ func (k *keyboard) Keys() <-chan Key { return k.keys }
 
 // Close restores the terminal. It must run on every exit path, including the
 // signal path, or the shell is left in raw mode with no echo.
-func (k *keyboard) Close() { k.restore() }
+func (k *keyboard) Close() {
+	k.closeOnce.Do(func() {
+		close(k.closed)
+		k.restore()
+	})
+}
+
+func (k *keyboard) send(key Key) bool {
+	select {
+	case k.keys <- key:
+		return true
+	case <-k.closed:
+		return false
+	}
+}
 
 // Raw reports whether the terminal is in raw mode, which also means output
 // needs explicit CRLF line endings.
@@ -95,10 +112,14 @@ func (k *keyboard) readRaw() {
 		// Raw mode suppresses signal generation, so Ctrl+C arrives as a byte
 		// rather than SIGINT. Treat it as quit, otherwise it would do nothing.
 		if buffer[0] == 3 {
-			k.keys <- KeyQuit
+			if !k.send(KeyQuit) {
+				return
+			}
 			continue
 		}
-		k.keys <- Key(buffer[0])
+		if !k.send(Key(buffer[0])) {
+			return
+		}
 	}
 }
 
@@ -110,7 +131,9 @@ func (k *keyboard) readLines() {
 		if line == "" {
 			continue
 		}
-		k.keys <- Key([]rune(line)[0])
+		if !k.send(Key([]rune(line)[0])) {
+			return
+		}
 	}
 }
 

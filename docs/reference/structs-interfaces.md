@@ -87,8 +87,10 @@ print(view.count); // Still 1.
 Return an updated struct for value-style updates. Use `GoOpaque` when object identity and mutable Go
 state must persist across calls.
 
-Pointer cycles such as `type Node struct { Next *Node }` are supported. Nested pointers such as
-`**Node` are not an ordinary translatable field shape and cause opaque fallback.
+Recursive pointer types such as `type Node struct { Next *Node }` can be generated, but runtime
+values must not contain a cycle. Encoders stop after 64 nested levels and report a codec error.
+Nested pointers such as `**Node` are not an ordinary translatable field shape and cause opaque
+fallback.
 
 ## `GoOpaque` structs
 

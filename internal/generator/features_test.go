@@ -2,6 +2,7 @@ package generator
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,34 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/config"
 	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 )
+
+func TestGeneratedGoCompilesForMultipleSinksAndAtomicField(t *testing.T) {
+	var fixtureDir string
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+import (
+	"context"
+	"sync/atomic"
+	"example.com/fixture/internal/fgb"
+)
+
+type Counter struct { Hits atomic.Int64 }
+
+//fgb:async
+func Watch(ctx context.Context, first fgb.StreamSink[string], second fgb.StreamSink[int]) error { return nil }
+
+func Read() *Counter { return &Counter{} }
+`, func(dir string) { fixtureDir = dir })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = goSource
+	command := exec.Command("go", "vet", "./...")
+	command.Dir = fixtureDir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generated Go failed go vet: %v\n%s", err, output)
+	}
+}
 
 // generateFixture writes a one-file Go module, runs the full pipeline, and
 // returns the three generated sources plus warnings. setup callbacks may add
@@ -312,11 +341,39 @@ func MaybeKeep(token *fgb.DartOpaque) *fgb.DartOpaque { return token }
 	}
 	for _, expected := range []string{
 		"\"example.com/fixture/internal/fgb\"",
-		"fgbrt.NewDartOpaque", "fgbReleaseDartOpaque", "fgb_dart_opaque_port",
+		"fgbrt.NewDartOpaque", "fgbReleaseDartOpaque(generation, handle)", "fgb_dart_opaque_port",
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
 		}
+	}
+}
+
+func TestGenerateHandleRegistriesAreGenerationAware(t *testing.T) {
+	_, central, goSource, _, err := generateFixture(t, `package api
+
+import "example.com/fixture/internal/fgb"
+
+//fgb:async
+func Transform(callback func(value int) int, token fgb.DartOpaque) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"type fgbPortTarget struct",
+		"fgbDartOpaqueTargetRef atomic.Pointer[fgbPortTarget]",
+		"fgbCallbackTargetRef atomic.Pointer[fgbPortTarget]",
+		"fgbHandles.Range(func",
+		"fgbCallbackWaiters.Range(func",
+		"fgbCallbackTimeout",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("Go bridge missing generation-aware cleanup %q:\n%s", expected, goSource)
+		}
+	}
+	if !strings.Contains(central, "notifyGo: false") {
+		t.Fatalf("Dart stream completion must not re-send cancellation:\n%s", central)
 	}
 }
 
@@ -399,7 +456,7 @@ func Transform(input string, mapper func(s string) string) string {
 		}
 	}
 	for _, expected := range []string{
-		"func fgbMakeCallback", "fgbInvokeCallback(handle", "runtime.KeepAlive(ref)",
+		"func fgbMakeCallback", "fgbInvokeCallback(generation, handle", "fgbCallbackTimeout", "runtime.KeepAlive(ref)",
 		"//export fgb_callback_port", "//export fgb_callback_result",
 	} {
 		if !strings.Contains(goSource, expected) {
@@ -749,6 +806,52 @@ func Watch(ctx context.Context, out chan<- string) error { return nil }
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q:\n%s", expected, goSource)
+		}
+	}
+}
+
+func TestGenerateMultipleStreamSinksWithContextUsesEveryHandle(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+import (
+	"context"
+	"example.com/fixture/internal/fgb"
+)
+
+//fgb:async
+func Watch(ctx context.Context, first fgb.StreamSink[string], second fgb.StreamSink[int]) error { return nil }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, handle := range []string{"handle0", "handle1"} {
+		if !strings.Contains(goSource, handle+" :=") {
+			t.Fatalf("generated bridge must declare %s:\n%s", handle, goSource)
+		}
+		if !strings.Contains(goSource, "fgbRegisterStreamCancel(fgbStreamGen, "+handle) {
+			t.Fatalf("generated bridge must register %s for cancellation:\n%s", handle, goSource)
+		}
+		if !strings.Contains(goSource, "fgbUnregisterStreamCancel(fgbStreamGen, "+handle) {
+			t.Fatalf("generated bridge must unregister %s:\n%s", handle, goSource)
+		}
+	}
+}
+
+func TestGenerateAtomicFieldsAvoidCopyingAtomicValues(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+import "sync/atomic"
+
+type Counter struct { Hits atomic.Int64 }
+
+func Read() Counter { return Counter{} }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"result.Hits.Store(decodedHits)", "value.Hits.Load()"} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated atomic field codec missing %q:\n%s", expected, goSource)
 		}
 	}
 }

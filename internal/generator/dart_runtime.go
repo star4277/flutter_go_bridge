@@ -81,13 +81,13 @@ final class _FgbStreamTarget {
 }
 
 final class _FgbWriter {
-  final List<int> _bytes = <int>[];
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
 
-  int get length => _bytes.length;
+	int get length => _bytes.length;
 
-  void byte(int value) => _bytes.add(value & 0xff);
+	void byte(int value) => _bytes.add(<int>[value & 0xff]);
 
-  void bytes(Iterable<int> value) => _bytes.addAll(value);
+	void bytes(Iterable<int> value) => _bytes.add(value is List<int> ? value : value.toList(growable: false));
 
   void alignment(int size) {
     final padding = (size - length % size) % size;
@@ -125,7 +125,7 @@ final class _FgbWriter {
     bytes(data.buffer.asUint8List());
   }
 
-  Uint8List finish() => Uint8List.fromList(_bytes);
+	Uint8List finish() => _bytes.takeBytes();
 }
 
 final class _FgbReader {
@@ -166,6 +166,14 @@ final class _FgbReader {
     return data.getUint32(0, Endian.host);
   }
 
+  int count(int elementSize) {
+    final length = size();
+    if (length < 0 || (elementSize > 0 && length > remaining ~/ elementSize)) {
+      throw const FormatException('message is truncated');
+    }
+    return length;
+  }
+
   int int32() => ByteData.sublistView(bytes(4)).getInt32(0, Endian.host);
 
   int int64() => ByteData.sublistView(bytes(8)).getInt64(0, Endian.host);
@@ -198,32 +206,32 @@ final class _FgbReader {
       case 8:
         return bytes(size());
       case 9:
-        final result = Int32List(size());
+        final result = Int32List(count(4));
         alignment(4);
         for (var index = 0; index < result.length; index++) result[index] = int32();
         return result;
       case 10:
-        final result = Int64List(size());
+        final result = Int64List(count(8));
         alignment(8);
         for (var index = 0; index < result.length; index++) result[index] = int64();
         return result;
       case 11:
-        final result = Float64List(size());
+        final result = Float64List(count(8));
         alignment(8);
         for (var index = 0; index < result.length; index++) result[index] = float64();
         return result;
       case 12:
         final result = <Object?>[];
-        for (var index = 0, length = size(); index < length; index++) result.add(value());
+        for (var index = 0, length = count(1); index < length; index++) result.add(value());
         return result;
       case 13:
         final result = <Object?, Object?>{};
-        for (var index = 0, length = size(); index < length; index++) {
+        for (var index = 0, length = count(2); index < length; index++) {
           result[value()] = value();
         }
         return result;
       case 14:
-        final result = Float32List(size());
+        final result = Float32List(count(4));
         alignment(4);
         for (var index = 0; index < result.length; index++) {
           final data = ByteData.sublistView(bytes(4));
@@ -607,11 +615,11 @@ final class __FGB_BRIDGE_CLASS__ {
 
   /// Internal: retires a stream registration and notifies Go, which then
   /// reports fgb.ErrStreamClosed to whoever keeps adding values.
-  void fgbInternalReleaseStreamSink(int handle) {
+  void fgbInternalReleaseStreamSink(int handle, {bool notifyGo = true}) {
     final target = _streamTargets.remove(handle);
     if (target == null) return;
     _streamHandles.remove(target.sink);
-    _bindings.streamCancel(handle);
+    if (notifyGo) _bindings.streamCancel(handle);
   }
 
   /// Internal: wires a call that owns its stream. Cancelling the subscription
@@ -659,7 +667,7 @@ final class __FGB_BRIDGE_CLASS__ {
         target.add(decoded[2]);
         break;
       case 1:
-        fgbInternalReleaseStreamSink(handle);
+        fgbInternalReleaseStreamSink(handle, notifyGo: false);
         target.sink.close();
         break;
       case 2:
@@ -709,7 +717,13 @@ final class __FGB_BRIDGE_CLASS__ {
     final id = decoded[0];
     final handle = decoded[1];
     final arguments = decoded[2];
-    if (id is! int || handle is! int || arguments is! List) return;
+    if (id is! int) return;
+    if (handle is! int || arguments is! List) {
+      _deliverCallbackReply(id)(
+        _encodeCallbackReply(<Object?>[1, 'callback_error', 'malformed callback request']),
+      );
+      return;
+    }
     Future<Uint8List>(() async {
       final entry = _dartOpaqueObjects[handle];
       if (entry is! _FgbCallbackInvoker) {
@@ -731,7 +745,10 @@ final class __FGB_BRIDGE_CLASS__ {
   void Function(Uint8List) _deliverCallbackReply(int id) {
     return (Uint8List reply) {
       final pointer = _bindings.alloc(reply.length);
-      if (pointer == ffi.nullptr) return;
+      if (pointer == ffi.nullptr) {
+        _bindings.callbackResult(id, ffi.nullptr, 0);
+        return;
+      }
       try {
         pointer.cast<ffi.Uint8>().asTypedList(reply.length).setAll(0, reply);
         _bindings.callbackResult(id, pointer, reply.length);
@@ -767,7 +784,8 @@ final class __FGB_BRIDGE_CLASS__ {
     final port = ReceivePort();
     try {
       _bindings.cstAsync(method, args, port.sendPort.nativePort);
-      return _decodeDcoEnvelope(await port.first);
+      final message = await port.first.timeout(const Duration(seconds: 30));
+      return _decodeDcoEnvelope(message);
     } finally {
       port.close();
     }
@@ -818,6 +836,7 @@ final class __FGB_BRIDGE_CLASS__ {
   }
 
   Object? _decodeDcoEnvelope(Object? raw) {
+    if (raw == -1) throw StateError('the native side could not allocate the reply');
     if (raw is! List || raw.length < 2 || raw.first is! int) {
       throw const FormatException('invalid DCO envelope');
     }
@@ -876,7 +895,7 @@ final class __FGB_BRIDGE_CLASS__ {
       } finally {
         _bindings.free(pointer);
       }
-      final message = await port.first;
+      final message = await port.first.timeout(const Duration(seconds: 30));
       if (message is Uint8List) return message;
       if (message is List<int>) return Uint8List.fromList(message);
       throw StateError('fgb_async returned an invalid message');

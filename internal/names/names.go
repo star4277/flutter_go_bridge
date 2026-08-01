@@ -71,7 +71,11 @@ func Sanitize(value string, upper bool) string {
 
 	runes := []rune(value)
 	if unicode.IsDigit(runes[0]) {
-		value = "_" + value
+		if upper {
+			value = "Generated" + value
+		} else {
+			value = "n" + value
+		}
 	} else if upper {
 		runes[0] = unicode.ToUpper(runes[0])
 		value = string(runes)

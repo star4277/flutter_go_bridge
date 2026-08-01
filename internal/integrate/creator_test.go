@@ -172,14 +172,19 @@ func TestCreateRefusesExistingTarget(t *testing.T) {
 	}
 }
 
-func TestRemoveFilesInDirRejectsNestedDirectories(t *testing.T) {
+func TestRemoveFilesInDirPreservesNestedDirectories(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "top.txt"), "x")
 	writeFile(t, filepath.Join(dir, "nested", "child.txt"), "x")
 
-	err := removeFilesInDir(dir)
-	if err == nil || !strings.Contains(err.Error(), "expected to contain only files") {
-		t.Fatalf("expected nested-directory error, got %v", err)
+	if err := removeFilesInDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "top.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("top-level file should be removed, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "nested", "child.txt")); err != nil {
+		t.Fatalf("nested content should be preserved: %v", err)
 	}
 }
 

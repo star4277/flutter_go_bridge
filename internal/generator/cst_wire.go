@@ -2,7 +2,6 @@ package generator
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -35,22 +34,6 @@ func cstArgsName(call *callModel) string {
 
 func cstDartArgsName(call *callModel) string {
 	return fmt.Sprintf("_FgbCstArgs%d", call.ID)
-}
-
-func cstIsScalar(typ *wireType) bool {
-	if typ == nil {
-		return false
-	}
-	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindFloat, kindDuration, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
-		return true
-	case kindNamed:
-		return cstIsScalar(typ.Named.Underlying)
-	case kindAtomic:
-		return cstIsScalar(typ.Atomic.Value)
-	default:
-		return false
-	}
 }
 
 func cstScalarBase(typ *wireType) *wireType {
@@ -129,10 +112,6 @@ func cstElementStorage(typ *wireType) cstStorage {
 
 func cstCTypeForSignature(typ *wireType) string {
 	return cstStorageFor(typ).CType
-}
-
-func cstDartTypeForSignature(typ *wireType) string {
-	return cstStorageFor(typ).DartType
 }
 
 // cstGoTypeForSignature is the cgo spelling of a CST field type.  Keeping
@@ -368,25 +347,3 @@ func cstDartDefinitions(unit *unit) string {
 	}
 	return b.String()
 }
-
-func cstDartStorageType(typ *wireType) string {
-	return cstStorageFor(typ).DartType
-}
-
-func cstDartPointerElementType(typ *wireType) string {
-	storage := cstStorageFor(typ)
-	if strings.HasPrefix(storage.DartType, "ffi.Pointer<") && strings.HasSuffix(storage.DartType, ">") {
-		return storage.DartType
-	}
-	return storage.DartType
-}
-
-func cstDartScalarAssignment(target, value string, typ *wireType) string {
-	base := cstScalarBase(typ)
-	if base != nil && base.Kind == kindBool {
-		return fmt.Sprintf("%s = %s ? 1 : 0;", target, value)
-	}
-	return fmt.Sprintf("%s = %s;", target, value)
-}
-
-func cstDartStringLiteral(value string) string { return strconv.Quote(value) }

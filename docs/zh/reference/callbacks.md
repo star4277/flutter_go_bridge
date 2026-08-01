@@ -242,10 +242,10 @@ dispose，但如果业务把 callback 存在全局变量中，它会一直保留
 - 每次 callback 调用都会阻塞发起它的 Go goroutine，直到 Dart 返回；
 - Dart 闭包在 isolate 事件循环中执行；
 - async 闭包等待 Future 时，其他 Dart 任务仍可运行；
-- runtime 没有为单次 callback 提供超时或取消；
-- 如果 Dart 永远不完成返回的 Future，对应 Go goroutine 会一直等待。
+- runtime 为单次 callback 提供 30 秒超时；
+- 如果 Dart 没有完成返回的 Future，等待会在超时后以 error 结束；无 error 返回位时会按前述规则 panic。
 
-需要超时时，应在 Dart 闭包内部对 Future 使用 timeout，或在 Go 业务协议中设计超时/取消机制。
+业务需要更短超时时，仍可在 Dart 闭包内部对 Future 使用 timeout，或在 Go 业务协议中设计取消机制。
 
 ## 初始化要求
 
@@ -255,9 +255,8 @@ initialize 入口打开，Go 调用 callback 时会得到“callback port is not
 
 ## Hot restart 与 isolate 生命周期
 
-Dart 闭包属于创建它的 isolate。hot restart 会销毁旧 isolate 及其闭包 registry。不要依赖 Go 中
-长期保存的旧 callback 跨 hot restart 继续有效；应用恢复后应重新调用注册 API，把新 isolate 的闭包
-交给 Go。
+Dart 闭包属于创建它的 isolate。hot restart 会销毁旧 isolate 及其闭包 registry；runtime 会让旧
+callback 立即失效并唤醒其 waiter。应用恢复后应重新调用注册 API，把新 isolate 的闭包交给 Go。
 
 对于需要长期订阅且经常 hot restart 的开发流程，建议提供显式 `Register/Clear` 或
 `Subscribe/Unsubscribe` API，并在应用初始化时重新注册。
@@ -320,6 +319,10 @@ func Variadic(callback func(values ...int))
 - 长期保存 callback 时提供显式清理 API；
 - 不要把旧 isolate 的 callback 当成 hot restart 后仍有效。
 
+没有末尾 `error` 时，生成 callback 只能用 panic 报告 Dart/transport 失败。如果业务把 callback
+保存后在无关 goroutine 中调用，该 panic 已不在 bridge dispatcher 的 recover 范围内，可能终止进程；
+因此可失败的长期 callback 必须带末尾 `error`。
+
 ## 常见问题
 
 | 问题 | 原因与处理 |
@@ -329,6 +332,6 @@ func Variadic(callback func(values ...int))
 | Dart async 闭包是否支持 | 支持，Go goroutine 会等待 Future 完成 |
 | Dart throw 后 Go 为什么 panic | callback 签名没有末尾 error；添加 error 结果即可在 Go 中处理 |
 | Go 收到 nil callback | Dart 省略/传 null，且参数被标记 nullable；调用前先判 nil |
-| Go goroutine 一直卡住 | Dart Future 未完成、isolate 已退出或回调未回复；callback 本身没有内置超时 |
+| Go goroutine 长时间等待 | Dart Future 未完成或回调未回复；runtime 会在 30 秒后超时，业务可设置更短超时 |
 | callback 一直不释放 | Go 仍持有函数值，清空全局/结构体中的引用并允许 GC |
 | hot restart 后旧 callback 异常 | 旧闭包属于已销毁 isolate，重新注册 |

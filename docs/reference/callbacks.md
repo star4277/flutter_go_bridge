@@ -58,11 +58,11 @@ When the last Go reference becomes unreachable, cleanup releases the Dart regist
 long-lived global references explicitly when no longer needed.
 
 Multiple goroutines may invoke the same callback; each request has its own ID and waiter. Every call
-blocks its initiating goroutine until Dart completes. There is no built-in callback timeout or
-cancellation, so apply timeouts in the Dart closure or design a cancellation protocol.
+blocks its initiating goroutine until Dart completes, for at most 30 seconds. A timeout returns an
+error when the callback signature has a trailing `error`; otherwise the synthesized callback panics.
 
-Callbacks belong to the Dart isolate that created them. Re-register callbacks after hot restart
-instead of invoking handles retained from the destroyed isolate.
+Callbacks belong to the Dart isolate that created them. Hot restart retires old callbacks and wakes
+their waiters with an error. Re-register callbacks instead of invoking retained handles.
 
 ## Restrictions
 
@@ -78,3 +78,7 @@ A callback supports at most one non-error result, with an optional final error. 
 result types must otherwise be bridgeable. Prefer Stream for high-frequency one-way events; use a
 callback when Go needs a Dart-computed reply.
 
+Prefer a trailing `error` whenever transport or Dart execution can fail. Without it, the generated
+callback reports failure by panicking; if user code invokes a retained callback from an unrelated
+goroutine, that panic is outside the bridge dispatcher's recovery boundary and can terminate the
+process.
