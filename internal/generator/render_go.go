@@ -34,11 +34,14 @@ func renderGo(unit *unit) ([]byte, error) {
 	r.line("import (")
 	imports := []string{
 		"bytes", "encoding/binary", "fmt", "io", "math/big", "reflect",
-		"os", "runtime", "runtime/debug", "sync", "sync/atomic", "time", "unsafe",
+		"os", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe",
 	}
 	// The stream runtime always carries the cancellation plumbing, so context
 	// is part of the fixed import set.
 	imports = append(imports, "context")
+	if unit.UsesTime {
+		imports = append(imports, "time")
+	}
 	if unit.UsesInternetIP || unit.UsesIPPrefix {
 		imports = append(imports, "net/netip")
 	}

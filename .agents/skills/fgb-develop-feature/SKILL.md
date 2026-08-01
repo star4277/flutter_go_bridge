@@ -181,7 +181,35 @@ dart test
 fvm flutter test
 ```
 
-Do not weaken, skip, or delete existing assertions to get green results. Do not proceed to integration tests until all unit tests pass.
+After the unit tests pass, measure aggregate Go statement coverage across every Go package except
+`cmd` and `template` and all of their subpackages. Store the profile under ignored build output, not
+next to source files.
+
+On PowerShell:
+
+```powershell
+$packages = go list ./... | Where-Object {
+  $_ -notmatch '/cmd(?:/|$)' -and $_ -notmatch '/template(?:/|$)'
+}
+$profile = Join-Path (Resolve-Path build) 'coverage.out'
+& go test '-count=1' '-coverprofile' $profile @packages
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& go tool cover '-func' $profile
+```
+
+On POSIX shells:
+
+```sh
+packages=$(go list ./... | rg -v '/(cmd|template)(/|$)')
+go test -count=1 -coverprofile=build/coverage.out $packages
+go tool cover -func=build/coverage.out
+```
+
+The final `total:` statement coverage must be at least 95.0%. Coverage below 95.0%, a missing
+profile, or a failed package test is a blocking failure: add meaningful tests and rerun the gate.
+Never weaken, skip, or delete existing assertions merely to get green results or inflate coverage.
+Do not proceed to integration tests, smoke tests, review, or commit until all unit tests pass and this
+coverage threshold is met.
 
 ## 6. Integration Test Gate
 
@@ -240,9 +268,11 @@ After every applicable validation phase passes:
 1. Run `git diff --check`.
 2. Review `git diff` and `git status --short`.
 3. Confirm the current branch is the new task branch, never `main`.
-4. Ensure build artifacts, DLLs, caches, and temporary smoke fixtures are ignored.
-5. Stage only intended files.
-6. Commit with a focused conventional message, for example:
+4. For code changes, confirm the coverage gate excluded `cmd/**` and `template/**` and reported at
+   least 95.0% total statement coverage.
+5. Ensure build artifacts, DLLs, caches, and temporary smoke fixtures are ignored.
+6. Stage only intended files.
+7. Commit with a focused conventional message, for example:
 
 ```text
 git commit -m "feat: support <behavior>"
@@ -256,9 +286,10 @@ git push -u origin <branch-name>
 ```
 
 Report the branch and commit when created. For code changes, report analysis commands, unit tests,
-integration tests, smoke results, documentation updates, and residual platform coverage gaps. For a
-docs-only or skill-only change, explicitly report that code tests were not required by this workflow
-and list only the relevant documentation or Skill checks performed.
+the exact aggregate coverage percentage and exclusions, integration tests, smoke results,
+documentation updates, and residual platform coverage gaps. For a docs-only or skill-only change,
+explicitly report that code tests were not required by this workflow and list only the relevant
+documentation or Skill checks performed.
 
 ## Failure Rules
 

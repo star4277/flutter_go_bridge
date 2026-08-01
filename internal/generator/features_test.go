@@ -366,10 +366,17 @@ func Transform(callback func(value int) int, token fgb.DartOpaque) error { retur
 		"fgbCallbackTargetRef atomic.Pointer[fgbPortTarget]",
 		"fgbHandles.Range(func",
 		"fgbCallbackWaiters.Range(func",
-		"fgbCallbackTimeout",
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing generation-aware cleanup %q:\n%s", expected, goSource)
+		}
+	}
+	for _, removed := range []string{
+		"fgbCallbackTimeout",
+		"Duration(seconds: 30)",
+	} {
+		if strings.Contains(goSource, removed) || strings.Contains(central, removed) {
+			t.Fatalf("generated bridge must not contain the removed async timeout %q", removed)
 		}
 	}
 	if !strings.Contains(central, "notifyGo: false") {
@@ -456,12 +463,15 @@ func Transform(input string, mapper func(s string) string) string {
 		}
 	}
 	for _, expected := range []string{
-		"func fgbMakeCallback", "fgbInvokeCallback(generation, handle", "fgbCallbackTimeout", "runtime.KeepAlive(ref)",
+		"func fgbMakeCallback", "fgbInvokeCallback(generation, handle", "payload := <-waiter", "runtime.KeepAlive(ref)",
 		"//export fgb_callback_port", "//export fgb_callback_result",
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
 		}
+	}
+	if strings.Contains(goSource, "fgbCallbackTimeout") || strings.Contains(goSource, "time.NewTimer") {
+		t.Fatalf("generated callback must wait for Dart without a runtime timeout:\n%s", goSource)
 	}
 }
 

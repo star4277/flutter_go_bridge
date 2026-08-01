@@ -38,8 +38,6 @@ var fgbCancelledStreams sync.Map
 var fgbStreamCancels sync.Map
 var fgbAsyncTasks = make(chan func(), 1024)
 
-const fgbCallbackTimeout = 30 * time.Second
-
 // fgbStreamKey identifies a stream within one Dart isolate. The generation is
 // part of the key because Dart restarts its handle counter at 1 in every new
 // isolate: without it, a straggler from a hot-restarted isolate would collide
@@ -1222,15 +1220,7 @@ func fgbInvokeCallback(generation int64, handle int64, arguments []any) (any, er
 	}
 	fgbPost(target.port, buffer.Bytes())
 
-	timer := time.NewTimer(fgbCallbackTimeout)
-	defer timer.Stop()
-	var payload []byte
-	select {
-	case payload = <-waiter:
-	case <-timer.C:
-		fgbCallbackWaiters.Delete(id)
-		return nil, fmt.Errorf("dart callback %d timed out after %s", id, fgbCallbackTimeout)
-	}
+	payload := <-waiter
 	if payload == nil {
 		return nil, fmt.Errorf("callback reply was empty")
 	}
