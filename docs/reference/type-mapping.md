@@ -143,9 +143,18 @@ implementor discovery, and restrictions.
 | Compatible wrapper in an `atomic` package | `T` | Requires `Load() T` and `Store(T)` for a supported basic `T` |
 
 Atomic values cross as snapshots. Dart and Go do not share the same atomic variable. Generated
-codecs use pointers internally to avoid copying `sync/atomic`'s `noCopy` state. Function parameters
-that contain atomic values must therefore be pointers; atomic values inside slices, maps, or arrays
-are rejected because element assignment would copy them.
+codecs use pointers internally to avoid copying `sync/atomic`'s `noCopy` state. A direct atomic value
+or a struct containing one cannot be passed or returned by value; use a pointer.
+
+Atomic state nested in another value-struct field makes the outer struct fall back to `GoOpaque` and
+emits a warning, so no lock state is copied. Slices and maps whose elements contain atomic state also
+use synthetic `GoOpaque` token classes (for example `[]atomic.Int64` becomes
+`AtomicInt64Slice extends GoOpaque`). These tokens have no fields or methods: Dart may only retain and
+pass them back to Go. Arrays containing atomic state remain unsupported because even returning the
+array would copy its elements. Use a slice or an explicitly opaque named wrapper instead.
+
+Every GoOpaque transfer receives an independent handle. If encoding or message delivery fails, only
+the handles created for that transfer are rolled back; live handles from other calls are unaffected.
 
 ## Error
 

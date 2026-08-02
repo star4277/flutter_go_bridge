@@ -60,6 +60,8 @@ flutter_go_bridge_codegen create <name> [-t app|plugin]
 
 先执行 `flutter create`，再应用与 `integrate` 相同的模板流程。支持 `--org`、
 `--platforms`、`--go-mod-dir` 和 `--library-name`。
+若某个 Flutter 版本没有生成可选脚手架目录，清理步骤会幂等跳过。普通平台目录中的嵌套内容会保留；
+iOS/macOS 的 `Classes/` 脚手架目录则整体替换。
 
 ## `integrate`
 

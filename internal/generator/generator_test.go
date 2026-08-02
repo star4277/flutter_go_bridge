@@ -208,7 +208,7 @@ type Profile struct {
 
 func LocalProfile() Profile { return Profile{} }
 
-func LoadProfile() models.Profile { return models.Profile{} }
+func LoadProfile() *models.Profile { return &models.Profile{} }
 `
 	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(apiSource), 0o644); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func LoadProfile() models.Profile { return models.Profile{} }
 
 	apiDart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
 	for _, expected := range []string{
-		"Profile localProfile()", "ModelsProfile loadProfile()", `import "../_generated.dart";`,
+		"Profile localProfile()", "ModelsProfile? loadProfile()", `import "../_generated.dart";`,
 	} {
 		if !strings.Contains(apiDart, expected) {
 			t.Fatalf("generated Dart API missing %q:\n%s", expected, apiDart)

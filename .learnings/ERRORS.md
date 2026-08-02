@@ -1,5 +1,236 @@
 # Errors
 
+## [ERR-20260802-005] generated-stream-rollback-assertion
+
+**Logged**: 2026-08-02T23:14:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first regression assertion expected the renderer's pre-format single-line control flow instead of the generated `gofmt` output.
+
+### Error
+
+```text
+Go bridge missing "if err != nil { transfer.rollback(); continue }"
+```
+
+### Context
+
+- The renderer emits a compact line, but generated Go is formatted before the fixture returns it to the test.
+- `gofmt` expands the statement into a multiline `if` body.
+
+### Suggested Fix
+
+Assert the distinctive formatted sequence containing `transfer.rollback()` followed by `continue`.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/features_test.go, internal/generator/render_go.go
+
+### Resolution
+
+- **Resolved**: 2026-08-02T23:14:00+09:00
+- **Notes**: Updated the assertion to match the formatted generated source.
+
+---
+
+## [ERR-20260802-004] audit-round2-example-path
+
+**Logged**: 2026-08-02T23:06:00+09:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The prescribed repository-example validation path does not exist in this checkout.
+
+### Error
+
+```text
+rg: example: IO error for operation on example: The system cannot find the file specified. (os error 2)
+```
+
+### Context
+
+- The integration gate calls for a maintained example such as `example/mihomoui`.
+- This repository has no `example/` directory and no additional `flutter_go_bridge.yaml` beyond the shared template; the dedicated generated smoke module is therefore the available end-to-end coverage.
+
+### Suggested Fix
+
+Keep the generated smoke fixture as the validation target, or add a maintained repository example when product-level example coverage is required.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: build/audit_round2_smoke/
+
+### Resolution
+
+- **Resolved**: 2026-08-02T23:06:00+09:00
+- **Notes**: Located all candidate configurations and confirmed the repository does not include the expected example tree.
+
+---
+
+## [ERR-20260802-003] audit-round2-coverage-gate
+
+**Logged**: 2026-08-02T12:20:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first aggregate coverage run after the N15 implementation fell below the required threshold.
+
+### Error
+
+```text
+total: (statements) 94.4%
+required: at least 95.0%
+```
+
+### Context
+
+- Packages under `cmd/**` and `template/**` were correctly excluded.
+- New recursive atomic classification and synthetic opaque naming branches expanded production code beyond the main-path regression fixtures.
+- A later simplification run stopped at compile time because the accompanying recursion test retained an unused local `builder`; it was removed before rerunning the gate.
+- A follow-up PowerShell coverage scan used `"*$p:*"`; PowerShell parsed `$p:` as a scoped variable and rejected the command. The scan was rerun with regex matching.
+- A proposed `os.ReadDir(file)` error test was not portable: Windows classifies `ERROR_DIRECTORY` as `fs.ErrNotExist`, which the idempotent cleanup intentionally ignores. The test was removed instead of making platform error mapping part of the contract.
+
+### Suggested Fix
+
+Add meaningful generated-module tests for synthetic-name collisions, external atomic wrappers, pointer-element collections, nested collection shapes, and rejection boundaries; remove the now-unused `containsAtomic` helper.
+
+### Metadata
+
+- Reproducible: yes
+- Recurrence-Count: 4
+- Related Files: internal/generator/builder.go, internal/generator/model.go, internal/generator/features_test.go
+
+### Resolution
+
+- **Resolved**: 2026-08-02T23:11:00+09:00
+- **Notes**: Added meaningful generated-module coverage for atomic collection shapes and collision handling; the prescribed aggregate coverage gate now reports 95.0% after excluding `cmd/**` and `template/**`.
+
+---
+
+## [ERR-20260802-002] audit-round2-first-build
+
+**Logged**: 2026-08-02T10:37:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+The first narrow test run after the round-two runtime patch found one missing import and stale creator expectations.
+
+### Error
+
+```text
+internal/generator/render_go.go:773:18: undefined: bridgemodel
+removeFilesInDir on a missing dir should error
+```
+
+### Context
+
+- The renderer used `bridgemodel.CallModeAsync` without importing the internal model package.
+- Creator tests encoded the old behavior that missing optional Flutter scaffold directories are errors, which N10 intentionally changes.
+
+### Suggested Fix
+
+Import the model package, make callback CST generation avoid synthetic `err` declarations, and preserve creator error coverage with real non-`ErrNotExist` filesystem failures.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/render_go.go, internal/generator/render_go_cst.go, internal/integrate/coverage_extra_test.go
+
+### Resolution
+
+- **Resolved**: 2026-08-02T10:40:00+08:00
+- **Notes**: Applied the missing import and updated tests to the new idempotent cleanup contract.
+
+---
+
+## [ERR-20260802-001] generator-source-scan-missing-file
+
+**Logged**: 2026-08-02T10:15:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+A generator source scan failed because it included a guessed file that does not exist.
+
+### Error
+
+```text
+rg: internal/generator/render_go_dispatch.go: The system cannot find the file specified. (os error 2)
+```
+
+### Context
+
+- Operation: locate callback context and async dispatch generation code while implementing the round-two audit fixes.
+- The dispatch renderer is implemented in `internal/generator/render_go.go`, not a separate `render_go_dispatch.go` file.
+- A second directory scan repeated the same mistake with `render_go_dco.go`; DCO rendering lives in `render_go_cst.go`.
+
+### Suggested Fix
+
+Use `rg --files internal/generator` before naming an uncertain source file, or search the directory with a file glob.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/render_go.go
+- Recurrence-Count: 2
+
+### Resolution
+
+- **Resolved**: 2026-08-02T10:15:00+08:00
+- **Notes**: Continued with directory-scoped searches and the existing renderer file.
+
+---
+
+## [ERR-20260801-007] git-global-ignore-sandbox-warning
+
+**Logged**: 2026-08-01T00:00:00+09:00
+**Priority**: low
+**Status**: pending
+**Area**: infra
+
+### Summary
+
+Git repository inspection succeeded but repeatedly warned that the restricted sandbox could not read the user-level ignore file.
+
+### Error
+
+```text
+warning: unable to access 'C:\Users\Administrator/.config/git/ignore': Permission denied
+```
+
+### Context
+
+- Operation: inspect branch, status, and recent commits before code review.
+- Repository-local Git data remained readable and the commands exited successfully.
+
+### Suggested Fix
+
+For sandboxed repository inspection, override `core.excludesFile` with a readable path or accept the warning when global ignore behavior is irrelevant.
+
+### Metadata
+
+- Reproducible: yes under the restricted permission profile
+- Related Files: .git/
+
+---
+
 ## [ERR-20260801-004] audit-smoke-working-directory
 
 **Logged**: 2026-08-01T12:45:00+09:00
@@ -192,6 +423,8 @@ Search the directory and filter files with `-g '*_test.go'`.
 - Reproducible: yes
 - Related Files: internal/generator/
 - See Also: ERR-20260731-002
+- Recurrence-Count: 3
+- Last-Seen: 2026-08-02
 
 ### Resolution
 

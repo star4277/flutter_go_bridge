@@ -28,20 +28,22 @@ const (
 )
 
 type builder struct {
-	api             *model.API
-	config          config.Resolved
-	unit            *unit
-	typeCache       map[types.Type]*wireType
-	structClasses   map[*types.Named]structClass
-	namedModels     map[*types.Named]*namedModel
-	structModels    map[*types.Named]*structModel
-	opaqueModels    map[*types.Named]*opaqueModel
-	interfaceModels map[*types.Named]*interfaceModel
+	api              *model.API
+	config           config.Resolved
+	unit             *unit
+	typeCache        map[types.Type]*wireType
+	structClasses    map[*types.Named]structClass
+	namedModels      map[*types.Named]*namedModel
+	structModels     map[*types.Named]*structModel
+	opaqueModels     map[*types.Named]*opaqueModel
+	syntheticOpaques map[string]*opaqueModel
+	interfaceModels  map[*types.Named]*interfaceModel
 	// Dart has one library namespace across the mutually importing generated
 	// source files. Reserve input-package names up front, then disambiguate
 	// reachable external declarations without renaming the user's own types.
-	dartTypeNames map[string]*types.Named
-	dartNames     map[*types.Named]string
+	dartTypeNames      map[string]*types.Named
+	dartNames          map[*types.Named]string
+	syntheticDartNames map[string]bool
 	// supportImportPath is the import path of the generated support package
 	// for this project; empty disables DartOpaque/StreamSink detection.
 	supportImportPath string
@@ -85,10 +87,12 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		typeCache:     map[types.Type]*wireType{},
 		structClasses: map[*types.Named]structClass{},
 		namedModels:   map[*types.Named]*namedModel{}, structModels: map[*types.Named]*structModel{},
-		opaqueModels:    map[*types.Named]*opaqueModel{},
-		interfaceModels: map[*types.Named]*interfaceModel{},
-		dartTypeNames:   map[string]*types.Named{},
-		dartNames:       map[*types.Named]string{},
+		opaqueModels:       map[*types.Named]*opaqueModel{},
+		syntheticOpaques:   map[string]*opaqueModel{},
+		interfaceModels:    map[*types.Named]*interfaceModel{},
+		dartTypeNames:      map[string]*types.Named{},
+		dartNames:          map[*types.Named]string{},
+		syntheticDartNames: map[string]bool{},
 	}
 	for _, declaration := range api.Types {
 		if declaration != nil && declaration.Named != nil {
@@ -279,12 +283,6 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parameter %d (%s): %w", i, variable.Name(), err)
 		}
-		if mapped.containsAtomic(map[int]bool{}) {
-			switch mapped.Kind {
-			case kindSlice, kindArray, kindMap:
-				return nil, fmt.Errorf("parameter %d (%s) contains atomic values inside a collection; this would copy sync/atomic state", i, variable.Name())
-			}
-		}
 		if mapped.usesPointerCodec(map[int]bool{}) {
 			if _, pointer := types.Unalias(variable.Type()).(*types.Pointer); !pointer {
 				return nil, fmt.Errorf("parameter %d (%s) contains an atomic value and must be passed by pointer to avoid copying sync/atomic state", i, variable.Name())
@@ -333,10 +331,9 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 		if err != nil {
 			return nil, fmt.Errorf("result %d: %w", i, err)
 		}
-		if mapped.containsAtomic(map[int]bool{}) {
-			switch mapped.Kind {
-			case kindSlice, kindArray, kindMap:
-				return nil, fmt.Errorf("result %d contains atomic values inside a collection; this would copy sync/atomic state", i)
+		if mapped.usesPointerCodec(map[int]bool{}) {
+			if _, pointer := types.Unalias(variable.Type()).(*types.Pointer); !pointer {
+				return nil, fmt.Errorf("result %d contains atomic state and must be returned by pointer to avoid copying sync/atomic state", i)
 			}
 		}
 		if containsStreamSink(mapped, map[int]bool{}) {
@@ -395,6 +392,12 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			return nil, errors.New("nested pointers are not supported")
 		}
 		if named, ok := elemRaw.(*types.Named); ok {
+			switch b.atomicCollectionShape(named) {
+			case atomicCollectionOpaque:
+				return b.mapSyntheticOpaque(original, named)
+			case atomicCollectionReject:
+				return nil, fmt.Errorf("type %s contains atomic array values and cannot cross the bridge without copying sync/atomic state", named.Obj().Name())
+			}
 			if isBigInt(named) {
 				b.unit.UsesBigInt = true
 				return b.newSimpleType(original, kindBigInt, "BigInt?"), nil
@@ -416,6 +419,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		result.Elem = elem
 		return result, nil
 	case *types.Slice:
+		if b.atomicCollectionShape(typ) == atomicCollectionOpaque {
+			return b.mapSyntheticOpaque(original, typ)
+		}
 		elemBasic, _ := types.Unalias(typ.Elem()).(*types.Basic)
 		if elemBasic != nil {
 			switch elemBasic.Kind() {
@@ -437,6 +443,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		result.Elem = elem
 		return result, nil
 	case *types.Array:
+		if b.atomicCollectionShape(typ) == atomicCollectionReject {
+			return nil, errors.New("arrays containing atomic values cannot cross the bridge without copying sync/atomic state; use a slice or an opaque named wrapper")
+		}
 		elem, err := b.mapType(typ.Elem())
 		if err != nil {
 			return nil, err
@@ -446,6 +455,9 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		result.Length = typ.Len()
 		return result, nil
 	case *types.Map:
+		if b.atomicCollectionShape(typ) == atomicCollectionOpaque {
+			return b.mapSyntheticOpaque(original, typ)
+		}
 		key, err := b.mapType(typ.Key())
 		if err != nil {
 			return nil, fmt.Errorf("map key: %w", err)
@@ -506,6 +518,12 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 		}
 		if valueType, ok := atomicValueType(typ); ok {
 			return b.mapAtomic(original, typ, valueType)
+		}
+		switch b.atomicCollectionShape(typ) {
+		case atomicCollectionOpaque:
+			return b.mapSyntheticOpaque(original, typ)
+		case atomicCollectionReject:
+			return nil, fmt.Errorf("type %s contains atomic array values and cannot cross the bridge without copying sync/atomic state", typ.Obj().Name())
 		}
 		if err := b.ensureNamedSupported(typ); err != nil {
 			return nil, err
@@ -731,6 +749,11 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 		}
 		return "has a non-empty interface type"
 	case *types.Named:
+		if _, directAtomic := atomicValueType(typ); !directAtomic {
+			if _, isStruct := typ.Underlying().(*types.Struct); isStruct && atomicValueByCopy(typ, map[types.Type]bool{}) {
+				return fmt.Sprintf("holds value struct %s with atomic state (use *%s to keep a Dart value class)", typ.Obj().Name(), typ.Obj().Name())
+			}
+		}
 		if b.hasDedicatedMapping(typ) {
 			return ""
 		}
@@ -1009,14 +1032,6 @@ func (b *builder) mapStruct(original types.Type, named *types.Named) (*wireType,
 		if err != nil {
 			return nil, fmt.Errorf("field %s: %w", field.Name(), err)
 		}
-		if mapped.containsAtomic(map[int]bool{}) {
-			switch mapped.Kind {
-			case kindSlice, kindArray, kindMap:
-				return nil, fmt.Errorf("field %s contains atomic values inside a collection; this would copy sync/atomic state", field.Name())
-			case kindStruct:
-				return nil, fmt.Errorf("field %s contains a value struct with atomic state; make the field a pointer to avoid copying it", field.Name())
-			}
-		}
 		dartName := options.Rename
 		if dartName == "" {
 			dartName = names.LowerCamel(wireName)
@@ -1219,6 +1234,132 @@ func (b *builder) mapOpaque(original types.Type, named *types.Named) (*wireType,
 	b.opaqueModels[named] = opaque
 	b.unit.Opaques = append(b.unit.Opaques, opaque)
 	return result, nil
+}
+
+type atomicCollectionClass uint8
+
+const (
+	atomicCollectionNone atomicCollectionClass = iota
+	atomicCollectionOpaque
+	atomicCollectionReject
+)
+
+func (b *builder) atomicCollectionShape(typ types.Type) atomicCollectionClass {
+	return atomicCollectionShape(types.Unalias(typ), map[types.Type]bool{})
+}
+
+func atomicCollectionShape(typ types.Type, seen map[types.Type]bool) atomicCollectionClass {
+	typ = types.Unalias(typ)
+	if seen[typ] {
+		return atomicCollectionNone
+	}
+	seen[typ] = true
+	defer delete(seen, typ)
+	switch typed := typ.(type) {
+	case *types.Named:
+		if _, atomic := atomicValueType(typed); atomic {
+			return atomicCollectionNone
+		}
+		return atomicCollectionShape(typed.Underlying(), seen)
+	case *types.Slice:
+		if atomicValueByCopy(typed.Elem(), seen) {
+			return atomicCollectionOpaque
+		}
+	case *types.Map:
+		if atomicValueByCopy(typed.Key(), seen) || atomicValueByCopy(typed.Elem(), seen) {
+			return atomicCollectionOpaque
+		}
+	case *types.Array:
+		if atomicValueByCopy(typed.Elem(), seen) {
+			return atomicCollectionReject
+		}
+	}
+	return atomicCollectionNone
+}
+
+func atomicValueByCopy(typ types.Type, seen map[types.Type]bool) bool {
+	typ = types.Unalias(typ)
+	if seen[typ] {
+		return false
+	}
+	seen[typ] = true
+	defer delete(seen, typ)
+	switch typed := typ.(type) {
+	case *types.Pointer:
+		return false
+	case *types.Named:
+		if _, atomic := atomicValueType(typed); atomic {
+			return true
+		}
+		return atomicValueByCopy(typed.Underlying(), seen)
+	case *types.Slice:
+		return atomicValueByCopy(typed.Elem(), seen)
+	case *types.Array:
+		return atomicValueByCopy(typed.Elem(), seen)
+	case *types.Map:
+		return atomicValueByCopy(typed.Key(), seen) || atomicValueByCopy(typed.Elem(), seen)
+	case *types.Struct:
+		for i := 0; i < typed.NumFields(); i++ {
+			if atomicValueByCopy(typed.Field(i).Type(), seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (b *builder) mapSyntheticOpaque(original types.Type, identity types.Type) (*wireType, error) {
+	key := types.TypeString(types.Unalias(identity), func(pkg *types.Package) string {
+		return pkg.Path()
+	})
+	opaque := b.syntheticOpaques[key]
+	if opaque == nil {
+		base := b.syntheticOpaqueName(types.Unalias(identity))
+		dartName := base
+		owner, namedIdentity := types.Unalias(identity).(*types.Named)
+		nameAvailable := func(candidate string) bool {
+			declared := b.dartTypeNames[candidate]
+			return !b.syntheticDartNames[candidate] && (declared == nil || namedIdentity && declared == owner)
+		}
+		for suffix := 2; !nameAvailable(dartName); suffix++ {
+			dartName = fmt.Sprintf("%s%d", base, suffix)
+		}
+		b.syntheticDartNames[dartName] = true
+		opaque = &opaqueModel{GoName: key, DartName: dartName, Synthetic: true}
+		b.syntheticOpaques[key] = opaque
+		b.unit.Opaques = append(b.unit.Opaques, opaque)
+		b.warnings = append(b.warnings, fmt.Errorf(
+			"type %s bridges as synthetic GoOpaque %s because copying its atomic collection elements is invalid; Dart can only pass this token back to Go",
+			key, dartName))
+	}
+	result := b.newType(original, kindOpaque, opaque.DartName+"?")
+	result.Opaque = opaque
+	if opaque.Type == nil {
+		opaque.Type = result
+	}
+	return result, nil
+}
+
+func (b *builder) syntheticOpaqueName(typ types.Type) string {
+	typ = types.Unalias(typ)
+	switch typed := typ.(type) {
+	case *types.Pointer:
+		return b.syntheticOpaqueName(typed.Elem())
+	case *types.Named:
+		name := names.UpperCamel(typed.Obj().Name())
+		if typed.Obj().Pkg() != nil && typed.Obj().Pkg() != b.api.Package.Types {
+			name = names.UpperCamel(typed.Obj().Pkg().Name()) + name
+		}
+		return name
+	case *types.Slice:
+		return b.syntheticOpaqueName(typed.Elem()) + "Slice"
+	case *types.Map:
+		return b.syntheticOpaqueName(typed.Key()) + b.syntheticOpaqueName(typed.Elem()) + "Map"
+	case *types.Basic:
+		return names.UpperCamel(typed.Name())
+	default:
+		return "AtomicOpaque"
+	}
 }
 
 func (b *builder) newSimpleType(original types.Type, kind typeKind, dart string) *wireType {

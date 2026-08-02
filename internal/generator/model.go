@@ -241,31 +241,6 @@ func (t *wireType) usesPointerCodec(seen map[int]bool) bool {
 	return false
 }
 
-func (t *wireType) containsAtomic(seen map[int]bool) bool {
-	if t == nil || seen[t.ID] {
-		return false
-	}
-	seen[t.ID] = true
-	defer delete(seen, t.ID)
-	switch t.Kind {
-	case kindAtomic:
-		return true
-	case kindPointer, kindSlice, kindArray:
-		return t.Elem.containsAtomic(seen)
-	case kindMap:
-		return t.Key.containsAtomic(seen) || t.Elem.containsAtomic(seen)
-	case kindStruct:
-		for _, field := range t.Struct.allFields() {
-			if field.Type.containsAtomic(seen) {
-				return true
-			}
-		}
-	case kindNamed:
-		return t.Named.Underlying.containsAtomic(seen)
-	}
-	return false
-}
-
 // nilableWithoutPointer reports whether the Go type can be nil on its own,
 // without being wrapped in a pointer: closures, slices, maps and the typed
 // list shapes. These are exactly the types `//fgb:nullable` may mark - every
@@ -397,6 +372,9 @@ type opaqueModel struct {
 	Docs       string
 	SourceFile string
 	Type       *wireType
+	// Synthetic marks a collection represented by a handle because copying its
+	// atomic elements would make generated Go invalid.
+	Synthetic bool
 	// Interfaces are the bridged interfaces this handle satisfies.
 	Interfaces []*interfaceModel
 	Methods    []*callModel

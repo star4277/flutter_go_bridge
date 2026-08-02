@@ -56,6 +56,8 @@ flutter_go_bridge_codegen create <name> [-t app|plugin]
 
 Runs `flutter create`, removes colliding scaffold files, then applies the same template flow as
 `integrate`. Use `--org`, `--platforms`, `--go-mod-dir`, and `--library-name` to customize it.
+Cleanup is idempotent when a Flutter version omits an optional scaffold directory. Nested content
+outside the platform `Classes/` scaffolds is preserved; iOS/macOS `Classes/` is replaced as a unit.
 
 ## `integrate`
 

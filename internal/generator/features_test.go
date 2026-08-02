@@ -208,8 +208,8 @@ func (c *Counter) Add(delta int) int {
 	if !strings.Contains(central, "Counter.fgbInternal(fgbBridge: bridge, fgbHandle: value)") {
 		t.Fatalf("decoder should construct opaque values with named arguments:\n%s", central)
 	}
-	if !strings.Contains(goSource, "fgbHandles.Store(handle, value)") {
-		t.Fatal("opaque encoding should store the Go value in the handle registry")
+	if !strings.Contains(goSource, "fgbHandles[handle] = value") || strings.Contains(goSource, "fgbHandlesByValue") {
+		t.Fatal("opaque encoding should allocate an independent handle without value-based deduplication")
 	}
 }
 
@@ -341,7 +341,7 @@ func MaybeKeep(token *fgb.DartOpaque) *fgb.DartOpaque { return token }
 	}
 	for _, expected := range []string{
 		"\"example.com/fixture/internal/fgb\"",
-		"fgbrt.NewDartOpaque", "fgbReleaseDartOpaque(generation, handle)", "fgb_dart_opaque_port",
+		"fgbrt.NewDartOpaque", "fgbReleaseDartOpaque(generation, handle)", "fgb_isolate_attach",
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
@@ -364,7 +364,15 @@ func Transform(callback func(value int) int, token fgb.DartOpaque) error { retur
 		"type fgbPortTarget struct",
 		"fgbDartOpaqueTargetRef atomic.Pointer[fgbPortTarget]",
 		"fgbCallbackTargetRef atomic.Pointer[fgbPortTarget]",
-		"fgbHandles.Range(func",
+		"fgbStreamTargetRef atomic.Pointer[fgbPortTarget]",
+		"generation := fgbGenerationCounter.Add(1)",
+		"func fgb_isolate_attach(",
+		"fgbHandles = map[uintptr]any{}",
+		"func fgbStoreOpaque(value any, transfer *fgbOpaqueTransfer)",
+		"transfer.track(handle)",
+		"if fgbPost(int64(port), response) {",
+		"transfer.commit()",
+		"transfer.rollback()",
 		"fgbCallbackWaiters.Range(func",
 	} {
 		if !strings.Contains(goSource, expected) {
@@ -374,6 +382,8 @@ func Transform(callback func(value int) int, token fgb.DartOpaque) error { retur
 	for _, removed := range []string{
 		"fgbCallbackTimeout",
 		"Duration(seconds: 30)",
+		"fgbHandlesByValue",
+		"if !ok { fgbClearOpaqueHandles() }",
 	} {
 		if strings.Contains(goSource, removed) || strings.Contains(central, removed) {
 			t.Fatalf("generated bridge must not contain the removed async timeout %q", removed)
@@ -381,6 +391,26 @@ func Transform(callback func(value int) int, token fgb.DartOpaque) error { retur
 	}
 	if !strings.Contains(central, "notifyGo: false") {
 		t.Fatalf("Dart stream completion must not re-send cancellation:\n%s", central)
+	}
+}
+
+func TestGeneratedDropWorkerFallsBackWhenThreadCreationFails(t *testing.T) {
+	_, _, goSource, _, err := generateFixture(t, `package api
+
+func Ping() {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"static int fgb_drop_worker_ready = 0;",
+		"fgb_drop_worker_ready = 1;",
+		"if (!fgb_drop_worker_ready)",
+		"fgb_internal_drop_go(handle);",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Apple drop worker missing %q", expected)
+		}
 	}
 }
 
@@ -463,8 +493,10 @@ func Transform(input string, mapper func(s string) string) string {
 		}
 	}
 	for _, expected := range []string{
-		"func fgbMakeCallback", "fgbInvokeCallback(generation, handle", "payload := <-waiter", "runtime.KeepAlive(ref)",
-		"//export fgb_callback_port", "//export fgb_callback_result",
+		"func fgbMakeCallback", "fgbInvokeCallback(ctx, generation, handle", "case <-ctx.Done()", "runtime.KeepAlive(ref)",
+		"func fgbRetireCallbackWaiters", "actual, taken := fgbCallbackWaiters.LoadAndDelete(key)",
+		"case waiter <- nil:", "default:", "//export fgb_callback_result",
+		"var fgbAsyncInFlight atomic.Int64", "const fgbMaxAsyncInFlight = 4096",
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
@@ -634,7 +666,7 @@ func Ticks(count int, sink fgb.StreamSink[int]) error { return nil }
 	if !strings.Contains(central, "fgbInternalRegisterStreamSink") {
 		t.Fatal("central bridge should register the sink")
 	}
-	for _, expected := range []string{"fgbMakeStreamSink", "fgbrt.NewStreamSink", "//export fgb_stream_port", "//export fgb_stream_cancel"} {
+	for _, expected := range []string{"fgbMakeStreamSink", "fgbrt.NewStreamSink", "func fgbRetireStreams", "//export fgb_stream_cancel"} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("Go bridge missing %q", expected)
 		}
@@ -737,8 +769,8 @@ func Watch(ctx context.Context, sink fgb.StreamSink[string]) error { return nil 
 		// Generation and port live in one value. Read separately, a producer
 		// could clear the generation check and then pick up the next isolate's
 		// port, which is the delivery the guard exists to stop.
-		"type fgbStreamTarget struct",
-		"var fgbStreamTargetRef atomic.Pointer[fgbStreamTarget]",
+		"var fgbStreamTargetRef atomic.Pointer[fgbPortTarget]",
+		"func fgb_isolate_attach(",
 		"target := fgbStreamTargetRef.Load()",
 		"target.generation != generation",
 		"fgbPost(target.port, buffer.Bytes())",
@@ -746,6 +778,8 @@ func Watch(ctx context.Context, sink fgb.StreamSink[string]) error { return nil 
 		// straggler's deferred cleanup cannot delete a live stream's entry.
 		"type fgbStreamKey struct",
 		"func fgbRegisterStreamCancel(generation int64, handle int64, cancel context.CancelFunc)",
+		"if _, cancelled := fgbCancelledStreams.Load(key); cancelled {",
+		"fgbStreamCancels.LoadAndDelete(key)",
 		"func fgbUnregisterStreamCancel(generation int64, handle int64)",
 		// Each call captures the generation once and reuses it for cleanup.
 		"fgbStreamGen := fgbCurrentStreamGeneration()",
@@ -754,7 +788,8 @@ func Watch(ctx context.Context, sink fgb.StreamSink[string]) error { return nil 
 		// Both producer shapes capture the generation when they are created.
 		"generation := fgbCurrentStreamGeneration()",
 		"fgbPostStreamEvent(generation, handle, kind, payload)",
-		"fgbPostStreamEvent(generation, handle, 0, encoded)",
+		"transfer.rollback()\n\t\t\t\tcontinue",
+		"fgbPostStreamEvent(generation, handle, 0, fgbStreamPayload{value: encoded, transfer: transfer})",
 		"fgbReleaseStreamSink(generation, handle)",
 	} {
 		if !strings.Contains(goSource, expected) {
@@ -854,7 +889,7 @@ import "sync/atomic"
 
 type Counter struct { Hits atomic.Int64 }
 
-func Read() Counter { return Counter{} }
+func Read() *Counter { return &Counter{} }
 `)
 	if err != nil {
 		t.Fatal(err)
@@ -863,6 +898,144 @@ func Read() Counter { return Counter{} }
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("generated atomic field codec missing %q:\n%s", expected, goSource)
 		}
+	}
+}
+
+func TestGeneratedAtomicCollectionsUseOpaqueHandlesAndPassVet(t *testing.T) {
+	var fixtureDir string
+	apiDart, _, goSource, warnings, err := generateFixture(t, `package api
+
+import "sync/atomic"
+
+type Counters []atomic.Int64
+type CounterMap map[string]atomic.Int64
+type Counter struct { Hits atomic.Int64 }
+type Wrap struct {
+	Inner Counter
+	Name string
+}
+
+func EchoNamed(value Counters) Counters { return value }
+func EchoNamedPointer(value *Counters) *Counters { return value }
+func EchoAnonymous(value []atomic.Int64) []atomic.Int64 { return value }
+func EchoMap(value CounterMap) CounterMap { return value }
+func MakeWrap() *Wrap { return &Wrap{} }
+`, func(dir string) { fixtureDir = dir })
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedDart := mustRead(t, filepath.Join(fixtureDir, "dart", "_generated.dart"))
+	for _, expected := range []string{
+		"final class Counters extends GoOpaque",
+		"final class AtomicInt64Slice extends GoOpaque",
+		"final class CounterMap extends GoOpaque",
+	} {
+		if !strings.Contains(generatedDart, expected) {
+			t.Fatalf("generated synthetic Dart missing %q:\n%s", expected, generatedDart)
+		}
+	}
+	if !strings.Contains(apiDart, "final class Wrap extends GoOpaque") {
+		t.Fatalf("nested atomic value struct should downgrade to GoOpaque:\n%s", apiDart)
+	}
+	for _, expected := range []string{"boxed := new(api.Counters)", "boxed := new([]atomic.Int64)", "boxed := new(api.CounterMap)"} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go missing atomic collection boxing %q:\n%s", expected, goSource)
+		}
+	}
+	if len(warnings) < 4 {
+		t.Fatalf("expected synthetic/opaque downgrade warnings, got %v", warnings)
+	}
+	command := exec.Command("go", "vet", "./...")
+	command.Dir = fixtureDir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generated atomic collection bridge failed go vet: %v\n%s", err, output)
+	}
+}
+
+func TestGenerateAtomicArrayStillRejectsCopying(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+import "sync/atomic"
+
+type Counters [2]atomic.Int64
+
+func Echo(value Counters) Counters { return value }
+`)
+	if err == nil || !strings.Contains(err.Error(), "atomic array") {
+		t.Fatalf("atomic arrays must be rejected before rendering, got %v", err)
+	}
+}
+
+func TestGeneratedAtomicPointerCollectionsStayValueMappedAndPassVet(t *testing.T) {
+	var fixtureDir string
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+import "sync/atomic"
+
+func EchoSlice(value []*atomic.Int64) []*atomic.Int64 { return value }
+func EchoMap(value map[string]*atomic.Int64) map[string]*atomic.Int64 { return value }
+`, func(dir string) { fixtureDir = dir })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"List<int?> echoSlice",
+		"Map<String, int?> echoMap",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("atomic pointer collection should retain value mapping %q:\n%s", expected, apiDart)
+		}
+	}
+	for _, warning := range warnings {
+		if strings.Contains(warning.Error(), "synthetic GoOpaque") {
+			t.Fatalf("pointer-element collections must not become synthetic opaque: %v", warnings)
+		}
+	}
+	command := exec.Command("go", "vet", "./...")
+	command.Dir = fixtureDir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generated atomic pointer collections failed go vet: %v\n%s", err, output)
+	}
+}
+
+func TestGeneratedNestedAtomicCollectionGetsStableSyntheticName(t *testing.T) {
+	var fixtureDir string
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+import "sync/atomic"
+
+type AtomicInt64SliceSlice struct { Name string }
+
+func Echo(value [][]atomic.Int64) [][]atomic.Int64 { return value }
+`, func(dir string) { fixtureDir = dir })
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedDart := mustRead(t, filepath.Join(fixtureDir, "dart", "_generated.dart"))
+	if !strings.Contains(generatedDart, "final class AtomicInt64SliceSlice2 extends GoOpaque") {
+		t.Fatalf("synthetic name should avoid the declared Dart type:\n%s", generatedDart)
+	}
+	if !strings.Contains(apiDart, "AtomicInt64SliceSlice2? echo") || len(warnings) == 0 {
+		t.Fatalf("nested atomic collection should use the disambiguated token: %s warnings=%v", apiDart, warnings)
+	}
+	command := exec.Command("go", "vet", "./...")
+	command.Dir = fixtureDir
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generated nested atomic collection failed go vet: %v\n%s", err, output)
+	}
+}
+
+func TestGeneratePointerToNamedAtomicArrayStillRejectsCopying(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+import "sync/atomic"
+
+type Counters [2]atomic.Int64
+
+func Echo(value *Counters) *Counters { return value }
+`)
+	if err == nil || !strings.Contains(err.Error(), "atomic array") {
+		t.Fatalf("pointer wrapping must not bypass atomic array rejection, got %v", err)
 	}
 }
 

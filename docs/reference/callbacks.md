@@ -63,8 +63,17 @@ callbacks or asynchronous bridge calls, because streams and legitimate long-runn
 remain active for longer than a fixed deadline. Apply a timeout in the Dart closure or design an
 explicit cancellation protocol when the application requires one.
 
+Each async bridge call owns a Go context used by its synthesized callbacks. Cancelling an owned
+Stream, retiring the isolate, or otherwise cancelling that call wakes callback waiters instead of
+leaving them parked. A callback request that cannot be posted fails only that callback; it never
+clears unrelated opaque handles.
+
 Callbacks belong to the Dart isolate that created them. Hot restart retires old callbacks and wakes
 their waiters with an error. Re-register callbacks instead of invoking retained handles.
+
+One loaded bridge library supports one attached Dart isolate at a time. Initializing the same library
+from another isolate retires the previous attachment. Route calls from worker isolates through the
+attached isolate with Dart messages instead of initializing the bridge in both isolates.
 
 ## Restrictions
 

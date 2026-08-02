@@ -88,6 +88,10 @@ Each Dart isolate attachment gets a stream generation. A hot restart increments 
 contexts, rejects old sink posts with `ErrStreamClosed`, and drops old channel events. Old producers
 cannot deliver into a new isolate that reused the same numeric handle.
 
+The same atomic attachment generation is shared by streams, callbacks, DartOpaque releases, and Go
+opaque handles. One loaded library supports one attached Dart isolate at a time; attaching another
+isolate retires the previous one. Worker isolates should forward requests to the attached isolate.
+
 ## Restrictions
 
 - `//fgb:async` is required;
@@ -97,4 +101,3 @@ cannot deliver into a new isolate that reused the same numeric handle.
 - nested stream sinks are unsupported;
 - Go-owned streams are single-subscription;
 - channel producers must finish before the outer function returns.
-

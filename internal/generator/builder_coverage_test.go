@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"go/importer"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -10,7 +11,104 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/config"
 	bridgemodel "github.com/star4277/flutter_go_bridge/internal/model"
 	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
+	"golang.org/x/tools/go/packages"
 )
+
+func TestAtomicCollectionClassificationAndSyntheticNames(t *testing.T) {
+	atomicPackage, err := importer.Default().Import("sync/atomic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	atomicInt64 := atomicPackage.Scope().Lookup("Int64").Type().(*types.Named)
+	inputPackage := types.NewPackage("example.com/fixture/api", "api")
+	b := &builder{api: &bridgemodel.API{Package: &packages.Package{Types: inputPackage}}}
+
+	tests := []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{"basic", types.Typ[types.String], "String"},
+		{"pointer", types.NewPointer(atomicInt64), "AtomicInt64"},
+		{"slice", types.NewSlice(atomicInt64), "AtomicInt64Slice"},
+		{"map", types.NewMap(types.Typ[types.String], atomicInt64), "StringAtomicInt64Map"},
+		{"fallback", types.NewSignatureType(nil, nil, nil, nil, nil, false), "AtomicOpaque"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := b.syntheticOpaqueName(test.typ); got != test.want {
+				t.Fatalf("syntheticOpaqueName(%s) = %q, want %q", test.typ, got, test.want)
+			}
+		})
+	}
+
+	if got := b.atomicCollectionShape(types.NewSlice(atomicInt64)); got != atomicCollectionOpaque {
+		t.Fatalf("atomic slice class = %v", got)
+	}
+	if got := b.atomicCollectionShape(types.NewMap(types.Typ[types.String], atomicInt64)); got != atomicCollectionOpaque {
+		t.Fatalf("atomic map class = %v", got)
+	}
+	if !atomicValueByCopy(types.NewMap(types.Typ[types.String], atomicInt64), map[types.Type]bool{}) {
+		t.Fatal("map values containing atomic state must be classified as by-value copies")
+	}
+	if got := b.atomicCollectionShape(types.NewArray(atomicInt64, 2)); got != atomicCollectionReject {
+		t.Fatalf("atomic array class = %v", got)
+	}
+	if got := b.atomicCollectionShape(types.NewSlice(types.NewPointer(atomicInt64))); got != atomicCollectionNone {
+		t.Fatalf("atomic pointer slice class = %v", got)
+	}
+	if atomicValueByCopy(types.NewPointer(atomicInt64), map[types.Type]bool{}) {
+		t.Fatal("a pointer to atomic state must not count as a by-value copy")
+	}
+	if atomicValueByCopy(types.Typ[types.Int], map[types.Type]bool{}) {
+		t.Fatal("a basic type must not count as atomic state")
+	}
+}
+
+func TestAtomicStructRecursionAndCycleGuards(t *testing.T) {
+	atomicPackage, err := importer.Default().Import("sync/atomic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	atomicInt64 := atomicPackage.Scope().Lookup("Int64").Type().(*types.Named)
+	inputPackage := types.NewPackage("example.com/fixture/api", "api")
+
+	innerName := types.NewTypeName(0, inputPackage, "Inner", nil)
+	inner := types.NewNamed(innerName, types.NewStruct(
+		[]*types.Var{types.NewField(0, inputPackage, "Hits", atomicInt64, false)},
+		[]string{""},
+	), nil)
+	outerName := types.NewTypeName(0, inputPackage, "Outer", nil)
+	outer := types.NewNamed(outerName, types.NewStruct(
+		[]*types.Var{types.NewField(0, inputPackage, "Inner", inner, false)},
+		[]string{""},
+	), nil)
+	if !atomicValueByCopy(outer, map[types.Type]bool{}) {
+		t.Fatal("nested value struct should report atomic state")
+	}
+	basicName := types.NewTypeName(0, inputPackage, "Count", nil)
+	basicNamed := types.NewNamed(basicName, types.Typ[types.Int], nil)
+	if atomicValueByCopy(basicNamed, map[types.Type]bool{}) {
+		t.Fatal("named basic type cannot contain atomic struct state")
+	}
+
+	nodeName := types.NewTypeName(0, inputPackage, "Node", nil)
+	node := types.NewNamed(nodeName, nil, nil)
+	node.SetUnderlying(types.NewStruct(
+		[]*types.Var{types.NewField(0, inputPackage, "Next", types.NewPointer(node), false)},
+		[]string{""},
+	))
+	if atomicValueByCopy(node, map[types.Type]bool{}) {
+		t.Fatal("a recursive pointer-only struct must not be classified as atomic by value")
+	}
+	seen := map[types.Type]bool{node: true}
+	if atomicValueByCopy(node, seen) {
+		t.Fatal("cycle guard should terminate with no duplicate atomic classification")
+	}
+	if got := atomicCollectionShape(node, map[types.Type]bool{node: true}); got != atomicCollectionNone {
+		t.Fatalf("collection cycle guard = %v", got)
+	}
+}
 
 // TestDartMethodSignatureAsyncPrefix covers the async branch of
 // dartMethodSignature via a minimal call model.
@@ -757,10 +855,8 @@ func Use(d Dupe) Dupe { return d }
 	requireError(t, err, "duplicate wire field")
 }
 
-// TestGenerateAtomicInsideCollectionFieldRejected drives mapStruct's atomic-in-
-// collection field guard.
-func TestGenerateAtomicInsideCollectionFieldRejected(t *testing.T) {
-	_, _, _, _, err := generateFixture(t, `package api
+func TestGenerateAtomicInsideCollectionFieldUsesSyntheticOpaque(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
 
 import "sync/atomic"
 
@@ -768,15 +864,18 @@ type Recorder struct {
 	Flags []atomic.Int64
 }
 
-func Make() Recorder { return Recorder{} }
+func Make() *Recorder { return &Recorder{} }
 `)
-	requireError(t, err, "contains atomic values inside a collection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "final AtomicInt64Slice? flags;") || len(warnings) == 0 {
+		t.Fatalf("atomic collection field should use synthetic opaque: %s warnings=%v", apiDart, warnings)
+	}
 }
 
-// TestGenerateValueStructWithAtomicFieldRejected drives mapStruct's value-
-// struct-with-atomic-state field guard.
-func TestGenerateValueStructWithAtomicFieldRejected(t *testing.T) {
-	_, _, _, _, err := generateFixture(t, `package api
+func TestGenerateValueStructWithAtomicFieldFallsBackToOpaque(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
 
 import "sync/atomic"
 
@@ -788,9 +887,14 @@ type Meter struct {
 	S Stats
 }
 
-func Make() Meter { return Meter{} }
+func Make() *Meter { return &Meter{} }
 `)
-	requireError(t, err, "contains a value struct with atomic state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "final class Meter extends GoOpaque") || len(warnings) == 0 {
+		t.Fatalf("nested atomic value struct should fall back to opaque: %s warnings=%v", apiDart, warnings)
+	}
 }
 
 // TestGenerateStructFieldWithStreamSinkResultRejected drives containsStreamSink's
