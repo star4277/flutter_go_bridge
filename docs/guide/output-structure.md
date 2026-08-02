@@ -26,5 +26,12 @@ Each Go source file produces a same-named Dart file. The mirror is anchored at t
 `go/api/api.go` becomes `lib/src/api/api.dart`. Generated files are implementation details; keep
 application-facing exports in your own Dart files.
 
-Do not edit generated files. Change Go declarations or configuration, then run `generate` again.
+Generated Dart uses lint-compatible lower-camel identifiers, control-flow blocks and string
+interpolation, so it remains clean under the recommended Dart and Flutter analyzer rules. App
+projects do not receive a named `library` directive in `bridge_generated.dart`. Plugin projects keep
+their `library <plugin_name>;` declaration in the plugin's public entrypoint, which exports the
+generated implementation.
+Generation order is deterministic across runs: source files are ordered by normalized path and
+declarations retain their order within each file, so unchanged input produces unchanged output.
 
+Do not edit generated files. Change Go declarations or configuration, then run `generate` again.

@@ -244,7 +244,7 @@ func cstDartDefinition(typ *wireType) string {
 		lines = []string{fmt.Sprintf("  external ffi.Pointer<%s> ptr;", storage.DartType), "  @ffi.Int64() external int len;"}
 	case kindStruct:
 		for _, field := range base.Struct.allFields() {
-			lines = append(lines, cstDartFieldLines(field.CName, field.Type)...)
+			lines = append(lines, cstDartFieldLines(field.DartName, field.Type)...)
 		}
 	}
 	var b strings.Builder
@@ -285,7 +285,7 @@ func cstDartArgsDefinition(call *callModel) string {
 		}
 	}
 	for _, param := range call.Params {
-		for _, line := range cstDartFieldLines(param.CName, param.Type) {
+		for _, line := range cstDartFieldLines(param.DartName, param.Type) {
 			b.WriteString(line)
 			b.WriteByte('\n')
 		}
