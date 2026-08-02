@@ -79,13 +79,16 @@ Only a `GoOpaque` handle continues to resolve to the same Go object across calls
 
 | Go | Dart | Wire and boundary behavior |
 | --- | --- | --- |
-| `time.Time` | `DateTime` | RFC3339Nano string on the wire; decoded with `DateTime.parse` |
+| `time.Time` | `DateTime` | Signed 64-bit Unix microseconds on the wire; Go → Dart uses `DateTime.fromMicrosecondsSinceEpoch`, Dart → Go uses `microsecondsSinceEpoch`, and sub-microsecond Go nanoseconds are truncated |
 | `time.Duration` | `Duration` | Microseconds on the wire; sub-microsecond Go nanoseconds are truncated |
 | `math/big.Int` | `BigInt` | Lossless big-integer encoding; `*big.Int` becomes `BigInt?` |
 | `net/netip.Addr` | `InternetAddress` | IP text on the wire; zero address maps to an empty string; imports `dart:io` |
 | `net/netip.Prefix` | `String` | CIDR text such as `192.168.1.0/24`; zero/invalid Prefix maps to an empty string |
 | `net/url.URL` | `Uri` | Uses `URL.String()` and `Uri.parse` |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue` | UUID string on the wire; requires the Dart `uuid` package |
+
+`time.Time` used RFC3339Nano text before the Unix-microseconds mapping. Regenerate the Go and Dart
+outputs together when upgrading; mixing old and new generated files fails wire-type validation.
 
 Pointers to these value types produce the nullable Dart equivalent.
 

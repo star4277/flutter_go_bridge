@@ -38,6 +38,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstStringBody("value")
 	case kindSigned, kindFloat:
 		r.line("  return value;")
+	case kindTime:
+		r.line("  return value.microsecondsSinceEpoch;")
 	case kindDuration:
 		r.line("  return value.inMicroseconds;")
 	case kindUnsigned:
@@ -51,8 +53,6 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 			r.line("  if (value == null) return ffi.nullptr;")
 		}
 		r.renderCstStringBody("value.toRadixString(16)")
-	case kindTime:
-		r.renderCstStringBody("value.toIso8601String()")
 	case kindInternetIP:
 		r.renderCstStringBody("value.address")
 	case kindIPPrefix:
@@ -127,7 +127,7 @@ func cstDartEncoderReturnType(typ *wireType) string {
 		return storage.DartType
 	}
 	switch typ.Kind {
-	case kindBool, kindSigned, kindUnsigned, kindDuration, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
+	case kindBool, kindSigned, kindUnsigned, kindTime, kindDuration, kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		return "int"
 	case kindFloat:
 		return "double"

@@ -64,13 +64,13 @@ func cstStorageFor(typ *wireType) cstStorage {
 		return cstStorage{CType: "uint64_t", DartType: "ffi.Uint64", DartField: "@ffi.Uint64() external int", Scalar: true}
 	case kindFloat:
 		return cstStorage{CType: "double", DartType: "ffi.Double", DartField: "@ffi.Double() external double", Scalar: true}
-	case kindDuration:
+	case kindTime, kindDuration:
 		return cstStorage{CType: "int64_t", DartType: "ffi.Int64", DartField: "@ffi.Int64() external int", Scalar: true}
 	case kindOpaque:
 		return cstStorage{CType: "uintptr_t", DartType: "ffi.UintPtr", DartField: "@ffi.UintPtr() external int", Scalar: true}
 	case kindDartOpaque, kindCallback, kindStreamSink:
 		return cstStorage{CType: "int64_t", DartType: "ffi.Int64", DartField: "@ffi.Int64() external int", Scalar: true}
-	case kindString, kindTime, kindBigInt, kindInternetIP, kindIPPrefix, kindURL, kindUUID:
+	case kindString, kindBigInt, kindInternetIP, kindIPPrefix, kindURL, kindUUID:
 		return cstStorage{CType: "FgbCstBytes*", DartType: "ffi.Pointer<_FgbCstBytes>", Pointer: true}
 	case kindBytes:
 		return cstStorage{CType: cstTypeName(base) + "*", DartType: "ffi.Pointer<" + cstDartTypeName(base) + ">", Pointer: true}
