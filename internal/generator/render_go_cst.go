@@ -344,7 +344,15 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 			r.line("\thandle, err := fgbStoreOpaque(value, transfer)")
 		}
 		r.line("\tif err != nil || uint64(handle) > uint64(^uint64(0)>>1) { return nil, fmt.Errorf(\"opaque handle space exhausted\") }")
-		r.line("\treturn fgbDcoInt64(int64(handle))")
+		r.line("\tresult := C.fgb_dco_array_new(2)")
+		r.line("\tif result == nil { return nil, fmt.Errorf(\"DCO opaque envelope allocation failed\") }")
+		r.line("\thandleValue, err := fgbDcoInt64(int64(handle))")
+		r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, err }")
+		r.line("\tjsonValue, err := fgbDcoJSONText(value)")
+		r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, err }")
+		r.line("\tC.fgb_dco_array_set(result, 0, handleValue)")
+		r.line("\tC.fgb_dco_array_set(result, 1, jsonValue)")
+		r.line("\treturn result, nil")
 	case kindDartOpaque:
 		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
 		r.line("\treturn fgbDcoInt64(value.Handle())")
@@ -378,7 +386,7 @@ func (r *goRenderer) renderDcoArrayEncoder(typ *wireType) {
 
 func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
 	fields := typ.Struct.allFields()
-	r.line("\tresult := C.fgb_dco_array_new(%d)", len(fields))
+	r.line("\tresult := C.fgb_dco_array_new(%d)", len(fields)+1)
 	r.line("\tif result == nil { return nil, fmt.Errorf(\"DCO struct allocation failed\") }")
 	for index, field := range fields {
 		encodeID := field.Type.ID
@@ -406,6 +414,9 @@ func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
 		r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 		r.line("\tC.fgb_dco_array_set(result, %d, child%d)", index, index)
 	}
+	r.line("\tjsonValue, err := fgbDcoJSONText(value)")
+	r.line("\tif err != nil { C.fgb_internal_dco_free(result); return nil, err }")
+	r.line("\tC.fgb_dco_array_set(result, %d, jsonValue)", len(fields))
 	r.line("\treturn result, nil")
 }
 

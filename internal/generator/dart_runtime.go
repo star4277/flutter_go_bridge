@@ -61,6 +61,82 @@ abstract base class GoOpaque implements ffi.Finalizable {
 
   final __FGB_BRIDGE_CLASS__ fgbBridge;
   final int fgbHandle;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GoOpaque &&
+          other.runtimeType == runtimeType &&
+          identical(other.fgbBridge, fgbBridge) &&
+          other.fgbHandle == fgbHandle;
+
+  @override
+  int get hashCode =>
+      Object.hash(runtimeType, identityHashCode(fgbBridge), fgbHandle);
+
+  @override
+  String toString() => fgbInternalJsonFor(this) ?? super.toString();
+}
+
+final Expando<String> _fgbJsonValues = Expando<String>('fgbJsonValues');
+
+/// Associates JSON produced by Go's encoding/json with the freshly decoded
+/// Dart object without adding transport-only fields to its public constructor.
+T fgbInternalAttachJson<T extends Object>(T value, Object? json) {
+  if (json is String) _fgbJsonValues[value] = json;
+  return value;
+}
+
+String? fgbInternalJsonFor(Object value) => _fgbJsonValues[value];
+
+/// Structural equality for generated fields. Dart collections otherwise use
+/// identity equality, which is surprising for Go value structs.
+bool fgbInternalDeepEquals(Object? left, Object? right) {
+  if (identical(left, right)) return true;
+  if (left == null || right == null) return false;
+  if (left is List && right is List) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!fgbInternalDeepEquals(left[index], right[index])) return false;
+    }
+    return true;
+  }
+  if (left is Map && right is Map) {
+    if (left.length != right.length) return false;
+    final unmatched = right.entries.toList(growable: true);
+    for (final leftEntry in left.entries) {
+      final index = unmatched.indexWhere(
+        (rightEntry) =>
+            fgbInternalDeepEquals(leftEntry.key, rightEntry.key) &&
+            fgbInternalDeepEquals(leftEntry.value, rightEntry.value),
+      );
+      if (index < 0) return false;
+      unmatched.removeAt(index);
+    }
+    return true;
+  }
+  return left == right;
+}
+
+/// Hash companion to [fgbInternalDeepEquals]. Map entry hashes are combined
+/// without depending on insertion order.
+int fgbInternalDeepHash(Object? value) {
+  if (value == null) return 0;
+  if (value is List) {
+    return Object.hashAll(value.map(fgbInternalDeepHash));
+  }
+  if (value is Map) {
+    var entriesHash = 0;
+    for (final entry in value.entries) {
+      entriesHash ^=
+          Object.hash(
+            fgbInternalDeepHash(entry.key),
+            fgbInternalDeepHash(entry.value),
+          );
+    }
+    return Object.hash(value.length, entriesHash);
+  }
+  return value.hashCode;
 }
 
 /// Wraps a registered Dart closure so the callback dispatcher can tell it

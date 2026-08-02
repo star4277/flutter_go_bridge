@@ -50,6 +50,21 @@ User saveUser({required User user}) { /* bridge call */ }
 这里的“值对象”非常重要：传入 Go 时会把 Dart 字段编码成一个新的 Go 值；从 Go 返回时又会根据
 返回字段创建一个新的 Dart 对象。两端没有共享对象地址，也没有自动的双向状态同步。
 
+### 相等性、hashCode 与 `toString()`
+
+所有生成的值类型都会重写 `operator ==` 和 `hashCode`。比较范围包含直接字段和匿名嵌入后提升的
+字段；List、typed data 和 Map 都按内容进行深比较与深哈希，而不是使用 Dart 默认的对象身份。
+因此，同一个 Go 值被分别解码得到的两个 Dart 对象，可以正常用于 Set 和 Map key。
+
+结构体从 Go 发往 Dart 时，Go bridge 会对实际 Go 值调用 `encoding/json.Marshal`。序列化成功后，
+生成的 JSON 字符串会随结构体一起传到 Dart，并由 `toString()` 直接返回。Dart 不会根据映射字段
+重新拼装 JSON，因此 Go 的 JSON tag、`MarshalJSON`、由自定义 marshaler 暴露的私有状态、字节
+编码等行为都以 Go `encoding/json` 为准。若序列化失败，结构体本身仍会正常传输，`toString()`
+则退回 Dart 默认的对象文本。
+
+只在 Dart 本地构造、尚未经过 Go 返回的对象没有 Go 生成的 JSON 快照，因此它的 `toString()`
+同样使用默认文本；当该值传入 Go 并由 Go 返回后，返回的新对象会携带 JSON。
+
 ### 哪些字段参与桥接
 
 默认只桥接导出字段。以下字段会被跳过：
@@ -155,6 +170,12 @@ final class Counter extends GoOpaque {
 后，`NativeFinalizer` 会通知 Go 释放对应 handle；生成 API 不要求手动调用 `dispose()`。不要依赖
 finalizer 的即时执行来管理文件、socket 等必须确定性关闭的业务资源，仍应在 Go API 中提供显式
 `Close` 方法。
+
+生成的 opaque 类从 `GoOpaque` 继承相等与哈希语义：只有生成类型、bridge 实例和 Go handle 都
+相同才视为相等。Go 返回 opaque 值时，也会把 Go 端生成的 JSON 字符串与 handle 一起发送。这使
+“字段无法桥接而自动退化为 `GoOpaque`，但实现了 `MarshalJSON`”的类型仍能得到有意义的
+`toString()`。该字符串是 handle 发往 Dart 时的快照；后续方法若修改 Go 状态，不会自动刷新，
+除非 Go 再次返回这个对象。
 
 ### 何时自动退化为 opaque
 

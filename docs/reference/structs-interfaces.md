@@ -49,6 +49,23 @@ Value semantics mean that a Dart object is encoded into a new Go value on input 
 rebuilt as a new Dart object. The two sides do not share an address or automatically synchronize
 mutations.
 
+### Equality, hash codes, and `toString()`
+
+Every generated value class overrides `operator ==` and `hashCode`. Equality is structural across
+all promoted and directly declared fields. Lists, typed-data lists, and maps are compared and hashed
+by contents rather than by Dart object identity, so separately decoded copies of the same Go value
+work as expected in sets and map keys.
+
+When a struct travels from Go to Dart, the Go bridge also calls `encoding/json.Marshal` on the actual
+Go value. If marshaling succeeds, the resulting JSON string is attached to the decoded Dart object
+and returned by `toString()`. Dart does not reconstruct the JSON from its mapped fields, so Go JSON
+tags, `MarshalJSON` implementations, private Go state exposed by a custom marshaler, byte encoding,
+and other `encoding/json` behavior remain authoritative. If marshaling fails, `toString()` falls back
+to Dart's ordinary object representation and the bridge value itself still arrives normally.
+
+A value constructed only in Dart has not passed through Go and therefore has no Go-produced JSON
+snapshot; its `toString()` also uses the ordinary fallback until Go returns it.
+
 ### Fields and constructors
 
 Only exported fields are bridged. Unexported fields, `_`, `fgb:"ignore"`, `fgb:"-"`,
@@ -124,6 +141,13 @@ Repeated calls resolve the same handle and therefore the same Go state. `NativeF
 the handle after the Dart object is collected. Do not depend on prompt finalization for files,
 sockets, or other resources that require deterministic shutdown; expose an explicit Go `Close`
 method as well.
+
+Generated opaque classes inherit equality and hashing from `GoOpaque`: two values are equal only
+when they have the same generated runtime type, bridge instance, and Go handle. Opaque results also
+carry the JSON string produced by Go alongside the handle. This includes automatically opaque
+types whose fields cannot cross the bridge but whose `MarshalJSON` implementation can still expose
+a useful representation. The string is a snapshot taken when that handle is sent to Dart; later
+mutating method calls do not implicitly refresh it unless Go returns the object again.
 
 Unsupported function/channel fields, unsupported types, nested pointers, by-value opaque fields,
 and non-empty structs with no bridged fields cause automatic opaque fallback. Dependency interfaces

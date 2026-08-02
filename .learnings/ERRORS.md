@@ -1,5 +1,103 @@
 # Errors
 
+## [ERR-20260803-WD01] fixture-command-workdir
+
+**Logged**: 2026-08-03T07:34:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+After a successful repository-root generation, a chained fixture `go vet/build` command omitted its fixture working directory.
+
+### Error
+
+```text
+no Go files in D:\Projects\a\flutter-go-bridge-gokit
+```
+
+### Resolution
+
+- **Resolved**: 2026-08-03T07:34:00+08:00
+- **Notes**: Re-run fixture validation with the explicit object-methods smoke directory as `workdir`.
+
+---
+
+## [ERR-20260803-COV01] powershell-cover-argument
+
+**Logged**: 2026-08-03T07:31:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+PowerShell passed the coverage profile flag incorrectly when the command used an unquoted `-func=coverage.out` pipeline argument.
+
+### Error
+
+```text
+too many arguments
+cover: open coverage.out: The system cannot find the file specified.
+```
+
+### Resolution
+
+- **Resolved**: 2026-08-03T07:32:00+08:00
+- **Notes**: Located the generated profile under `build/coverage.out` and used `go tool cover "-func=build/coverage.out"`.
+
+---
+
+## [ERR-20260803-CLI01] incorrect-codegen-config-flag
+
+**Logged**: 2026-08-03T06:11:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+The real CLI smoke initially used `--config` instead of the implemented `--config-file` flag.
+
+### Error
+
+```text
+Error: unknown flag: --config
+```
+
+### Resolution
+
+- **Resolved**: 2026-08-03T06:12:00+08:00
+- **Notes**: Re-ran the fixture from the repository module with `--config-file` after checking CLI help.
+
+---
+
+## [ERR-20260803-RG01] powershell-rg-patterns
+
+**Logged**: 2026-08-03T05:45:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+
+Early searches used an unclosed regular-expression group and Windows wildcard paths that `rg` does not expand.
+
+### Error
+
+```text
+regex parse error: unclosed group
+rg: internal/generator/*_test.go: filename syntax is incorrect
+```
+
+### Resolution
+
+- **Resolved**: 2026-08-03T05:46:00+08:00
+- **Notes**: Split the expressions and used rg's `-g` file glob option.
+
+---
+
 ## [ERR-20260803-001] resumed-exec-cell-expired
 
 **Logged**: 2026-08-03T01:48:00+08:00

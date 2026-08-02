@@ -35,7 +35,7 @@ func renderGo(unit *unit) ([]byte, error) {
 	r.line("")
 	r.line("import (")
 	imports := []string{
-		"bytes", "encoding/binary", "fmt", "io", "math/big", "reflect",
+		"bytes", "encoding/binary", "encoding/json", "fmt", "io", "math/big", "reflect",
 		"os", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe",
 	}
 	// The stream runtime always carries the cancellation plumbing, so context
@@ -70,6 +70,19 @@ func renderGo(unit *unit) ([]byte, error) {
 	r.line(")")
 	r.line("")
 	r.raw(strings.TrimSpace(goRuntimeSource))
+	r.line("")
+	r.line("func fgbJSONText(value any) (result any) {")
+	r.line("\tdefer func() { if recover() != nil { result = nil } }()")
+	r.line("\tencoded, err := json.Marshal(value)")
+	r.line("\tif err != nil { return nil }")
+	r.line("\treturn string(encoded)")
+	r.line("}")
+	r.line("")
+	r.line("func fgbDcoJSONText(value any) (*C.FgbDartCObject, error) {")
+	r.line("\tencoded := fgbJSONText(value)")
+	r.line("\tif encoded == nil { return fgbDcoNull() }")
+	r.line("\treturn fgbDcoString(encoded.(string))")
+	r.line("}")
 	r.line("")
 	if unit.NeedsMain {
 		r.line("// Required for c-shared and c-archive build modes.")
@@ -445,7 +458,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 			r.line("\tif value == nil { return nil, nil }")
 		}
 		fields := typ.Struct.allFields()
-		r.line("\tresult := make(map[any]any, %d)", len(fields))
+		r.line("\tresult := make(map[any]any, %d)", len(fields)+1)
 		for _, field := range fields {
 			encodeID := field.Type.ID
 			encodeExpr := fmt.Sprintf("value.%s", field.GoName)
@@ -470,6 +483,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 			r.line("\tif err != nil { return nil, fmt.Errorf(%s+\": %%w\", err) }", strconv.Quote(field.WireName))
 			r.line("\tresult[%s] = encoded%s", strconv.Quote(field.WireName), field.GoName)
 		}
+		r.line("\tresult[%s] = fgbJSONText(value)", strconv.Quote("\x00fgb_json"))
 		r.line("\treturn result, nil")
 	case kindOpaque:
 		r.line("\tif value == nil { return nil, nil }")
@@ -481,7 +495,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 			r.line("\thandle, err := fgbStoreOpaque(value, transfer)")
 		}
 		r.line("\tif err != nil { return nil, err }")
-		r.line("\treturn int64(handle), nil")
+		r.line("\treturn []any{int64(handle), fgbJSONText(value)}, nil")
 	case kindDartOpaque:
 		r.line("\tif !value.IsValid() { return nil, fmt.Errorf(\"cannot encode an invalid DartOpaque\") }")
 		r.line("\treturn value.Handle(), nil")

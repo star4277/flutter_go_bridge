@@ -1,5 +1,31 @@
 # Learnings
 
+## [LRN-20260803-JSON01] correction
+
+**Logged**: 2026-08-03T07:20:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: codegen
+
+### Summary
+
+Generated Dart `toString()` JSON must come from Go's `encoding/json`, not from a Dart-side reconstruction of mapped fields.
+
+### Details
+
+A Dart reconstruction cannot faithfully preserve Go JSON tags, `MarshalJSON`, private state exposed by custom marshalers, byte encoding, or opaque types. The motivating proxy shape can fall back to `GoOpaque` because its fields cannot bridge while still being fully JSON-serializable in Go. The correct transport attaches the Go-produced JSON string to both value-struct payloads and opaque handle envelopes. Dart stores that string out-of-band and returns it from `toString()`.
+
+### Suggested Action
+
+Keep source-language serialization authoritative. Serialize metadata beside the actual value or handle in the owning language and transport the result explicitly.
+
+### Resolution
+
+- **Resolved**: 2026-08-03T07:20:00+08:00
+- **Notes**: Removed Dart-side JSON reconstruction and added Go-produced JSON transport for value structs and GoOpaque handles.
+
+---
+
 ## [LRN-20260803-001] best_practice
 
 **Logged**: 2026-08-03T02:22:00+08:00

@@ -458,12 +458,51 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 		}
 		r.line("  });")
 	}
+	r.renderStructObjectMethods(structure)
 	for _, call := range structure.Methods {
 		r.line("")
 		r.renderInstanceCall(call, "this", "__FGB_BRIDGE_CLASS__.instance", true, "  ")
 	}
 	r.line("}")
 	r.line("")
+}
+
+func (r *splitDartRenderer) renderStructObjectMethods(structure *structModel) {
+	fields := structure.allFields()
+	r.line("")
+	r.line("  @override")
+	r.line("  bool operator ==(Object other) =>")
+	if len(fields) == 0 {
+		r.line("      identical(this, other) ||")
+		r.line("      other is %s && other.runtimeType == runtimeType;", structure.DartName)
+	} else {
+		r.line("      identical(this, other) ||")
+		r.line("      other is %s &&", structure.DartName)
+		r.line("          other.runtimeType == runtimeType &&")
+		for index, field := range fields {
+			last := index == len(fields)-1
+			end := ";"
+			if !last {
+				end = " &&"
+			}
+			r.line("          fgbInternalDeepEquals(%s, other.%s)%s", field.DartName, field.DartName, end)
+		}
+	}
+	r.line("")
+	r.line("  @override")
+	if len(fields) == 0 {
+		r.line("  int get hashCode => Object.hash(runtimeType);")
+	} else {
+		r.line("  int get hashCode => Object.hashAll([")
+		r.line("    runtimeType,")
+		for _, field := range fields {
+			r.line("    fgbInternalDeepHash(%s),", field.DartName)
+		}
+		r.line("  ]);")
+	}
+	r.line("")
+	r.line("  @override")
+	r.line("  String toString() => fgbInternalJsonFor(this) ?? super.toString();")
 }
 
 // dartFieldDecode reads one struct field. A field marked `fgb:"nullable"`
@@ -763,27 +802,29 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  return result;")
 	case kindStruct:
 		r.line("  if (value is Map) {")
-		r.line("    return %s(", typ.Struct.DartName)
+		r.line("    return fgbInternalAttachJson(%s(", typ.Struct.DartName)
 		for _, field := range typ.Struct.allFields() {
 			source := fmt.Sprintf("value[%s]", strconv.Quote(field.WireName))
 			r.line("      %s: %s,", field.DartName, dartFieldDecode(field, source, fmt.Sprintf("'$path.%s'", field.WireName)))
 		}
-		r.line("    );")
+		r.line("    ), value[%s]);", strconv.Quote("\x00fgb_json"))
 		r.line("  }")
 		r.line("  if (value is List) {")
-		r.line("    if (value.length != %d) throw FormatException('$path: expected %d fields');", len(typ.Struct.allFields()), len(typ.Struct.allFields()))
-		r.line("    return %s(", typ.Struct.DartName)
+		fieldCount := len(typ.Struct.allFields())
+		r.line("    if (value.length != %d && value.length != %d) throw FormatException('$path: expected %d fields plus optional Go JSON');", fieldCount, fieldCount+1, fieldCount)
+		r.line("    return fgbInternalAttachJson(%s(", typ.Struct.DartName)
 		for index, field := range typ.Struct.allFields() {
 			source := fmt.Sprintf("value[%d]", index)
 			r.line("      %s: %s,", field.DartName, dartFieldDecode(field, source, fmt.Sprintf("'$path[%d]'", index)))
 		}
-		r.line("    );")
+		r.line("    ), value.length == %d ? value[%d] : null);", fieldCount+1, fieldCount)
 		r.line("  }")
 		r.line("  throw FormatException('$path: expected Map or List');")
 	case kindOpaque:
 		r.line("  if (value == null) return null;")
-		r.line("  if (value is! int || value <= 0) throw FormatException('$path: expected opaque handle');")
-		r.line("  return %s.fgbInternal(fgbBridge: bridge, fgbHandle: value);", typ.Opaque.DartName)
+		r.line("  if (value is int && value > 0) return %s.fgbInternal(fgbBridge: bridge, fgbHandle: value);", typ.Opaque.DartName)
+		r.line("  if (value is! List || value.length != 2 || value[0] is! int || (value[0] as int) <= 0) throw FormatException('$path: expected opaque handle and optional Go JSON');")
+		r.line("  return fgbInternalAttachJson(%s.fgbInternal(fgbBridge: bridge, fgbHandle: value[0] as int), value[1]);", typ.Opaque.DartName)
 	case kindDartOpaque:
 		r.line("  if (value is! int) throw FormatException('$path: expected DartOpaque handle');")
 		r.line("  return bridge.fgbInternalResolveDartOpaque(value, path);")
