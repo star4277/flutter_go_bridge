@@ -96,3 +96,11 @@ func TestRenderInstanceCallAsyncVoid(t *testing.T) {
 		t.Fatalf("async void call should await the invocation:\n%s", r.buffer.String())
 	}
 }
+
+func TestDartPathFieldEscapesDartStringSyntax(t *testing.T) {
+	got := dartPathField("a\\b'c$d\n\r\t")
+	want := `'$path.a\\b\'c\$d\n\r\t'`
+	if got != want {
+		t.Fatalf("dartPathField() = %q, want %q", got, want)
+	}
+}

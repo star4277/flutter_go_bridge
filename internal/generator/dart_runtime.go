@@ -209,21 +209,29 @@ final class _FgbReader {
       case 9:
         final result = Int32List(count(4));
         alignment(4);
-        for (var index = 0; index < result.length; index++) result[index] = int32();
+        for (var index = 0; index < result.length; index++) {
+          result[index] = int32();
+        }
         return result;
       case 10:
         final result = Int64List(count(8));
         alignment(8);
-        for (var index = 0; index < result.length; index++) result[index] = int64();
+        for (var index = 0; index < result.length; index++) {
+          result[index] = int64();
+        }
         return result;
       case 11:
         final result = Float64List(count(8));
         alignment(8);
-        for (var index = 0; index < result.length; index++) result[index] = float64();
+        for (var index = 0; index < result.length; index++) {
+          result[index] = float64();
+        }
         return result;
       case 12:
         final result = <Object?>[];
-        for (var index = 0, length = count(1); index < length; index++) result.add(value());
+        for (var index = 0, length = count(1); index < length; index++) {
+          result.add(value());
+        }
         return result;
       case 13:
         final result = <Object?, Object?>{};
@@ -318,17 +326,23 @@ final class _FgbCodec {
       writer.byte(9);
       writer.size(value.length);
       writer.alignment(4);
-      for (final item in value) writer.int32(item);
+      for (final item in value) {
+        writer.int32(item);
+      }
     } else if (value is Int64List) {
       writer.byte(10);
       writer.size(value.length);
       writer.alignment(8);
-      for (final item in value) writer.int64(item);
+      for (final item in value) {
+        writer.int64(item);
+      }
     } else if (value is Float64List) {
       writer.byte(11);
       writer.size(value.length);
       writer.alignment(8);
-      for (final item in value) writer.float64(item);
+      for (final item in value) {
+        writer.float64(item);
+      }
     } else if (value is Float32List) {
       writer.byte(14);
       writer.size(value.length);
@@ -340,7 +354,9 @@ final class _FgbCodec {
     } else if (value is List) {
       writer.byte(12);
       writer.size(value.length);
-      for (final item in value) _writeValue(writer, item);
+      for (final item in value) {
+        _writeValue(writer, item);
+      }
     } else if (value is Map) {
       writer.byte(13);
       writer.size(value.length);
@@ -800,7 +816,9 @@ final class __FGB_BRIDGE_CLASS__ {
       case 5:
         final pointer = object.value.asString.cast<ffi.Uint8>();
         var length = 0;
-        while ((pointer + length).value != 0) length++;
+        while ((pointer + length).value != 0) {
+          length++;
+        }
         return utf8.decode(pointer.asTypedList(length));
       case 6:
         final array = object.value.asArray;

@@ -1,4 +1,4 @@
-﻿package generator
+package generator
 
 import (
 	"os"
@@ -89,9 +89,10 @@ func TestGenerateMainPackageDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = Generate(api, config.Resolved{
-		GoOutput: filepath.Join(dir, "bridge_generated.go"),
-		GoInput:  mainPath,
-		BaseDir:  dir,
+		GoOutput:   filepath.Join(dir, "bridge_generated.go"),
+		DartOutput: filepath.Join(dir, "dart", "bridge_generated.dart"),
+		GoInput:    mainPath,
+		BaseDir:    dir,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

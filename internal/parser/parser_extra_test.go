@@ -1,6 +1,7 @@
-﻿package parser
+package parser
 
 import (
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,18 @@ import (
 
 	"github.com/star4277/flutter_go_bridge/internal/model"
 )
+
+func TestSourcePositionLessOrdersFilesBeforeTokenBases(t *testing.T) {
+	if !sourcePositionLess(`C:\fixture\a.go`, token.Pos(100), `C:\fixture\z.go`, token.Pos(1)) {
+		t.Fatal("source filename must determine cross-file declaration order")
+	}
+	if sourcePositionLess(`C:\fixture\z.go`, token.Pos(1), `C:\fixture\a.go`, token.Pos(100)) {
+		t.Fatal("later source filename must not sort before an earlier one")
+	}
+	if !sourcePositionLess(`C:\fixture\a.go`, token.Pos(1), `C:\fixture\a.go`, token.Pos(2)) {
+		t.Fatal("token position must determine declaration order within one source file")
+	}
+}
 
 func TestParseInterfaceMethodDirectives(t *testing.T) {
 	dir := t.TempDir()

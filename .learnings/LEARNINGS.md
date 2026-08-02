@@ -1,5 +1,37 @@
 # Learnings
 
+## [LRN-20260802-004] correction
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+
+Dart `library` declarations belong to the plugin public entrypoint, not every generated bridge implementation file.
+
+### Details
+
+Flutter app projects do not need a named `library` declaration. Plugin projects already receive `library <plugin_name>;` from `template/shared/plugin/lib/REPLACE_ME_DART_PACKAGE_NAME.dart`, which exports the generated bridge. The generator's central `bridge_generated.dart` is shared by both project types and must not hardcode `library flutter_go_bridge;`.
+
+### Suggested Action
+
+Keep project-type-specific Dart package declarations in the integration templates. Generate the internal bridge implementation without a named library directive.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: internal/generator/render_dart_split.go, template/shared/plugin/lib/REPLACE_ME_DART_PACKAGE_NAME.dart
+- Tags: dart, plugin, app, codegen
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: The analyzer cleanup preserves the plugin entrypoint declaration and removes the hardcoded central declaration.
+
+---
+
 ## [LRN-20260802-003] correction
 
 **Logged**: 2026-08-02T23:20:00+09:00

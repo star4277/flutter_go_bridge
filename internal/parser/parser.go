@@ -144,15 +144,30 @@ func Parse(options Options) (*model.API, error) {
 	api.Callables = kept
 
 	sort.SliceStable(api.Callables, func(i, j int) bool {
-		return api.Callables[i].Position < api.Callables[j].Position
+		return sourcePositionLess(
+			api.Callables[i].SourceFile, api.Callables[i].Position,
+			api.Callables[j].SourceFile, api.Callables[j].Position,
+		)
 	})
 	for _, constants := range api.Constants {
 		sort.SliceStable(constants, func(i, j int) bool {
-			return constants[i].Position < constants[j].Position
+			return sourcePositionLess(
+				pkg.Fset.Position(constants[i].Position).Filename, constants[i].Position,
+				pkg.Fset.Position(constants[j].Position).Filename, constants[j].Position,
+			)
 		})
 	}
 	sort.Strings(api.SourceFiles)
 	return api, nil
+}
+
+func sourcePositionLess(leftFile string, leftPosition token.Pos, rightFile string, rightPosition token.Pos) bool {
+	leftFile = filepath.ToSlash(filepath.Clean(leftFile))
+	rightFile = filepath.ToSlash(filepath.Clean(rightFile))
+	if leftFile != rightFile {
+		return leftFile < rightFile
+	}
+	return leftPosition < rightPosition
 }
 
 func collectFile(api *model.API, file *ast.File, sourceFile string) error {

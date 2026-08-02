@@ -1,5 +1,322 @@
 # Errors
 
+## [ERR-20260802-014] generator-test-polluted-worktree
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+`TestGenerateMainPackageDirect` omitted `DartOutput`, so full tests overwrote tracked Dart files in the generator package.
+
+### Error
+
+```text
+M internal/generator/bridge_generated.dart
+M internal/generator/main.dart
+git diff --check: new blank line at EOF
+```
+
+### Context
+
+- Operation: final worktree review after the full suite and coverage gate.
+- An empty configured Dart output resolves to relative `bridge_generated.dart`, and mirrored `main.go` resolves to `main.dart` in the test process working directory.
+- A composed review command continued after `git diff --check`, so its later successful diff output masked the nonzero check status.
+
+### Suggested Fix
+
+Every successful generation test must route all outputs into `t.TempDir()`. Run `git diff --check` as an authoritative standalone gate.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/generate_err_test.go, internal/generator/bridge_generated.dart, internal/generator/main.dart
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: Added a temporary Dart output path, restored the overwritten tracked files, and reran the standalone diff check.
+
+---
+
+## [ERR-20260802-013] smoke-patch-after-format
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first smoke simplification patch used the pre-format source layout after `dart format` had rewritten the file.
+
+### Error
+
+```text
+apply_patch verification failed: Failed to find expected lines in D:\Projects\clash_ui\build\dart_analyze_smoke\smoke.dart
+```
+
+### Context
+
+- Operation: remove the nonterminating stream call from the smoke fixture.
+- The formatter had wrapped the error and output strings since the file was created.
+
+### Suggested Fix
+
+Re-read generated or formatted files before applying follow-up patches, as required by the feature-development workflow.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: D:\Projects\clash_ui\build\dart_analyze_smoke\smoke.dart
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: Reapplied the simplification against the formatted source.
+
+---
+
+## [ERR-20260802-012] nonterminating-stream-smoke
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first real-project smoke test used an intentionally nonterminating Go ticker stream and did not exit within the command timeout.
+
+### Error
+
+```text
+command timed out after 124023 milliseconds
+```
+
+### Context
+
+- Operation: initialize the generated DLL, call `getMihomoVersion()`, then await `streamTime(...).first`.
+- `go/api/timer.go` loops forever and has no context or cancellation branch.
+- The timed-out Dart process tree was identified by the smoke script command line and terminated.
+
+### Suggested Fix
+
+Use a terminating public call for this analyzer-focused smoke. Test the infinite stream separately only after the API exposes a cancellation-aware implementation.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: D:\Projects\clash_ui\go\api\timer.go, D:\Projects\clash_ui\build\dart_analyze_smoke\smoke.dart
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: The smoke now validates DLL initialization and the synchronous structured `getMihomoVersion()` CST/DCO call.
+
+---
+
+## [ERR-20260802-011] parser-ordering-patch-context
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first deterministic-ordering patch assumed a different import block shape in `parser_extra_test.go`.
+
+### Error
+
+```text
+apply_patch verification failed: Failed to find expected lines in internal/parser/parser_extra_test.go
+```
+
+### Context
+
+- Operation: add stable cross-file position ordering and its regression test.
+- The combined patch was rejected before changing either file.
+
+### Suggested Fix
+
+Patch production code and tests separately after reading the exact test imports.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: internal/parser/parser.go, internal/parser/parser_extra_test.go
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: Applied the source and test patches against exact contexts.
+
+---
+
+## [ERR-20260802-010] generated-output-non-idempotent
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+Back-to-back generation of the real `clash_ui` API changes the generated Go bridge and every generated Dart API file.
+
+### Error
+
+```text
+NON_IDEMPOTENT
+D:\Projects\clash_ui\go\bridge_generated.go
+D:\Projects\clash_ui\lib\src\bridge_generated.dart
+D:\Projects\clash_ui\lib\src\_generated.dart
+D:\Projects\clash_ui\lib\src\api\*.dart
+```
+
+### Context
+
+- Operation: required second-generation hash gate after analyzer cleanup.
+- `go/internal/fgb/fgb_generated.go` remained stable, while model-dependent output changed.
+- This suggests unstable parser or generator ordering rather than formatter-only drift.
+
+### Suggested Fix
+
+Diff consecutive snapshots, identify the unordered declaration/type source, sort it before assigning generated IDs, and add a deterministic-generation regression test.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/parser/, internal/generator/, D:\Projects\clash_ui\go\api\
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: Parser ordering now sorts by normalized source filename before within-file token position. Two consecutive real-project generations produced identical hashes for all 18 generated files.
+
+---
+
+## [ERR-20260802-009] idempotency-hash-wrong-workdir
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The first idempotency hash check resolved generated-project paths against the generator repository and printed a false success marker.
+
+### Error
+
+```text
+Get-ChildItem: Cannot find path '...flutter-go-bridge-gokit\lib\'
+Resolve-Path: Cannot find path '...flutter-go-bridge-gokit\go\bridge_generated.go'
+IDEMPOTENT_GENERATION_OK
+```
+
+### Context
+
+- Operation: compare `D:\Projects\clash_ui` generated file hashes across a second generation.
+- Relative paths were evaluated from the generator repository working directory.
+- PowerShell path errors were non-terminating, so the empty comparison set reached the success marker.
+
+### Suggested Fix
+
+Build an explicit absolute file list under the generated project, set `ErrorActionPreference = 'Stop'`, and reject an empty path set before comparing hashes.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: D:\Projects\clash_ui\lib\src\, D:\Projects\clash_ui\go\bridge_generated.go
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: The idempotency gate is rerun with absolute paths and terminating errors.
+
+---
+
+## [ERR-20260802-008] lint-doc-test-patch-context
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+A combined test-and-documentation patch used a guessed test function as its insertion context.
+
+### Error
+
+```text
+apply_patch verification failed: Failed to find expected lines in internal/generator/render_split_coverage_test.go
+```
+
+### Context
+
+- Operation: add escaping coverage and bilingual analyzer-output documentation.
+- The guessed `TestSourceDartPathFallbacks` function does not exist in the coverage test file.
+
+### Suggested Fix
+
+Read the target test file and anchor additions to an existing function before applying multi-file patches.
+
+### Metadata
+
+- Reproducible: no
+- Related Files: internal/generator/render_split_coverage_test.go, docs/guide/output-structure.md
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: Reapplied the change against the actual final test function.
+
+---
+
+## [ERR-20260802-007] combined-repository-scan-assumed-example-directory
+
+**Logged**: 2026-08-02T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+A combined repository scan returned a failing status because it included the nonexistent `example/` directory.
+
+### Error
+
+```text
+rg: example: The system cannot find the file specified. (os error 2)
+```
+
+### Context
+
+- Operation: discover analyzer and generation commands before diagnosing generated Dart output.
+- The useful searches completed, but the guessed optional path made the combined probe fail.
+
+### Suggested Fix
+
+Use `rg --files` to discover repository directories first, and search only paths that exist.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/, docs/
+- See Also: ERR-20260802-004, ERR-20260802-001
+
+### Resolution
+
+- **Resolved**: 2026-08-02T00:00:00+08:00
+- **Notes**: Subsequent inspection uses the discovered repository paths.
+
+---
+
 ## [ERR-20260802-005] generated-stream-rollback-assertion
 
 **Logged**: 2026-08-02T23:14:00+09:00

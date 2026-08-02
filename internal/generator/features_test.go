@@ -84,6 +84,43 @@ func generateFixture(t *testing.T, source string, setup ...func(dir string)) (ap
 		result.Warnings, nil
 }
 
+func TestGeneratedDartUsesLintCleanInternalImplementation(t *testing.T) {
+	_, central, _, _, err := generateFixture(t, `package api
+
+type Item struct {
+	SnakeField int `+"`json:\"snake_field\"`"+`
+}
+
+func RoundTrip(item Item) Item { return item }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, unwanted := range []string{
+		"library flutter_go_bridge;",
+		"external int snake_field;",
+		" fgbCstEncode",
+		`path + ".snake_field"`,
+		"if (depth > 64) throw FormatException",
+		"for (var index = 0; index < result.length; index++) result[index] = int32();",
+	} {
+		if strings.Contains(central, unwanted) {
+			t.Fatalf("generated Dart contains lint-producing source %q:\n%s", unwanted, central)
+		}
+	}
+	for _, expected := range []string{
+		"external int snakeField;",
+		"_fgbCstEncode",
+		"if (depth > 64) {",
+		"'$path.snake_field'",
+	} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("generated Dart missing lint-clean source %q:\n%s", expected, central)
+		}
+	}
+}
+
 func TestGenerateStructFieldTags(t *testing.T) {
 	apiDart, _, goSource, _, err := generateFixture(t, `package api
 
