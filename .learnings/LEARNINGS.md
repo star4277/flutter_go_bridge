@@ -263,3 +263,30 @@ Keep `.codecov.yml` ignore rules for uploaded paths, and separately build the Go
 - **Notes**: The workflow now passes an explicitly filtered package array to `go test`.
 
 ---
+
+## [LRN-20260802-TIME] correction
+
+**Logged**: 2026-08-02T11:15:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Map `time.Time` to Dart `DateTime` with signed Unix microseconds instead of RFC3339 text.
+
+### Details
+`DateTime` has microsecond precision and exposes `microsecondsSinceEpoch` plus `DateTime.fromMicrosecondsSinceEpoch`. An integer wire value preserves the instant without RFC3339 parsing or offset normalization bugs and lets the CST path use a native `int64`. Go sub-microsecond nanoseconds and the original location are not representable by Dart `DateTime` and are therefore intentionally not preserved.
+
+### Suggested Action
+Use `time.Time.UnixMicro`/`time.UnixMicro` in generated Go and `DateTime.microsecondsSinceEpoch`/`DateTime.fromMicrosecondsSinceEpoch` in generated Dart. Document the precision and location boundary.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/render_go.go, internal/generator/render_go_cst.go, internal/generator/render_dart_split.go, internal/generator/render_dart_cst.go
+- Tags: time, datetime, serialization, timezone, cst
+
+### Resolution
+- **Resolved**: 2026-08-02T11:15:00+08:00
+- **Notes**: Generator codecs and type-mapping documentation now use Unix microseconds.
+
+---
