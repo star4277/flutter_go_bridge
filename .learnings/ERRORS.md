@@ -38,6 +38,72 @@ Assert the distinctive formatted sequence containing `transfer.rollback()` follo
 
 ---
 
+## [ERR-20260802-COV01] powershell-go-cover-arguments
+
+**Logged**: 2026-08-02T11:10:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+An unquoted PowerShell `go test` coverage argument produced a spurious `.out` package.
+
+### Error
+```text
+FAIL .out [setup failed]
+no required module provides package .out
+```
+
+### Context
+- Operation: aggregate coverage for all packages except `cmd/**` and `template/**`.
+- The command used `go test -count=1 -coverprofile=build/coverage.out $packages` instead of the repository skill's explicitly quoted native arguments.
+- Every real package completed, but the aggregate command correctly remained failed.
+
+### Suggested Fix
+Pass PowerShell native arguments separately and quoted: `& go test '-count=1' '-coverprofile' $profile @packages`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: build/coverage.out
+
+### Resolution
+- **Resolved**: 2026-08-02T11:10:00+08:00
+- **Notes**: The coverage gate will be rerun with the documented PowerShell invocation.
+
+---
+
+## [ERR-20260802-RG01] powershell-rg-glob
+
+**Logged**: 2026-08-02T11:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+PowerShell passed a wildcard path literally to `rg`, causing a Windows path syntax error.
+
+### Error
+```text
+rg: internal/generator/*_test.go: IO error for operation on internal/generator/*_test.go
+```
+
+### Context
+- Operation: parallel search of generator tests for `time.Time` coverage.
+- Command used `rg ... internal/generator/*_test.go` from PowerShell.
+
+### Suggested Fix
+Search the directory directly (`rg ... internal/generator`) or let PowerShell expand files before invoking `rg`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: internal/generator/*_test.go
+
+### Resolution
+- **Resolved**: 2026-08-02T11:05:00+08:00
+- **Notes**: Re-running searches against the directory avoids shell wildcard handling.
+
+---
+
 ## [ERR-20260802-004] audit-round2-example-path
 
 **Logged**: 2026-08-02T23:06:00+09:00
@@ -762,5 +828,109 @@ Capture `Select-String` output in a variable and branch on whether the result is
 
 - **Resolved**: 2026-08-01T00:00:00+08:00
 - **Notes**: Replaced the combined check with independent read-only commands that do not use `$LASTEXITCODE` for PowerShell cmdlet state.
+
+---
+## [ERR-20260802-006] diagnostic-parallel-git-probe
+
+**Logged**: 2026-08-02T11:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+A parallel diagnostic probe aborted because it assumed the discovered Flutter application directory was a Git repository.
+
+### Error
+
+```text
+fatal: not a git repository (or any of the parent directories): .git
+Script error: Exit code: 1
+```
+
+### Context
+
+- Operation: inspect Git state, Stream usage, and project files under `D:\Projects\clash_ui` in parallel.
+- The application directory exists and is running, but it has no `.git` directory.
+- The rejected Git command caused the composed parallel tool call to return before the useful file scans were reported.
+
+### Suggested Fix
+
+Test for `.git` before invoking Git in a newly discovered project, and keep optional repository metadata probes separate from source-file diagnostics.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .learnings/ERRORS.md
+
+### Resolution
+
+- **Resolved**: 2026-08-02T11:00:00+08:00
+- **Notes**: Continued with repository-independent file inspection and treated Git metadata as optional.
+
+---
+
+## [ERR-20260802-MOD01] go-run-cross-module
+
+**Logged**: 2026-08-02T11:16:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The integration fixture attempted to run the codegen package from the fixture's separate Go module.
+
+### Error
+```text
+directory ..\..\cmd\flutter_go_bridge_codegen outside main module or its selected dependencies
+stat ...\build\time_fixture\cmd\flutter_go_bridge_codegen: directory not found
+```
+
+### Context
+- Operation: invoke the repository CLI against an ignored integration fixture under `build/time_fixture`.
+- `go run` resolves package paths in the current module, so changing into the fixture before running the repository command crossed module boundaries.
+
+### Suggested Fix
+Run `go run ./cmd/flutter_go_bridge_codegen` from the repository module with an absolute config path, then run fixture build/analyze commands from the fixture directory.
+
+### Metadata
+- Reproducible: yes
+- Related Files: cmd/flutter_go_bridge_codegen, build/time_fixture/go.mod
+
+### Resolution
+- **Resolved**: 2026-08-02T11:16:00+08:00
+- **Notes**: Split code generation and fixture validation into commands with the correct module working directory.
+
+---
+
+## [ERR-20260802-PATCH01] docs-context-mismatch
+
+**Logged**: 2026-08-02T11:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+A bilingual documentation patch assumed wording that differed from the Chinese page.
+
+### Error
+```text
+apply_patch verification failed: Failed to find expected lines in docs/zh/reference/type-mapping.md
+```
+
+### Context
+- Operation: add the `time.Time` wire-format migration note to both language variants.
+- The Chinese UUID and pointer-transition text did not match the assumed context.
+
+### Suggested Fix
+Read both exact table tails before applying a multi-file bilingual documentation patch.
+
+### Metadata
+- Reproducible: no
+- Related Files: docs/reference/type-mapping.md, docs/zh/reference/type-mapping.md
+
+### Resolution
+- **Resolved**: 2026-08-02T11:20:00+08:00
+- **Notes**: Reapplied the note using the exact text from each page.
 
 ---
