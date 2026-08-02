@@ -373,3 +373,13 @@ bun run build
 
 生成 codec 还引用或遵循部分第三方组件的许可，详见
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+
+## Star 历史
+
+<a href="https://www.star-history.com/?repos=star4277%2Fflutter_go_bridge&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=star4277/flutter_go_bridge&type=date&theme=dark&legend=top-left&sealed_token=ntAVkzoAipnCqu0fF5eSnrqgSH6664QfHmXBikwXOX-CgEG9899ZalyZnHAVHUQZBCM_j6q6_c7xuZ5Eno9QPsXyzbm733barobb5HlJE3FFNOKo08pW3g" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=star4277/flutter_go_bridge&type=date&legend=top-left&sealed_token=ntAVkzoAipnCqu0fF5eSnrqgSH6664QfHmXBikwXOX-CgEG9899ZalyZnHAVHUQZBCM_j6q6_c7xuZ5Eno9QPsXyzbm733barobb5HlJE3FFNOKo08pW3g" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=star4277/flutter_go_bridge&type=date&legend=top-left&sealed_token=ntAVkzoAipnCqu0fF5eSnrqgSH6664QfHmXBikwXOX-CgEG9899ZalyZnHAVHUQZBCM_j6q6_c7xuZ5Eno9QPsXyzbm733barobb5HlJE3FFNOKo08pW3g" />
+ </picture>
+</a>
