@@ -246,6 +246,9 @@ dispose，但如果业务把 callback 存在全局变量中，它会一直保留
 - 如果 Dart 永远不完成返回的 Future，对应 Go goroutine 会一直等待。
 
 业务需要超时时，应在 Dart 闭包内部对 Future 使用 timeout，或在 Go 业务协议中设计取消机制。
+每个 async bridge 调用都会持有一个调用级 Go context，并传给该调用解码出的 callback。Stream 取消、
+isolate 退休或调用取消会唤醒对应 waiter；callback 请求投递失败也只影响当前 callback，不会清空无关
+的 opaque handle。
 
 ## 初始化要求
 
@@ -257,6 +260,10 @@ initialize 入口打开，Go 调用 callback 时会得到“callback port is not
 
 Dart 闭包属于创建它的 isolate。hot restart 会销毁旧 isolate 及其闭包 registry；runtime 会让旧
 callback 立即失效并唤醒其 waiter。应用恢复后应重新调用注册 API，把新 isolate 的闭包交给 Go。
+
+同一个已加载的 bridge 动态库同一时刻只支持一个 attach 的 Dart isolate。另一个 isolate 调用
+initialize 会退休上一代 attachment。worker isolate 若要使用 bridge，应通过 Dart 消息把请求转发给
+已 attach 的 isolate，而不是在两个 isolate 中分别 initialize。
 
 对于需要长期订阅且经常 hot restart 的开发流程，建议提供显式 `Register/Clear` 或
 `Subscribe/Unsubscribe` API，并在应用初始化时重新注册。

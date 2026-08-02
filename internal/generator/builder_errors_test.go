@@ -24,16 +24,19 @@ func Use(a context.Context, b context.Context) {}
 	requireError(t, err, "only one context.Context")
 }
 
-// TestGenerateAtomicInCollectionParameterRejected drives mapCallable's
-// atomic-inside-a-collection parameter guard.
-func TestGenerateAtomicInCollectionParameterRejected(t *testing.T) {
-	_, _, _, _, err := generateFixture(t, `package api
+func TestGenerateAtomicInCollectionParameterUsesSyntheticOpaque(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
 
 import "sync/atomic"
 
 func Use(flags []atomic.Int64) {}
 `)
-	requireError(t, err, "contains atomic values inside a collection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "AtomicInt64Slice?") || len(warnings) == 0 {
+		t.Fatalf("atomic slice parameter should use a warned synthetic opaque: %s warnings=%v", apiDart, warnings)
+	}
 }
 
 // TestGenerateAtomicByValueParameterRejected drives mapCallable's must-be-
@@ -48,16 +51,19 @@ func Use(flag atomic.Int64) {}
 	requireError(t, err, "must be passed by pointer")
 }
 
-// TestGenerateAtomicInCollectionResultRejected drives mapCallable's
-// atomic-inside-a-collection result guard.
-func TestGenerateAtomicInCollectionResultRejected(t *testing.T) {
-	_, _, _, _, err := generateFixture(t, `package api
+func TestGenerateAtomicInCollectionResultUsesSyntheticOpaque(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
 
 import "sync/atomic"
 
 func Use() ([]atomic.Int64, error) { return nil, nil }
 `)
-	requireError(t, err, "contains atomic values inside a collection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "AtomicInt64Slice?") || len(warnings) == 0 {
+		t.Fatalf("atomic slice result should use a warned synthetic opaque: %s warnings=%v", apiDart, warnings)
+	}
 }
 
 // TestGenerateRecvOnlyChannelRejected drives mapChannelStream's direction guard.

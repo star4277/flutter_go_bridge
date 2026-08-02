@@ -183,8 +183,17 @@ wire 上扁平化。
 
 识别依据是行为和包名，不只硬编码标准库类型：包名必须是 `atomic`，pointer method set 中必须存在
 匹配的 `Load`/`Store`。atomic 值按一次快照传输，不会让 Dart 和 Go 共享原子变量。
-生成 codec 内部使用指针，避免复制 `sync/atomic` 的 `noCopy` 状态。因此包含 atomic 值的函数入参
-必须使用指针；slice、map 或 array 中的 atomic 值会因为元素赋值需要复制而被拒绝。
+生成 codec 内部使用指针，避免复制 `sync/atomic` 的 `noCopy` 状态。直接 atomic 值或含 atomic 的
+结构体不能按值作为参数或返回值，必须使用指针。
+
+若一个 value struct 字段按值嵌套了含 atomic 的结构体，外层结构体会退化为 `GoOpaque` 并给出 warning，
+避免复制锁状态。元素含 atomic 的 slice/map 也会生成合成 `GoOpaque` token；例如
+`[]atomic.Int64` 生成 `AtomicInt64Slice extends GoOpaque`。这类 token 没有字段和方法，Dart 只能保存并
+传回 Go。含 atomic 的 array 仍不支持，因为返回 array 本身就会复制元素；应改用 slice 或显式 opaque
+的命名包装类型。
+
+每次 GoOpaque 跨界都会得到独立 handle。编码或消息投递失败时，runtime 只回滚本次传输新建的
+handles，不会影响其他调用仍存活的 handles。
 
 ## error
 

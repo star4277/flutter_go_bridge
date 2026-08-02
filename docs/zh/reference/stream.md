@@ -373,6 +373,10 @@ handle 又会从 1 开始，如果只按 handle 路由，旧生产者可能把�
 
 因此 Stream 事件不会跨 hot restart 泄漏，但业务 goroutine仍应响应 context 或关闭错误，才能及时退出。
 
+Stream、callback、DartOpaque release 和 Go opaque handle 共用同一次原子 attach generation。同一个
+已加载的动态库同一时刻只支持一个 attach 的 Dart isolate；另一个 isolate attach 会退休上一代。
+worker isolate 应通过 Dart 消息把请求转发到已 attach 的 isolate。
+
 ## 类型与签名限制
 
 - 必须是 `//fgb:async`；
@@ -414,4 +418,3 @@ handle 又会从 1 开始，如果只按 handle 路由，旧生产者可能把�
 | Dart 没收到数据 | 确认 Go-owned Stream 已被监听；冷流在订阅前不会启动 |
 | Stream 一直不结束 | 确认调用 `Close`、外层 channel 函数已返回，或没有仍被持有的 sink |
 | 取消后 goroutine 仍运行 | Go 代码没有检查 `ctx.Done()` 或 `Add` 错误 |
-

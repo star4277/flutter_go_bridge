@@ -122,8 +122,9 @@ func TestCreateFailsWhenFlutterCreateFails(t *testing.T) {
 // meaningful on platforms where the OS reports the removed dir.
 func TestCreateFailsWhenLibRemovalFails(t *testing.T) {
 	stubCreateCommands(t, func(t *testing.T, dir string) {
-		// A scaffold with no lib/ so removeUnnecessaryAppFiles errors.
+		// A malformed scaffold where lib is a file makes os.ReadDir fail.
 		writeFile(t, filepath.Join(dir, "pubspec.yaml"), "name: nolib\n")
+		writeFile(t, filepath.Join(dir, "lib"), "not a directory\n")
 	})
 	workDir := t.TempDir()
 
@@ -137,8 +138,8 @@ func TestCreateFailsWhenLibRemovalFails(t *testing.T) {
 
 func TestRemoveUnnecessaryAppFilesMissingLib(t *testing.T) {
 	dir := t.TempDir()
-	if err := removeUnnecessaryAppFiles(dir); err == nil {
-		t.Fatal("removeUnnecessaryAppFiles on a dir without lib/ should error")
+	if err := removeUnnecessaryAppFiles(dir); err != nil {
+		t.Fatalf("missing optional scaffold directories should be ignored: %v", err)
 	}
 }
 
@@ -161,9 +162,8 @@ func TestRemoveUnnecessaryAppFilesRemovesScaffold(t *testing.T) {
 func TestRemoveUnnecessaryPluginFilesMissingExampleLib(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "lib", "app.dart"), "x\n")
-	// No example/ dir: removeFilesInDir(example/lib) should error.
-	if err := removeUnnecessaryPluginFiles(dir); err == nil {
-		t.Fatal("plugin removal without example/lib should error")
+	if err := removeUnnecessaryPluginFiles(dir); err != nil {
+		t.Fatalf("missing optional example/lib should be ignored: %v", err)
 	}
 }
 
@@ -186,8 +186,8 @@ func TestRemovePluginWhenSrcAndFfigenAndPlatformsAbsent(t *testing.T) {
 }
 
 func TestRemoveFilesInDirMissingDir(t *testing.T) {
-	if err := removeFilesInDir(filepath.Join(t.TempDir(), "missing")); err == nil {
-		t.Fatal("removeFilesInDir on a missing dir should error")
+	if err := removeFilesInDir(filepath.Join(t.TempDir(), "missing")); err != nil {
+		t.Fatalf("missing directories should be idempotent: %v", err)
 	}
 }
 
@@ -211,9 +211,8 @@ func TestRemoveClassesDir(t *testing.T) {
 }
 
 func TestRemoveClassesDirMissing(t *testing.T) {
-	// removeFilesInDir(Classes) on a missing dir errors first.
-	if err := removeClassesDir(filepath.Join(t.TempDir(), "platform")); err == nil {
-		t.Fatal("removeClassesDir on a platform dir without Classes should error")
+	if err := removeClassesDir(filepath.Join(t.TempDir(), "platform")); err != nil {
+		t.Fatalf("missing platform directories should be idempotent: %v", err)
 	}
 }
 
@@ -589,9 +588,8 @@ func TestPubAddDependenciesRootIntegrationTestFails(t *testing.T) {
 
 func TestRemoveUnnecessaryPluginFilesMissingLib(t *testing.T) {
 	dir := t.TempDir()
-	// No lib/ dir at all: removeFilesInDir(lib) errors up front.
-	if err := removeUnnecessaryPluginFiles(dir); err == nil {
-		t.Fatal("plugin removal without lib/ should error")
+	if err := removeUnnecessaryPluginFiles(dir); err != nil {
+		t.Fatalf("missing optional plugin directories should be ignored: %v", err)
 	}
 }
 
@@ -611,9 +609,9 @@ func TestRunFailsOnBadPubspecYaml(t *testing.T) {
 
 func TestCreatePluginFailsWhenRemovalFails(t *testing.T) {
 	stubCreateCommands(t, func(t *testing.T, dir string) {
-		// Scaffold with lib but no example/lib => removeUnnecessaryPluginFiles errors.
+		// A malformed scaffold where lib is a file makes os.ReadDir fail.
 		writeFile(t, filepath.Join(dir, "pubspec.yaml"), "name: noplug\n")
-		writeFile(t, filepath.Join(dir, "lib", "noplug.dart"), "x\n")
+		writeFile(t, filepath.Join(dir, "lib"), "not a directory\n")
 	})
 	workDir := t.TempDir()
 

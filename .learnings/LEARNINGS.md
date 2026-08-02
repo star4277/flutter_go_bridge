@@ -1,5 +1,91 @@
 # Learnings
 
+## [LRN-20260802-003] correction
+
+**Logged**: 2026-08-02T23:20:00+09:00
+**Priority**: medium
+**Status**: resolved
+**Area**: config
+
+### Summary
+
+Audit reports moved out of the worktree are intentionally excluded from an "all files" commit.
+
+### Details
+
+The user moved `CODE_AUDIT.md` and `CODE_AUDIT_ROUND2.md` out of the repository specifically so they would not be committed. Their absence is deliberate and must not be treated as a missing artifact to restore.
+
+### Suggested Action
+
+When committing all current changes, use the current worktree as the source of truth and do not recreate files the user deliberately removed before staging.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: CODE_AUDIT.md, CODE_AUDIT_ROUND2.md
+- Tags: git, staging, user-intent
+
+### Resolution
+
+- **Resolved**: 2026-08-02T23:20:00+09:00
+- **Notes**: The reports remain outside the worktree and are excluded from the commit.
+
+---
+
+## [LRN-20260802-002] correction
+
+**Logged**: 2026-08-02T10:55:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+
+Recursive atomic-state checks must be resolved before runtime lifecycle fixes because wrappers can bypass outer-kind guards and make generated Go uncompilable.
+
+### Details
+
+The updated round-two audit added N15: `containsAtomic` recurses through pointers and named types, but builder rejection switched only on the mapped type's outer `Kind`. A named or pointer-wrapped atomic collection therefore bypasses the guard, while `usesPointerCodec` still changes the element codec signature. The generated collection copies atomic elements and passes values to pointer-taking encoders, so it fails compilation and `go vet` despite generator unit tests passing.
+
+### Suggested Action
+
+When a generator invariant is recursive, enforce it with a recursive blocker/result rather than an outer-kind switch. Add generated-module `go vet` fixtures for named, pointer-wrapped, and anonymous collection shapes before continuing lower-priority runtime work.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: CODE_AUDIT_ROUND2.md, internal/generator/builder.go, internal/generator/model.go
+- Tags: atomic, codegen, copylocks, regression-test
+- See Also: LRN-20260801-002, LRN-20260801-003
+
+---
+
+## [LRN-20260802-001] knowledge_gap
+
+**Logged**: 2026-08-02T09:40:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+
+The bridge has two unrelated 30-second timeouts, and the one that cuts long-lived streams is the Dart-side call timeout, not the callback timeout.
+
+### Details
+
+`fgbCallbackTimeout` bounds how long Go waits for a Dart closure to reply. Separately, `fgbInvokeCstAsync` and `_asyncBytes` wrapped `await port.first` in `.timeout(Duration(seconds: 30))`, which bounds the *whole Go call*. A long-running `//fgb:async` stream producer hits the second one: the Future throws, `fgbInternalStartStream`'s onError closes the controller, and the stream disconnects at 30s. The same timeout also lets the generated `finally { arena.close(); }` free the CST argument arena while a Go worker is still reading it.
+
+### Suggested Action
+
+Never bound a whole bridge call by wall clock — a legitimate Go call may run for minutes. Use the allocation-failure sentinel for the "reply can never arrive" case, and a call-scoped context for cancellation. When diagnosing a stream that dies on a fixed schedule, check the call-level timeout before the callback timeout.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: internal/generator/dart_runtime.go, internal/generator/render_dart_cst.go, CODE_AUDIT_ROUND2.md
+- Tags: timeout, stream, use-after-free, ffi
+
+---
 ## [LRN-20260801-003] best_practice
 
 **Logged**: 2026-08-01T12:30:00+09:00

@@ -179,10 +179,7 @@ func removeUnnecessaryPluginFiles(dartRoot string) error {
 // first, then the top-level files (podspec etc.).
 func removeClassesDir(platformDir string) error {
 	classesDir := filepath.Join(platformDir, "Classes")
-	if err := removeFilesInDir(classesDir); err != nil {
-		return err
-	}
-	if err := os.Remove(classesDir); err != nil {
+	if err := os.RemoveAll(classesDir); err != nil {
 		return err
 	}
 	return removeFilesInDir(platformDir)
@@ -193,6 +190,9 @@ func removeClassesDir(platformDir string) error {
 func removeFilesInDir(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return err
 	}
 	for _, entry := range entries {

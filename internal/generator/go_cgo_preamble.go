@@ -3,8 +3,9 @@ package generator
 // goCgoPreambleSource is embedded directly in the generated Go file.  This
 // keeps the codegen output to one bridge_generated.go while still using the
 // Dart API DL C ABI needed by fgb_async and NativeFinalizer.  The helpers are
-// static and stateless so cgo may include the preamble in more than one C
-// translation unit without creating duplicate global state.
+// static so cgo may include the preamble in its generated C translation unit
+// without exporting helper symbols. Apple finalizer drops share one worker and
+// queue within that generated unit.
 const goCgoPreambleSource = `
 #include <stdbool.h>
 #include <stdint.h>
@@ -303,6 +304,7 @@ static size_t fgb_drop_head, fgb_drop_tail;
 static pthread_mutex_t fgb_drop_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t fgb_drop_cond = PTHREAD_COND_INITIALIZER;
 static pthread_once_t fgb_drop_once = PTHREAD_ONCE_INIT;
+static int fgb_drop_worker_ready = 0;
 
 static void* fgb_drop_worker(void* unused) {
   (void)unused;
@@ -322,11 +324,16 @@ static void fgb_drop_start(void) {
   pthread_t thread;
   if (pthread_create(&thread, NULL, fgb_drop_worker, NULL) == 0) {
     pthread_detach(thread);
+    fgb_drop_worker_ready = 1;
   }
 }
 
 static void fgb_drop_impl(void* handle) {
   pthread_once(&fgb_drop_once, fgb_drop_start);
+  if (!fgb_drop_worker_ready) {
+    fgb_internal_drop_go(handle);
+    return;
+  }
   pthread_mutex_lock(&fgb_drop_mutex);
   size_t next = (fgb_drop_tail + 1) % FGB_DROP_QUEUE_CAPACITY;
   if (next == fgb_drop_head) {
