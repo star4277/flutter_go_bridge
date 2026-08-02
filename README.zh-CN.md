@@ -259,7 +259,8 @@ codec 由生成器按调用确定。业务代码只使用公开 Dart API，不�
 ### 结构体与接口
 
 可序列化的 Go 结构体会生成 Dart value class。匿名嵌入结构体映射为 Dart 继承，被提升字段在 wire
-上扁平化。命名 Go 接口会生成 `abstract interface class`，并绑定生成器已发现的 Go 实现集合。
+上扁平化。命名 Go 接口会生成 `abstract interface class`。依赖接口会扫描已加载包图中的导出实现，
+并用 `GoOpaque` fallback 保留生成 Go 无法命名的运行时实现。
 
 不能按字段序列化或需要保持 Go 端状态的类型可以显式声明：
 

@@ -172,8 +172,10 @@ import 'package:uuid/uuid.dart';
 `//fgb:opaque` 会使结构体使用 `GoOpaque`。匿名嵌入值结构体会映射为 Dart `extends`，被提升字段在
 wire 上扁平化。
 
-命名非空接口使用 `[实现序号, 载荷]` 的 tagged union，并走 standard codec。完整分类、继承、实现
-发现和限制见[结构体与接口](/zh/reference/structs-interfaces)。
+命名非空接口使用 `[实现序号, 载荷]` 的 tagged union，并走 standard codec。输入包接口会暴露生成
+方法；可达依赖接口只作为 marker，并从已加载依赖图中发现导出的命名结构体实现。生成 Go 无法命名
+的运行时实现使用接口级 `GoOpaque` fallback。完整分类、继承、实现发现和限制见
+[结构体与接口](/zh/reference/structs-interfaces)。
 
 ## atomic 包装类型
 

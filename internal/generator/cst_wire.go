@@ -300,7 +300,7 @@ func cstDartArgsDefinition(call *callModel) string {
 func cstForwardDeclarations(unit *unit) string {
 	var b strings.Builder
 	declared := map[int]bool{}
-	for _, typ := range unit.Types {
+	for _, typ := range cstDcoReachableTypes(unit) {
 		base := cstScalarBase(typ)
 		if base != nil && cstDefinitionNeeded(base) && !declared[base.ID] {
 			declared[base.ID] = true
@@ -313,7 +313,7 @@ func cstForwardDeclarations(unit *unit) string {
 		}
 	}
 	defined := map[int]bool{}
-	for _, typ := range unit.Types {
+	for _, typ := range cstDcoReachableTypes(unit) {
 		base := cstScalarBase(typ)
 		if base == nil || defined[base.ID] {
 			continue
@@ -330,7 +330,7 @@ func cstDartDefinitions(unit *unit) string {
 	var b strings.Builder
 	b.WriteString("final class _FgbCstBytes extends ffi.Struct {\n  external ffi.Pointer<ffi.Uint8> ptr;\n  @ffi.Int64() external int len;\n}\n")
 	defined := map[int]bool{}
-	for _, typ := range unit.Types {
+	for _, typ := range cstDcoReachableTypes(unit) {
 		base := cstScalarBase(typ)
 		if base == nil || defined[base.ID] {
 			continue
@@ -346,4 +346,53 @@ func cstDartDefinitions(unit *unit) string {
 		}
 	}
 	return b.String()
+}
+
+// cstDcoReachableTypes returns only parameter, receiver, and result types
+// reachable from calls that actually selected CST/DCO. Interface unions force
+// the whole call onto the standard codec; their concrete implementations must
+// not leak unused codecs or ffi.Struct declarations into generated output.
+func cstDcoReachableTypes(unit *unit) []*wireType {
+	if unit == nil {
+		return nil
+	}
+	reachable := map[int]bool{}
+	var visit func(*wireType)
+	visit = func(typ *wireType) {
+		if typ == nil || reachable[typ.ID] {
+			return
+		}
+		reachable[typ.ID] = true
+		switch typ.Kind {
+		case kindPointer, kindSlice, kindArray, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
+			visit(typ.Elem)
+		case kindStruct:
+			for _, field := range typ.Struct.allFields() {
+				visit(field.Type)
+			}
+		case kindNamed:
+			visit(typ.Named.Underlying)
+		case kindAtomic:
+			visit(typ.Atomic.Value)
+		}
+	}
+	for _, call := range unit.Calls {
+		if !call.usesCstDco() {
+			continue
+		}
+		visit(call.Receiver)
+		for _, param := range call.Params {
+			visit(param.Type)
+		}
+		for _, result := range call.Results {
+			visit(result.Type)
+		}
+	}
+	result := make([]*wireType, 0, len(reachable))
+	for _, typ := range unit.Types {
+		if reachable[typ.ID] {
+			result = append(result, typ)
+		}
+	}
+	return result
 }

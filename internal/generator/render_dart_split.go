@@ -583,6 +583,9 @@ type taggedImplementor struct {
 func sortedImplementors(declaration *interfaceModel) []taggedImplementor {
 	result := make([]taggedImplementor, 0, len(declaration.Implementors))
 	for index, implementor := range declaration.Implementors {
+		if implementor.DecodeOnly {
+			continue
+		}
 		result = append(result, taggedImplementor{implementorModel: implementor, Index: index})
 	}
 	depth := func(item taggedImplementor) int {
@@ -796,7 +799,13 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  switch (value[0]) {")
 		for index, implementor := range typ.Interface.Implementors {
 			r.line("    case %d:", index)
-			r.line("      return fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
+			if strings.HasSuffix(implementor.Type.DartType, "?") {
+				r.line("      final decoded = fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
+				r.line("      if (decoded == null) throw FormatException('$path: nil %s implementation payload');", implementor.DartName)
+				r.line("      return decoded;")
+			} else {
+				r.line("      return fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
+			}
 		}
 		r.line("  }")
 		r.line("  throw FormatException('$path: unknown %s implementation ${value[0]}');", typ.Interface.GoName)
@@ -872,7 +881,6 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.renderStreamSinkRegistration(typ, "bridge")
 	case kindInterface:
 		// Most-derived first: a subclass also passes its superclass check.
-		r.line("  if (value == null) return null;")
 		for _, implementor := range sortedImplementors(typ.Interface) {
 			r.line("  if (value is %s) return <Object?>[%d, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, implementor.Index, implementor.Type.ID)
 		}

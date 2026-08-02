@@ -162,9 +162,11 @@ finalizer 的即时执行来管理文件、socket 等必须确定性关闭的业
 
 - 函数字段或普通 channel 字段；
 - 不支持的字段类型或嵌套指针；
-- 外部包的非空接口字段；
 - 按值包含另一个 opaque 结构体；
 - 声明了字段，但所有字段都未导出或被 tag 排除。
+
+依赖包的命名非空接口通过已发现实现和接口级 opaque fallback 按 tagged union 传输，不会再单独导致
+外层结构体 opaque 退化。
 
 自动退化会给出 warning，并指出阻塞字段。若这本来就是你的设计，添加 `//fgb:opaque` 可以明确
 意图并消除 warning。
@@ -189,13 +191,18 @@ final class Marker {
 但 `struct{ private int }` 或字段全部标记为 ignore 的非空结构体会退化为 opaque，因为它们通常包含
 Dart 无法重建的 Go 状态。这两种情况不能混为一谈。
 
-## 外部包结构体
+## 外部依赖类型
 
 导出 API 直接或间接引用的第三方命名类型也会被分析。可传输的外部结构体会在 `_generated.dart`
 中生成值类；只有私有状态或含不支持字段的外部结构体会生成 opaque handle。
 
 不同包的类型若产生相同 Dart 名称，生成器会添加 Go 包名前缀消除冲突。例如两个 `User` 可能生成
 为 `ModelsUser` 和 `AuthUser`。因此应从生成文件导入类型，不要假定外部类型一定保留短名称。
+
+可达的命名非空接口也会作为 tagged serialization union 分析。生成器会扫描输入 API 已加载的完整依赖图，
+寻找实现该接口的导出命名结构体，并追加一个接口级 `GoOpaque` 成员来保留生成 Go 无法命名的实现。
+依赖接口的方法不会生成 Dart 调用：Dart 接口只作为 marker，具体类负责携带可序列化字段或
+`GoOpaque` handle。
 
 ## 匿名嵌入与 Dart 继承
 
@@ -256,7 +263,7 @@ class Dog extends Animal {
 
 ## 命名接口
 
-输入 Go 包中的命名非空接口会生成 `abstract interface class`：
+命名非空接口会生成 `abstract interface class`。输入 Go 包中的接口还会生成可桥接的方法声明：
 
 ```go
 type Shape interface {
@@ -300,17 +307,24 @@ String describe({required Shape shape}) { /* bridge call */ }
 
 ### 实现类型如何发现
 
-生成器会检查输入包中参与桥接的结构体：
+对于输入包接口，生成器检查输入包中参与桥接的结构体，并按声明顺序保持原有 wire 兼容性。
 
-- `T` 或 `*T` 的 Go method set 满足接口都算实现；
-- value class 也会暴露其 pointer-receiver 方法，因此可实现对应 Dart 接口；
+对于依赖接口，生成器遍历 `go/packages` 已加载的完整依赖图，收集 `T` 或 `*T` method set 满足接口的
+导出、非泛型命名结构体。以下声明不会进入实现集合：名为 `main` 的包、受 Go `internal` 导入规则
+限制而无法由生成 bridge 引用的包、未导出类型、类型别名、非结构体命名类型，以及未实例化的泛型声明。
+这些类型不能作为具名 union 成员，但仍会由最后的接口级 opaque fallback 传输：Go handle registry
+保存接口值本身，运行时注册的新实现也使用同一 fallback。
+
+- value 实现按字段传输；
+- 只有 `*T` 实现接口时，Go 解码会重建指针，Dart 仍看到对应 value class；
+- `T` 和 `*T` 都实现接口时，Go 返回两种动态类型都能映射到同一个 Dart 类；
 - opaque 实现按 `*T` handle 传输；
-- 目前只自动收集输入包中的实现，不扫描所有第三方包；
-- 至少必须有一个已桥接实现，否则生成失败并提示 `no bridged type implements interface ...`。
+- 第三方结构体匿名嵌入指针时会自动退化为 `GoOpaque`，因为 Dart 不能继承可空父类，且无法给依赖类型添加指令；
+- 输入包接口至少必须有一个已桥接实现，否则生成失败并提示 `no bridged type implements interface ...`；
+- 依赖接口始终带有 opaque fallback，即使没有任何可命名的具体实现也能保留并回传 Go 对象。
 
-接口不能包含未导出方法。外部包定义的命名非空接口也不能自动桥接，因为生成器无法建立封闭、可
-验证的实现集合。若只需要动态数据，请使用 `any`；若需要多态 API，请在输入包中定义桥接接口和
-可控的实现类型。
+输入包接口不能包含未导出方法。依赖接口在 Dart 中只作为 marker，不生成其方法；第三方声明没有
+FGB 调用指令，也没有对应的生成调用入口，因此 marker 语义只负责安全序列化具体实现。
 
 ### 接口值的 wire 格式
 
@@ -321,10 +335,12 @@ String describe({required Shape shape}) { /* bridge call */ }
 ```
 
 `implementorIndex` 标识具体实现，`payload` 是该 value struct 的字段数据或 opaque handle。Dart 传入
-不属于已生成实现集合的对象时会抛出 `ArgumentError`；收到未知 tag 会报格式错误。
+不属于已生成实现集合的对象时会抛出 `ArgumentError`；但 Go 先前返回的接口 fallback 对象可以原样
+传回。收到未知 tag 会报格式错误。
 
-实现顺序按 Go 声明位置保持稳定，但 tag 数字仍属于生成协议的内部细节。Go bridge 与 Dart 目录必须
-由同一次生成结果配套发布，不要手写或持久化这些 tag。
+输入包实现按 Go 声明位置保持稳定；依赖实现按完整包路径和 Go 类型名排序。若同一 value 类型的
+`T` 与 `*T` 都能作为 Go 动态实现，Dart → Go 使用值形态作为规范 tag。tag 数字仍属于生成协议的
+内部细节。Go bridge 与 Dart 目录必须由同一次生成结果配套发布，不要手写或持久化这些 tag。
 
 接口 tagged union 走 standard codec，不走 CST 快速路径。
 
@@ -351,9 +367,9 @@ Go 返回 nil 命名接口时，Dart 无法知道它本应对应哪个具体实�
 
 ### 接口方法指令
 
-接口方法支持 `//fgb:sync`、`//fgb:async`、`//fgb:rename` 和 `//fgb:ignore`。实现方法的生成形状必须
-与接口声明兼容，例如接口方法标为 async 时，对应实现方法也应生成同样的 `Future` 签名。完整语法见
-[指令与字段 tag](/zh/reference/directives)。
+输入包接口方法支持 `//fgb:sync`、`//fgb:async`、`//fgb:rename` 和 `//fgb:ignore`。实现方法的生成
+形状必须与接口声明兼容，例如接口方法标为 async 时，对应实现方法也应生成同样的 `Future` 签名。
+依赖接口的方法只作 marker，不读取这些指令。完整语法见[指令与字段 tag](/zh/reference/directives)。
 
 ## 如何选择
 
@@ -363,7 +379,7 @@ Go 返回 nil 命名接口时，Dart 无法知道它本应对应哪个具体实�
 | 需要 Dart 修改字段后再次传回 Go | 值结构体，可按需使用 `non-final` |
 | Go 对象需要跨调用保持身份和内部状态 | `//fgb:opaque` + `*T` |
 | 文件、连接、缓存、带锁对象 | opaque，并提供显式 `Close` |
-| 一组有限、已知的 Go 实现需要多态传输 | 输入包中的命名接口 |
+| 一组有限、已知的 Go 实现需要多态传输 | 输入包中的命名接口，或具有可发现实现的可达依赖接口 |
 | 无固定结构的动态数据 | `any` / `Object?` |
 
 ## 常见生成错误
@@ -376,6 +392,6 @@ Go 返回 nil 命名接口时，Dart 无法知道它本应对应哪个具体实�
 | 嵌入 pointer/opaque 报错 | Dart 无法把它们作为父类，改成普通字段或重新建模 |
 | duplicate wire field | 字段重命名或提升后发生 key 冲突，选择唯一名称 |
 | override signature 不兼容 | Go 遮蔽方法不满足 Dart override，使用 `//fgb:rename` |
-| 接口没有 bridged implementor | 在输入包声明并暴露至少一个实现 |
+| 接口没有 bridged implementor | 只会发生在输入包接口；声明并暴露至少一个实现。依赖接口会使用 opaque fallback |
 | Dart 传入自定义 `implements Shape` 对象失败 | 只有生成器登记的 Go 实现能跨 bridge，不能传任意 Dart 实现 |
 | Go 返回 nil 接口后 `FormatException` | 返回值缺少具体实现 tag，改用显式可选结果模型 |

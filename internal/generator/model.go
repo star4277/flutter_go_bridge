@@ -364,6 +364,20 @@ type interfaceModel struct {
 type implementorModel struct {
 	DartName string
 	Type     *wireType
+	// DecodeOnly marks an additional Go dynamic representation of the same
+	// Dart class. For example, both T and *T implement an interface when T has
+	// value-receiver methods; Dart encodes the canonical T tag, while Go may
+	// decode either tag when returning an interface value.
+	DecodeOnly bool
+	// GoTypes are the concrete dynamic types accepted when Go encodes this
+	// tagged implementation. AddressValue is used when an opaque T must be
+	// copied to *T before it can enter the handle registry.
+	GoTypes []implementorGoType
+}
+
+type implementorGoType struct {
+	Type         types.Type
+	AddressValue bool
 }
 
 type opaqueModel struct {

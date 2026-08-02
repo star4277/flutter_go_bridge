@@ -125,10 +125,10 @@ the handle after the Dart object is collected. Do not depend on prompt finalizat
 sockets, or other resources that require deterministic shutdown; expose an explicit Go `Close`
 method as well.
 
-Unsupported function/channel fields, unsupported types, nested pointers, external non-empty
-interfaces, by-value opaque fields, and non-empty structs with no bridged fields cause automatic
-opaque fallback. The generator emits a warning naming the blocking field. Add `//fgb:opaque` when
-that is intentional.
+Unsupported function/channel fields, unsupported types, nested pointers, by-value opaque fields,
+and non-empty structs with no bridged fields cause automatic opaque fallback. Dependency interfaces
+remain translatable through discovered implementations plus an interface-level opaque fallback. The
+generator emits a warning naming a blocking field. Add `//fgb:opaque` when that is intentional.
 
 Opaque types must appear as `*T` in exported parameters, results, and receivers. Passing them by
 value is rejected because it would lose handle identity.
@@ -136,12 +136,18 @@ value is rejected because it would lose handle identity.
 A genuine `struct{}` remains an empty value class with `const Marker();`. A non-empty struct whose
 fields are all private or ignored becomes opaque because Dart cannot reconstruct its Go state.
 
-## External structs
+## External dependency types
 
 Reachable named types from dependency packages are analyzed too. Translatable external structs
 become value classes in `_generated.dart`; private-only or unsupported ones become opaque handles.
 Name collisions receive a Go package prefix, so two external `User` types may become `ModelsUser`
 and `AuthUser`.
+
+Reachable named non-empty interfaces are analyzed as tagged serialization unions. Their exported
+named struct implementations are discovered across the complete package graph loaded for the input
+API. A final interface-level `GoOpaque` member preserves implementations that generated Go code
+cannot name. Dependency interface methods are not generated as Dart calls: the Dart interface is
+marker-only, and its concrete classes carry either serialized fields or a `GoOpaque` handle.
 
 ## Anonymous embedding and inheritance
 
@@ -193,7 +199,8 @@ parents so a `Dog` is not tagged as an `Animal`.
 
 ## Named interfaces
 
-A named, non-empty interface from the input package becomes an `abstract interface class`:
+A named, non-empty interface becomes an `abstract interface class`. Interfaces from the input
+package include their bridged method declarations:
 
 ```go
 type Shape interface {
@@ -232,13 +239,28 @@ which owns either serialized fields or an opaque handle.
 
 ### Implementor discovery
 
-The generator collects bridged structs in the input package whose `T` or `*T` method set satisfies
-the interface. Value classes expose bridged pointer-receiver methods too; opaque implementors travel
-as pointer handles. Dependency packages are not searched as an open-ended implementation universe.
+For an input-package interface, the generator collects bridged structs from that package whose `T`
+or `*T` method set satisfies the interface, preserving declaration order for compatibility.
 
-At least one bridged implementation is required. Unexported interface methods are rejected, and
-external named non-empty interfaces cannot be bridged automatically. Use `any` for dynamic values or
-declare a controlled bridge interface and its implementations in the input package.
+For a dependency interface, the generator walks the complete dependency graph already loaded by
+`go/packages`, then collects exported, non-generic named structs whose `T` or `*T` method set satisfies
+the interface. Packages named `main`, packages hidden by Go's `internal` import rule, unexported types,
+aliases, non-struct named types, and uninstantiated generic declarations are excluded because the
+generated bridge cannot name them safely as concrete union members. They remain transportable through
+the final interface-level opaque fallback, which boxes the interface value itself in the Go handle
+registry. Runtime-registered implementations use the same fallback.
+
+Value implementations travel by fields. Pointer-receiver-only implementations decode as pointers.
+When both `T` and `*T` implement the interface, Go results accept either dynamic representation and
+map both to the same Dart class. Opaque implementations travel as pointer handles. A dependency
+struct that anonymously embeds a pointer also falls back to `GoOpaque`, because Dart cannot represent
+a nullable superclass and the dependency cannot be annotated.
+
+At least one bridged implementation is required for an interface in the input package. Dependency
+interfaces always include the opaque fallback, even when no concrete type can be named. Unexported
+methods are rejected for interfaces in the input package. Dependency interfaces are marker-only in
+Dart: their methods are intentionally not generated because dependency declarations have no FGB call
+directives or generated call entrypoints.
 
 ### Tagged-union encoding
 
@@ -250,9 +272,11 @@ Interface values use the standard codec with this logical shape:
 
 The payload contains value-struct fields or an opaque handle. Passing an arbitrary Dart object that
 merely `implements Shape` throws `ArgumentError`; it must be one of the registered generated Go
-implementations. Unknown tags fail decoding.
+implementations or an interface fallback object previously returned by Go. Unknown tags fail decoding.
 
-Implementor order follows Go declaration position, but numeric tags are generated protocol details.
+Input-package implementor order follows Go declaration position. Dependency implementations are
+ordered by full package path and Go type name; when both value and pointer dynamic forms exist, the
+value form is canonical for Dart-to-Go encoding. Numeric tags remain generated protocol details.
 Always deploy the Go bridge and Dart tree produced by the same generation run. Interface unions use
 the standard codec rather than the CST fast path.
 
@@ -263,8 +287,9 @@ an optional `Shape?` parameter and preserves a nil Go interface. A nil named-int
 identify a concrete implementation and is rejected on the Dart side with `FormatException`; prefer
 an explicit result struct or presence flag for optional results.
 
-Interface methods support `//fgb:sync`, `//fgb:async`, `//fgb:rename`, and `//fgb:ignore`. The
-generated implementation shape must remain compatible with the interface declaration. See
+Input-package interface methods support `//fgb:sync`, `//fgb:async`, `//fgb:rename`, and
+`//fgb:ignore`. The generated implementation shape must remain compatible with the interface
+declaration. Dependency interface methods are marker-only and do not consume directives. See
 [Directives and field tags](/reference/directives).
 
 ## Choosing a model
@@ -275,7 +300,7 @@ generated implementation shape must remain compatible with the interface declara
 | Dart edits fields and later sends the value back | Value struct, optionally `non-final` |
 | Go identity and mutable state persist across calls | `//fgb:opaque` with `*T` |
 | File, connection, cache, lock-owning object | Opaque plus explicit `Close` |
-| Closed set of polymorphic Go implementations | Named interface in the input package |
+| Closed set of polymorphic Go implementations | Named interface in the input package, or a reachable dependency interface with discoverable implementations |
 | Unstructured dynamic data | `any` / `Object?` |
 
 ## Common failures
@@ -283,7 +308,7 @@ generated implementation shape must remain compatible with the interface declara
 | Symptom | Cause and fix |
 | --- | --- |
 | `must be passed as *T` | An opaque type was used by value; change it to `*T` |
-| Unexpected `GoOpaque` output | Read the warning for an unsupported field; fix it or mark the type opaque explicitly |
+| Unexpected `GoOpaque` output | Read the warning for an unsupported field; fix it or mark an input type opaque explicitly. Dependency pointer embedding falls back automatically |
 | `only extend one type` | Multiple embedded value structs require composition or one chosen superclass |
 | Embedded pointer/opaque error | It cannot be a Dart superclass; remodel it as a field |
 | Duplicate wire field | Renaming or promotion produced the same key; choose unique names |

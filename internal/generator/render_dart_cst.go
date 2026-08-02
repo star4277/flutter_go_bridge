@@ -10,13 +10,7 @@ import (
 // the only place that knows about this representation is bridge_generated.dart
 // (the per-source Dart files remain ordinary Dart APIs).
 func (r *splitDartRenderer) renderCstEncoders() {
-	for _, typ := range r.unit.Types {
-		if !typ.supportsCodecCached(codecModeCST, map[int]bool{}, r.unit.codecSupport) {
-			continue
-		}
-		if cstStorageFor(typ).DartType == "" {
-			continue
-		}
+	for _, typ := range cstDcoReachableTypes(r.unit) {
 		r.renderCstEncoder(typ)
 		r.line("")
 	}

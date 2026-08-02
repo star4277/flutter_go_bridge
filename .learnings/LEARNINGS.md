@@ -1,5 +1,43 @@
 # Learnings
 
+## [LRN-20260803-001] best_practice
+
+**Logged**: 2026-08-03T02:22:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+Third-party Go interface serialization needs both deterministic named-implementor discovery and an interface-level opaque fallback.
+
+### Details
+
+Walking the loaded dependency graph finds exported named structs and enables field serialization, stable union tags, and pointer/value handling. It cannot name unexported implementations, types behind inaccessible `internal` packages, generic runtime instantiations, or wrappers registered at runtime. The real mihomo `constant.ProxyAdapter` graph returned `*outbound.autoCloseProxyAdapter`, proving that enumeration alone can generate successfully yet fail at runtime.
+
+The complete pattern appends a final union member that boxes the interface value itself in the Go opaque registry. Named implementations keep their precise Dart classes; every unnameable implementation uses the fallback class and can be passed back to Go with identity intact.
+
+### Suggested Action
+
+Whenever bridging an open-world interface, enumerate safely nameable implementations in deterministic order, then add a last-match opaque fallback and exercise both directions with an unexported runtime implementation.
+
+### Metadata
+
+- Source: error
+- Related Files: internal/generator/builder.go, internal/generator/render_go.go, internal/generator/generator_test.go
+- Tags: go, interfaces, codegen, serialization, opaque, open-world
+- Pattern-Key: harden.external_interface_open_world
+- Recurrence-Count: 1
+- First-Seen: 2026-08-03
+- Last-Seen: 2026-08-03
+
+### Resolution
+
+- **Resolved**: 2026-08-03T02:22:00+08:00
+- **Notes**: Implemented dependency-graph discovery plus interface-level `GoOpaque`, validated against clash_ui/mihomo and an isolated bidirectional smoke fixture.
+
+---
+
 ## [LRN-20260802-004] correction
 
 **Logged**: 2026-08-02T00:00:00+08:00

@@ -13,6 +13,7 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/config"
 	"github.com/star4277/flutter_go_bridge/internal/model"
 	"github.com/star4277/flutter_go_bridge/internal/names"
+	"golang.org/x/tools/go/packages"
 )
 
 // structClass is the FRB-style bridge classification of a named Go struct:
@@ -680,6 +681,15 @@ func (b *builder) classifyStruct(named *types.Named) structClass {
 			continue
 		}
 		bridged++
+		if field.Embedded() {
+			if _, pointer := types.Unalias(field.Type()).(*types.Pointer); pointer && named.Obj().Pkg() != b.api.Package.Types {
+				b.warnings = append(b.warnings, fmt.Errorf(
+					"struct %s bridges as GoOpaque because it embeds pointer field %s, which Dart cannot represent as inheritance",
+					named.Obj().Name(), field.Name()))
+				class = classOpaque
+				break
+			}
+		}
 		if reason := b.fieldTranslateBlocker(field.Type(), map[types.Type]bool{}); reason != "" {
 			b.warnings = append(b.warnings, fmt.Errorf(
 				"struct %s bridges as GoOpaque because field %s %s; mark the type with fgb(opaque) to silence this warning",
@@ -761,11 +771,9 @@ func (b *builder) fieldTranslateBlocker(typ types.Type, seen map[types.Type]bool
 			if declared.Empty() {
 				return ""
 			}
-			if typ.Obj() != nil && typ.Obj().Pkg() != nil && typ.Obj().Pkg() != b.api.Package.Types {
-				return fmt.Sprintf("uses external interface %s.%s", typ.Obj().Pkg().Path(), typ.Obj().Name())
-			}
-			// A named interface from the input package is bridged as a Dart
-			// interface, so a field of that type is translatable.
+			// Named interfaces are bridged as tagged unions. Dependency
+			// interfaces discover their concrete types from the loaded package
+			// graph, so they are translatable in fields as well as signatures.
 			return ""
 		}
 		if _, isStruct := typ.Underlying().(*types.Struct); isStruct {
@@ -1081,32 +1089,66 @@ func (b *builder) mapInterface(original types.Type, named *types.Named, declared
 	b.interfaceModels[named] = declaration
 	b.unit.Interfaces = append(b.unit.Interfaces, declaration)
 
-	for i := 0; i < declared.NumMethods(); i++ {
-		method := declared.Method(i)
-		if !method.Exported() {
-			return nil, fmt.Errorf("interface %s declares unexported method %s, which cannot be bridged", named.Obj().Name(), method.Name())
+	// Methods are callable only for interfaces declared in the input package:
+	// those declarations have source directives and their implementations can
+	// own generated method entrypoints. A dependency interface is an open-world
+	// serialization union instead; emitting its methods would make the Dart
+	// implementations promise calls for which no bridge entrypoint exists.
+	if decl != nil {
+		for i := 0; i < declared.NumMethods(); i++ {
+			method := declared.Method(i)
+			if !method.Exported() {
+				return nil, fmt.Errorf("interface %s declares unexported method %s, which cannot be bridged", named.Obj().Name(), method.Name())
+			}
+			directive := decl.Methods[method.Name()]
+			if directive != nil && directive.Ignore {
+				continue
+			}
+			bridged, err := b.mapInterfaceMethod(named, method, directive)
+			if err != nil {
+				return nil, err
+			}
+			declaration.Methods = append(declaration.Methods, bridged)
 		}
-		var directive *model.InterfaceMethod
-		if decl != nil {
-			directive = decl.Methods[method.Name()]
-		}
-		if directive != nil && directive.Ignore {
-			continue
-		}
-		bridged, err := b.mapInterfaceMethod(named, method, directive)
-		if err != nil {
-			return nil, err
-		}
-		declaration.Methods = append(declaration.Methods, bridged)
 	}
 
 	if err := b.collectImplementors(named, declaration); err != nil {
 		return nil, err
 	}
+	if named.Obj().Pkg() != b.api.Package.Types {
+		fallback := b.mapInterfaceOpaqueFallback(named, declaration)
+		b.registerInterfaceImplementor(declaration, fallback, false)
+	}
 	if len(declaration.Implementors) == 0 {
 		return nil, fmt.Errorf("no bridged type implements interface %s; declare at least one so its values can cross the bridge", named.Obj().Name())
 	}
 	return result, nil
+}
+
+// mapInterfaceOpaqueFallback creates the final union member for a dependency
+// interface. Go dependencies may hide concrete implementations behind
+// unexported, internal, generic, or runtime-registered types that generated Go
+// code cannot name in a type switch. Boxing the interface value itself in the
+// opaque registry preserves identity and lets Dart pass that same value back.
+func (b *builder) mapInterfaceOpaqueFallback(named *types.Named, declaration *interfaceModel) *wireType {
+	base := declaration.DartName + "Opaque"
+	dartName := base
+	for suffix := 2; b.dartTypeNames[dartName] != nil || b.syntheticDartNames[dartName]; suffix++ {
+		dartName = fmt.Sprintf("%s%d", base, suffix)
+	}
+	b.syntheticDartNames[dartName] = true
+	b.dartTypeNames[dartName] = named
+	result := &wireType{
+		ID: b.nextTypeID, Kind: kindOpaque, Original: named, DartType: dartName + "?",
+	}
+	b.nextTypeID++
+	opaque := &opaqueModel{
+		GoName: named.Obj().Name(), DartName: dartName, Type: result, Synthetic: true,
+	}
+	result.Opaque = opaque
+	b.unit.Types = append(b.unit.Types, result)
+	b.unit.Opaques = append(b.unit.Opaques, opaque)
+	return result
 }
 
 // mapInterfaceMethod builds the Dart declaration of one interface method. It
@@ -1131,19 +1173,21 @@ func (b *builder) mapInterfaceMethod(owner *types.Named, method *types.Func, dir
 	return declaration, nil
 }
 
-// collectImplementors finds every bridged type in the input package that
-// satisfies the interface. The order follows the declaration order so the
-// wire tags stay stable across runs.
+// collectImplementors finds every bridged concrete type that satisfies the
+// interface. Input interfaces preserve source declaration order for wire
+// compatibility. Dependency interfaces scan the complete loaded dependency
+// graph and use package path plus type name order for deterministic wire tags.
 func (b *builder) collectImplementors(iface *types.Named, declaration *interfaceModel) error {
 	declared := iface.Underlying().(*types.Interface)
-	candidates := make([]*types.TypeName, 0, len(b.api.Types))
-	for object := range b.api.Types {
-		candidates = append(candidates, object)
-	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].Pos() < candidates[j].Pos() })
+	candidates := b.interfaceImplementorCandidates(iface)
 	for _, object := range candidates {
 		named, ok := object.Type().(*types.Named)
 		if !ok || named == iface {
+			continue
+		}
+		if params := named.TypeParams(); params != nil && params.Len() != 0 {
+			// An uninstantiated generic declaration cannot be named in a Go
+			// type switch. Runtime instantiations use the interface fallback.
 			continue
 		}
 		if _, isStruct := named.Underlying().(*types.Struct); !isStruct {
@@ -1151,12 +1195,19 @@ func (b *builder) collectImplementors(iface *types.Named, declaration *interface
 		}
 		// A value struct exposes its pointer-receiver methods on the Dart
 		// class too, so either form counts as an implementation.
-		if !types.Implements(named, declared) && !types.Implements(types.NewPointer(named), declared) {
+		valueImplements := types.Implements(named, declared)
+		pointerImplements := types.Implements(types.NewPointer(named), declared)
+		if !valueImplements && !pointerImplements {
 			continue
 		}
+		class := b.classifyStruct(named)
 		var mapped *wireType
 		var err error
-		if b.classifyStruct(named) == classOpaque {
+		if class == classOpaque {
+			mapped, err = b.mapType(types.NewPointer(named))
+		} else if !valueImplements {
+			// Pointer-receiver-only implementations must decode back to a
+			// pointer in Go. Dart still sees the underlying value class.
 			mapped, err = b.mapType(types.NewPointer(named))
 		} else {
 			mapped, err = b.mapType(named)
@@ -1164,18 +1215,117 @@ func (b *builder) collectImplementors(iface *types.Named, declaration *interface
 		if err != nil {
 			return fmt.Errorf("interface %s implementation %s: %w", iface.Obj().Name(), named.Obj().Name(), err)
 		}
-		dartName := strings.TrimSuffix(mapped.DartType, "?")
-		declaration.Implementors = append(declaration.Implementors, &implementorModel{
-			DartName: dartName, Type: mapped,
-		})
-		switch mapped.Kind {
-		case kindStruct:
-			mapped.Struct.Interfaces = appendUnique(mapped.Struct.Interfaces, declaration)
-		case kindOpaque:
-			mapped.Opaque.Interfaces = appendUnique(mapped.Opaque.Interfaces, declaration)
+		implementor := b.registerInterfaceImplementor(declaration, mapped, false)
+		if class == classOpaque && valueImplements {
+			implementor.GoTypes = append(implementor.GoTypes, implementorGoType{
+				Type: named, AddressValue: true,
+			})
+		}
+
+		// Value-receiver methods make both T and *T valid Go dynamic types.
+		// Keep a second decode tag so Go results accept either representation,
+		// while Dart encodes the canonical value tag only.
+		if class == classValue && valueImplements && pointerImplements {
+			pointer, pointerErr := b.mapType(types.NewPointer(named))
+			if pointerErr != nil {
+				return fmt.Errorf("interface %s pointer implementation %s: %w", iface.Obj().Name(), named.Obj().Name(), pointerErr)
+			}
+			b.registerInterfaceImplementor(declaration, pointer, true)
 		}
 	}
 	return nil
+}
+
+func (b *builder) registerInterfaceImplementor(declaration *interfaceModel, mapped *wireType, decodeOnly bool) *implementorModel {
+	dartName := strings.TrimSuffix(mapped.DartType, "?")
+	implementation := &implementorModel{
+		DartName: dartName, Type: mapped, DecodeOnly: decodeOnly,
+		GoTypes: []implementorGoType{{Type: mapped.Original}},
+	}
+	declaration.Implementors = append(declaration.Implementors, implementation)
+	switch mapped.Kind {
+	case kindStruct:
+		mapped.Struct.Interfaces = appendUnique(mapped.Struct.Interfaces, declaration)
+	case kindOpaque:
+		mapped.Opaque.Interfaces = appendUnique(mapped.Opaque.Interfaces, declaration)
+	case kindPointer:
+		if mapped.Elem.Kind == kindStruct {
+			mapped.Elem.Struct.Interfaces = appendUnique(mapped.Elem.Struct.Interfaces, declaration)
+		}
+	}
+	return implementation
+}
+
+func (b *builder) interfaceImplementorCandidates(iface *types.Named) []*types.TypeName {
+	// Keep the existing declaration-order ABI for interfaces owned by the
+	// input package.
+	if iface.Obj().Pkg() == b.api.Package.Types {
+		candidates := make([]*types.TypeName, 0, len(b.api.Types))
+		for object := range b.api.Types {
+			candidates = append(candidates, object)
+		}
+		sort.Slice(candidates, func(i, j int) bool { return candidates[i].Pos() < candidates[j].Pos() })
+		return candidates
+	}
+
+	packagesByPath := map[string]*packages.Package{}
+	var visit func(*packages.Package)
+	visit = func(pkg *packages.Package) {
+		if pkg == nil || pkg.Types == nil || packagesByPath[pkg.PkgPath] != nil {
+			return
+		}
+		packagesByPath[pkg.PkgPath] = pkg
+		paths := make([]string, 0, len(pkg.Imports))
+		for path := range pkg.Imports {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			visit(pkg.Imports[path])
+		}
+	}
+	visit(b.api.Package)
+
+	var candidates []*types.TypeName
+	for _, loaded := range packagesByPath {
+		if !b.canReferenceImplementationPackage(loaded) {
+			continue
+		}
+		for _, name := range loaded.Types.Scope().Names() {
+			object, ok := loaded.Types.Scope().Lookup(name).(*types.TypeName)
+			if ok && object.Exported() && !object.IsAlias() {
+				candidates = append(candidates, object)
+			}
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if left.Pkg().Path() != right.Pkg().Path() {
+			return left.Pkg().Path() < right.Pkg().Path()
+		}
+		return left.Name() < right.Name()
+	})
+	return candidates
+}
+
+func (b *builder) canReferenceImplementationPackage(pkg *packages.Package) bool {
+	if pkg == nil || pkg.Types == nil || pkg.Name == "main" {
+		return false
+	}
+	path := pkg.PkgPath
+	marker := "/internal/"
+	index := strings.LastIndex(path, marker)
+	if index < 0 {
+		if strings.HasPrefix(path, "internal/") || path == "internal" {
+			return false
+		}
+		if parent, found := strings.CutSuffix(path, "/internal"); found {
+			return b.unit.PackagePath == parent || strings.HasPrefix(b.unit.PackagePath, parent+"/")
+		}
+		return true
+	}
+	parent := path[:index]
+	return b.unit.PackagePath == parent || strings.HasPrefix(b.unit.PackagePath, parent+"/")
 }
 
 func appendUnique(list []*interfaceModel, item *interfaceModel) []*interfaceModel {
@@ -1398,9 +1548,6 @@ func (b *builder) ensureNamedSupported(named *types.Named) error {
 		return nil
 	}
 	if named.Obj().Pkg() != b.api.Package.Types {
-		if declared, ok := named.Underlying().(*types.Interface); ok && !declared.Empty() {
-			return fmt.Errorf("external named interface %s.%s cannot be bridged automatically", named.Obj().Pkg().Path(), named.Obj().Name())
-		}
 		b.registerExternalPackage(named.Obj().Pkg())
 		return nil
 	}

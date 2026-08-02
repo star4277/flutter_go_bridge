@@ -266,7 +266,8 @@ including pointer, nullable, collection, interface, and unsupported-type rules.
 
 Serializable Go structs become Dart value classes. Anonymous embedded structs become Dart
 inheritance, and promoted fields are flattened on the wire. Named Go interfaces become Dart
-`abstract interface class` declarations with a generated, closed set of Go implementations.
+`abstract interface class` declarations. Interfaces from dependencies discover exported concrete
+types across the loaded package graph and use a `GoOpaque` fallback for unnameable runtime implementations.
 
 Structs with state that cannot be serialized can be marked explicitly:
 

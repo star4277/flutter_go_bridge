@@ -496,10 +496,16 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\tif value == nil { return nil, fmt.Errorf(\"cannot send a nil %s to Dart\") }", typ.Interface.GoName)
 		r.line("\tswitch typed := value.(type) {")
 		for index, implementor := range typ.Interface.Implementors {
-			r.line("\tcase %s:", r.goType(implementor.Type.Original))
-			r.line("\t\tencoded, err := fgbEncode%d(typed, depth+1, transfer)", implementor.Type.ID)
-			r.line("\t\tif err != nil { return nil, err }")
-			r.line("\t\treturn []any{int64(%d), encoded}, nil", index)
+			for _, dynamic := range implementor.GoTypes {
+				r.line("\tcase %s:", r.goType(dynamic.Type))
+				value := "typed"
+				if dynamic.AddressValue {
+					value = "&typed"
+				}
+				r.line("\t\tencoded, err := fgbEncode%d(%s, depth+1, transfer)", implementor.Type.ID, value)
+				r.line("\t\tif err != nil { return nil, err }")
+				r.line("\t\treturn []any{int64(%d), encoded}, nil", index)
+			}
 		}
 		r.line("\t}")
 		r.raw("\treturn nil, fmt.Errorf(\"%T does not implement a bridged " + typ.Interface.GoName + " implementation\", value)")

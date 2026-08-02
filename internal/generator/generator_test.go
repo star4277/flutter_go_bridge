@@ -350,6 +350,186 @@ func Load() Values { return Values{} }
 	}
 }
 
+func TestGenerateExternalInterfaceImplementationsAcrossDependencies(t *testing.T) {
+	dir := t.TempDir()
+	rootModule := `module example.com/external-interface
+
+go 1.24
+
+require example.com/thirdparty v0.0.0
+
+replace example.com/thirdparty => ./thirdparty
+`
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(rootModule), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	externalDir := filepath.Join(dir, "thirdparty")
+	for _, subdir := range []string{"contracts", "factory", "impl"} {
+		if err := os.MkdirAll(filepath.Join(externalDir, subdir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "go.mod"), []byte("module example.com/thirdparty\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "contracts", "contracts.go"), []byte(`package contracts
+
+type Shape interface {
+	Area() int
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "impl", "impl.go"), []byte(`package impl
+
+type Circle struct {
+	radius int
+}
+
+func NewCircle(radius int) *Circle { return &Circle{radius: radius} }
+func (*Circle) Area() int { return 0 }
+
+type Base struct {
+	Value int
+}
+
+type PointerEmbedded struct {
+	*Base
+}
+
+func (PointerEmbedded) Area() int { return 0 }
+
+type PointerValue struct {
+	Value int
+}
+
+func (*PointerValue) Area() int { return 0 }
+
+type Square struct {
+	Size int
+}
+
+func (value Square) Area() int { return value.Size * value.Size }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "factory", "factory.go"), []byte(`package factory
+
+import (
+	"example.com/thirdparty/contracts"
+	"example.com/thirdparty/impl"
+)
+
+type hidden struct{}
+
+func (hidden) Area() int { return 0 }
+
+func Shapes() map[string]contracts.Shape {
+	return map[string]contracts.Shape{
+		"circle": impl.NewCircle(2),
+		"embedded": impl.PointerEmbedded{},
+		"hidden": hidden{},
+		"pointerValue": &impl.PointerValue{Value: 4},
+		"square": impl.Square{Size: 3},
+	}
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inputDir := filepath.Join(dir, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(`package api
+
+import (
+	"example.com/thirdparty/contracts"
+	"example.com/thirdparty/factory"
+)
+
+func Shapes() map[string]contracts.Shape { return factory.Shapes() }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	goOutput := filepath.Join(dir, "bridge_generated.go")
+	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
+		LibraryName: "external_interface", DartEntrypointClassName: "ExternalInterfaceBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	externalDart := mustRead(t, filepath.Join(dir, "dart", "_generated.dart"))
+	for _, expected := range []string{
+		"abstract interface class Shape {",
+		"final class Circle extends GoOpaque implements Shape {",
+		"final class PointerEmbedded extends GoOpaque implements Shape {",
+		"final class PointerValue implements Shape {",
+		"final class ShapeOpaque extends GoOpaque implements Shape {",
+		"final class Square implements Shape {",
+		"final int size;",
+	} {
+		if !strings.Contains(externalDart, expected) {
+			t.Fatalf("external interface mapping missing %q:\n%s", expected, externalDart)
+		}
+	}
+	if strings.Contains(externalDart, "int area(") {
+		t.Fatalf("third-party interface methods are outside the input API and must remain marker-only:\n%s", externalDart)
+	}
+	centralDart := mustRead(t, dartOutput)
+	for _, expected := range []string{
+		"final decoded = fgbDecode",
+		"nil Circle implementation payload",
+		"return decoded;",
+	} {
+		if !strings.Contains(centralDart, expected) {
+			t.Fatalf("nullable interface implementation decoder missing %q:\n%s", expected, centralDart)
+		}
+	}
+	if strings.Contains(centralDart, "extends ffi.Struct {}") {
+		t.Fatalf("standard-codec-only interface implementations leaked empty CST definitions:\n%s", centralDart)
+	}
+	if strings.Contains(centralDart, "if (value == null) return null;\n  if (value == null) return null;") {
+		t.Fatalf("interface encoder duplicated the shared nullable guard:\n%s", centralDart)
+	}
+
+	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		`"example.com/thirdparty/contracts"`,
+		`"example.com/thirdparty/impl"`,
+		"case *fgbext",
+		".Circle:",
+		".Shape:",
+		".Square:",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go interface union missing %q:\n%s", expected, goSource)
+		}
+	}
+	if circle := strings.Index(goSource, ".Circle:"); circle < 0 {
+		t.Fatal("generated Go interface union is missing Circle")
+	} else if square := strings.Index(goSource, ".Square:"); square < 0 || circle > square {
+		t.Fatalf("external implementation tags must be stable by package path and type name:\n%s", goSource)
+	}
+	if count := strings.Count(goSource, ".Square:"); count != 2 {
+		t.Fatalf("a value-receiver implementation must accept both Square and *Square Go results, got %d cases:\n%s", count, goSource)
+	}
+	if count := strings.Count(goSource, ".PointerEmbedded:"); count != 2 || !strings.Contains(goSource, "fgbEncode") || !strings.Contains(goSource, "(&typed, depth+1, transfer)") {
+		t.Fatalf("an opaque value implementation must accept T and *T by taking a copy address, got %d cases:\n%s", count, goSource)
+	}
+	if fallback := strings.LastIndex(goSource, ".Shape:"); fallback < strings.LastIndex(goSource, ".Square:") {
+		t.Fatalf("open-world interface fallback must follow every named implementation:\n%s", goSource)
+	}
+}
+
 func TestGenerateIPPrefixMapping(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/prefix\n\ngo 1.24\n"), 0o644); err != nil {

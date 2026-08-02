@@ -133,7 +133,10 @@ state or explicit `//fgb:opaque` selects handle semantics. Anonymous embedded va
 Dart inheritance with flattened promoted fields.
 
 Named non-empty interfaces use a `[implementation index, payload]` tagged union through the standard
-codec. See [Structs and interfaces](/reference/structs-interfaces) for classification, inheritance,
+codec. Input-package interfaces expose generated methods. Reachable dependency interfaces are
+marker-only, discover exported named struct implementations across the loaded dependency graph, and
+use an interface-level `GoOpaque` fallback for concrete runtime types generated Go cannot name.
+See [Structs and interfaces](/reference/structs-interfaces) for classification, inheritance,
 implementor discovery, and restrictions.
 
 ## Atomic wrapper types

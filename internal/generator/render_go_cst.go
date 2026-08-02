@@ -7,10 +7,7 @@ import (
 )
 
 func (r *goRenderer) renderCstDecoders() {
-	for _, typ := range r.unit.Types {
-		if !typ.supportsCodecCached(codecModeCST, map[int]bool{}, r.unit.codecSupport) || cstGoTypeForSignature(typ) == "unsafe.Pointer" {
-			continue
-		}
+	for _, typ := range cstDcoReachableTypes(r.unit) {
 		r.renderCstDecoder(typ)
 		r.line("")
 	}
@@ -259,10 +256,7 @@ func (r *goRenderer) renderCstSliceDecoder(typ *wireType, array bool) {
 }
 
 func (r *goRenderer) renderDcoEncoders() {
-	for _, typ := range r.unit.Types {
-		if !typ.supportsCodecCached(codecModeDCO, map[int]bool{}, r.unit.codecSupport) {
-			continue
-		}
+	for _, typ := range cstDcoReachableTypes(r.unit) {
 		r.renderDcoEncoder(typ)
 		r.line("")
 	}

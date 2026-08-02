@@ -65,6 +65,36 @@ func TestAtomicCollectionClassificationAndSyntheticNames(t *testing.T) {
 	}
 }
 
+func TestCanReferenceImplementationPackageRespectsGoImportRules(t *testing.T) {
+	b := &builder{unit: &unit{PackagePath: "example.com/owner/app/bridge"}}
+	packageFor := func(path, name string) *packages.Package {
+		return &packages.Package{PkgPath: path, Name: name, Types: types.NewPackage(path, name)}
+	}
+	tests := []struct {
+		name string
+		pkg  *packages.Package
+		want bool
+	}{
+		{name: "nil", pkg: nil},
+		{name: "missing types", pkg: &packages.Package{PkgPath: "example.com/plain", Name: "plain"}},
+		{name: "main package", pkg: packageFor("example.com/tool", "main")},
+		{name: "ordinary dependency", pkg: packageFor("example.com/dependency", "dependency"), want: true},
+		{name: "standard internal root", pkg: packageFor("internal", "internal")},
+		{name: "relative internal tree", pkg: packageFor("internal/helper", "helper")},
+		{name: "owner internal root", pkg: packageFor("example.com/owner/internal", "internal"), want: true},
+		{name: "owner nested internal", pkg: packageFor("example.com/owner/internal/models", "models"), want: true},
+		{name: "foreign internal root", pkg: packageFor("example.com/foreign/internal", "internal")},
+		{name: "foreign nested internal", pkg: packageFor("example.com/foreign/internal/models", "models")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := b.canReferenceImplementationPackage(test.pkg); got != test.want {
+				t.Fatalf("canReferenceImplementationPackage() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestAtomicStructRecursionAndCycleGuards(t *testing.T) {
 	atomicPackage, err := importer.Default().Import("sync/atomic")
 	if err != nil {
@@ -1139,9 +1169,10 @@ func Use(s Shape) int { return 0 }
 	}
 }
 
-// TestGenerateExternalNamedInterfaceRejected drives ensureNamedSupported's
-// rejection of an external non-empty named interface.
-func TestGenerateExternalNamedInterfaceRejected(t *testing.T) {
+// TestGenerateExternalNamedInterfaceWithoutNamedImplementationUsesFallback
+// verifies that an open dependency interface still has an opaque union member
+// for implementations generated Go code cannot name.
+func TestGenerateExternalNamedInterfaceWithoutNamedImplementationUsesFallback(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/fixture\n\ngo 1.24\n\nrequire example.com/thirdparty v0.0.0\n\nreplace example.com/thirdparty => ./thirdparty\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1172,12 +1203,22 @@ func TestGenerateExternalNamedInterfaceRejected(t *testing.T) {
 		DartOutput: filepath.Join(dir, "dart", "bridge_generated.dart"), LibraryName: "fixture",
 		DartEntrypointClassName: "FixtureBridge", StopOnError: true,
 	})
-	requireError(t, err, "external named interface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := mustRead(t, filepath.Join(dir, "dart", "_generated.dart"))
+	if !strings.Contains(external, "final class ServiceOpaque extends GoOpaque implements Service {") {
+		t.Fatalf("external interface is missing its open-world opaque fallback:\n%s", external)
+	}
+	goSource := mustRead(t, filepath.Join(dir, "bridge_generated.go"))
+	if !strings.Contains(goSource, "case fgbext0.Service:") {
+		t.Fatalf("external interface fallback must be the final Go type-switch case:\n%s", goSource)
+	}
 }
 
-// TestGenerateExternalNamedInterfaceField drives fieldTranslateBlocker's
-// external-interface warning: a struct carrying an external named interface
-// field degrades to opaque.
+// TestGenerateExternalNamedInterfaceField verifies that a struct carrying a
+// dependency interface remains a value type when a reachable implementation
+// can populate the interface serialization union.
 func TestGenerateExternalNamedInterfaceField(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/fixture\n\ngo 1.24\n\nrequire example.com/thirdparty v0.0.0\n\nreplace example.com/thirdparty => ./thirdparty\n"), 0o644); err != nil {
@@ -1190,7 +1231,7 @@ func TestGenerateExternalNamedInterfaceField(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(externalDir, "go.mod"), []byte("module example.com/thirdparty\n\ngo 1.24\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(externalDir, "shapes", "shapes.go"), []byte("package shapes\n\ntype Drawable interface {\n\tDraw() int\n}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(externalDir, "shapes", "shapes.go"), []byte("package shapes\n\ntype Drawable interface {\n\tDraw() int\n}\n\ntype Line struct {\n\tLength int\n}\n\nfunc (Line) Draw() int { return 0 }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	inputDir := filepath.Join(dir, "api")
@@ -1212,14 +1253,14 @@ func TestGenerateExternalNamedInterfaceField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
 	for _, warning := range result.Warnings {
 		if strings.Contains(warning.Error(), "external interface") {
-			found = true
+			t.Fatalf("a supported external interface field must not force an opaque fallback: %v", result.Warnings)
 		}
 	}
-	if !found {
-		t.Fatalf("expected an external interface warning, got %v", result.Warnings)
+	dart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
+	if !strings.Contains(dart, "final Drawable target;") || !strings.Contains(dart, "final class Draft") {
+		t.Fatalf("external interface field did not remain serializable:\n%s", dart)
 	}
 }
 
