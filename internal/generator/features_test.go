@@ -85,7 +85,7 @@ func generateFixture(t *testing.T, source string, setup ...func(dir string)) (ap
 }
 
 func TestGeneratedDartUsesLintCleanInternalImplementation(t *testing.T) {
-	_, central, _, _, err := generateFixture(t, `package api
+	apiDart, central, _, _, err := generateFixture(t, `package api
 
 type Item struct {
 	SnakeField int `+"`json:\"snake_field\"`"+`
@@ -110,6 +110,7 @@ func RoundTrip(item Item) Item { return item }
 		}
 	}
 	for _, expected := range []string{
+		"curly_braces_in_flow_control_structures",
 		"external int snakeField;",
 		"_fgbCstEncode",
 		"if (depth > 64) {",
@@ -118,6 +119,9 @@ func RoundTrip(item Item) Item { return item }
 		if !strings.Contains(central, expected) {
 			t.Fatalf("generated Dart missing lint-clean source %q:\n%s", expected, central)
 		}
+	}
+	if !strings.Contains(apiDart, "curly_braces_in_flow_control_structures") {
+		t.Fatalf("generated per-source Dart API must suppress generator-style single-line guards:\n%s", apiDart)
 	}
 }
 

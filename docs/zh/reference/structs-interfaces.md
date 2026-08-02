@@ -65,6 +65,10 @@ User saveUser({required User user}) { /* bridge call */ }
 只在 Dart 本地构造、尚未经过 Go 返回的对象没有 Go 生成的 JSON 快照，因此它的 `toString()`
 同样使用默认文本；当该值传入 Go 并由 Go 返回后，返回的新对象会携带 JSON。
 
+生成的 Dart 文件会在文件级忽略仅与生成实现风格有关的 lint，包括单行 guard 的大括号规则。
+因此启用 `flutter_lints` 的项目可以保持 `dart analyze` 干净，同时不会修改应用自身的 lint 配置，
+也不要求生成控制流刻意模仿手写代码风格。
+
 ### 哪些字段参与桥接
 
 默认只桥接导出字段。以下字段会被跳过：

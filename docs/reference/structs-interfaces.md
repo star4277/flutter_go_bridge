@@ -66,6 +66,11 @@ to Dart's ordinary object representation and the bridge value itself still arriv
 A value constructed only in Dart has not passed through Go and therefore has no Go-produced JSON
 snapshot; its `toString()` also uses the ordinary fallback until Go returns it.
 
+Generated Dart files carry file-level suppressions for implementation-only lint rules, including
+single-line guard clauses. This keeps `dart analyze` clean under `flutter_lints` without changing
+the consuming application's lint policy or requiring generated control flow to mirror handwritten
+style.
+
 ### Fields and constructors
 
 Only exported fields are bridged. Unexported fields, `_`, `fgb:"ignore"`, `fgb:"-"`,
