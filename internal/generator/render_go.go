@@ -146,11 +146,9 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 	case kindBigInt:
 		r.renderBigIntDecoder(typ, goType)
 	case kindTime:
-		r.line("\traw, ok := value.(string)")
-		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"RFC3339 string\", value) }", goType)
-		r.line("\tresult, err := time.Parse(time.RFC3339Nano, raw)")
-		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid time: %%w\", path, err) }", goType)
-		r.line("\treturn result, nil")
+		r.line("\traw, err := fgbAsInt64(value, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		r.line("\treturn time.UnixMicro(raw), nil")
 	case kindInternetIP:
 		r.line("\traw, ok := value.(string)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"IP string\", value) }", goType)
@@ -386,7 +384,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindBigInt:
 		r.renderBigIntEncoder(typ)
 	case kindTime:
-		r.line("\treturn value.Format(time.RFC3339Nano), nil")
+		r.line("\treturn value.UnixMicro(), nil")
 	case kindInternetIP:
 		// netip.Addr.String returns an empty string for the invalid zero value,
 		// which InternetAddress represents without changing pointer nullability.

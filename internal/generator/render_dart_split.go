@@ -681,8 +681,8 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  if (value is String) return BigInt.parse(value, radix: 16);")
 		r.line("  throw FormatException('$path: expected BigInt');")
 	case kindTime:
-		r.line("  if (value is! String) throw FormatException('$path: expected RFC3339 String');")
-		r.line("  return DateTime.parse(value);")
+		r.line("  if (value is! int) throw FormatException('$path: expected time microseconds');")
+		r.line("  return DateTime.fromMicrosecondsSinceEpoch(value);")
 	case kindInternetIP:
 		r.line("  if (value is! String) throw FormatException('$path: expected InternetAddress string');")
 		r.line("  return InternetAddress(value);")
@@ -808,7 +808,7 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 			r.line("  return value;")
 		}
 	case kindTime:
-		r.line("  return value.toIso8601String();")
+		r.line("  return value.microsecondsSinceEpoch;")
 	case kindInternetIP:
 		r.line("  return value.address;")
 	case kindUUID:

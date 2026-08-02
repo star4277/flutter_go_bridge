@@ -64,12 +64,7 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 			r.line("\treturn *raw, nil")
 		}
 	case kindTime:
-		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null time\", path) }", goType)
-		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
-		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
-		r.line("\tresult, err := time.Parse(time.RFC3339Nano, raw)")
-		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid time: %%w\", path, err) }", goType)
-		r.line("\treturn result, nil")
+		r.line("\treturn time.UnixMicro(int64(value)), nil")
 	case kindInternetIP:
 		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null IP\", path) }", goType)
 		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
@@ -311,7 +306,7 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 			r.line("\treturn fgbDcoString(value.Text(16))")
 		}
 	case kindTime:
-		r.line("\treturn fgbDcoString(value.Format(time.RFC3339Nano))")
+		r.line("\treturn fgbDcoInt64(value.UnixMicro())")
 	case kindInternetIP:
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindIPPrefix:

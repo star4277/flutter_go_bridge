@@ -106,13 +106,16 @@ Go 指针表示可空，并不表示共享内存。普通 `*User` 返回值解�
 
 | Go | Dart | wire 与边界行为 |
 | --- | --- | --- |
-| `time.Time` | `DateTime` | wire 使用 RFC3339Nano 字符串；Dart 使用 `DateTime.parse` |
+| `time.Time` | `DateTime` | wire 使用有符号 64 位 Unix 微秒时间戳；Go → Dart 使用 `DateTime.fromMicrosecondsSinceEpoch`，Dart → Go 使用 `microsecondsSinceEpoch`，Go 中不足 1 微秒的纳秒部分会被截断 |
 | `time.Duration` | `Duration` | wire 使用微秒；Go → Dart 会截断不足 1 微秒的纳秒部分 |
 | `math/big.Int` | `BigInt` | 使用无损大整数编码；`*big.Int` 映射为 `BigInt?` |
 | `net/netip.Addr` | `InternetAddress` | wire 使用 IP 文本；零值地址与空字符串互转；需要 `dart:io` |
 | `net/netip.Prefix` | `String` | wire 使用 CIDR 文本，例如 `192.168.1.0/24`；零值或非法 Prefix 与空字符串互转 |
 | `net/url.URL` | `Uri` | wire 使用 `URL.String()`；Dart 使用 `Uri.parse` |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue` | wire 使用 UUID 字符串；需要 Dart `uuid` package |
+
+`time.Time` 旧版本使用 RFC3339Nano 文本。升级后必须同时重新生成 Go 与 Dart 代码；混用新旧
+生成文件会因 wire 类型不一致而失败。
 
 上表中的值类型使用 Go 指针时都会得到对应的 Dart 可空类型，例如：
 
