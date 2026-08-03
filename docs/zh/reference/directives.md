@@ -212,6 +212,10 @@ type Point struct {
 
 所有引用该类型的生成签名都会使用 `Position`。
 
+重命名为 Dart 无需 import 即可使用的名字（例如 `List`、`Duration`）时，生成器会加上 `Go` 前缀并
+输出警告，否则生成的 library 无法编译。参见
+[Dart 名称冲突](/zh/reference/type-mapping#dart-名称冲突)。
+
 ### 常量
 
 可以修改生成的 Dart 常量名：

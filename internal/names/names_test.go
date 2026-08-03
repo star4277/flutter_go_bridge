@@ -131,3 +131,30 @@ func TestLibraryBaseVariants(t *testing.T) {
 	}
 }
 
+func TestAmbientDartTypeGuard(t *testing.T) {
+	// dart:core needs no import, so these shadow the ambient declaration.
+	for _, ambient := range []string{"List", "Map", "Set", "Duration", "DateTime", "String", "Error", "Object", "Future", "Stream"} {
+		if !IsDartAmbientType(ambient) {
+			t.Errorf("IsDartAmbientType(%q) = false, want true", ambient)
+		}
+		if got := AvoidDartAmbientType(ambient); got != "Go"+ambient {
+			t.Errorf("AvoidDartAmbientType(%q) = %q, want %q", ambient, got, "Go"+ambient)
+		}
+	}
+	// Emitted unprefixed by the renderers, so they are ambient in practice too.
+	for _, ambient := range []string{"Uint8List", "Int32List", "Float64List", "StreamSink", "InternetAddress"} {
+		if !IsDartAmbientType(ambient) {
+			t.Errorf("IsDartAmbientType(%q) = false, want true", ambient)
+		}
+	}
+	// dart:ffi is imported with a prefix, so its names are free.
+	for _, free := range []string{"Pointer", "NativeFinalizer", "User", "Item", "GoList", "Session"} {
+		if IsDartAmbientType(free) {
+			t.Errorf("IsDartAmbientType(%q) = true, want false", free)
+		}
+		if got := AvoidDartAmbientType(free); got != free {
+			t.Errorf("AvoidDartAmbientType(%q) = %q, want it unchanged", free, got)
+		}
+	}
+}
+

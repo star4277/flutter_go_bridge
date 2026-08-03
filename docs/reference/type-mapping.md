@@ -139,6 +139,41 @@ use an interface-level `GoOpaque` fallback for concrete runtime types generated 
 See [Structs and interfaces](/reference/structs-interfaces) for classification, inheritance,
 implementor discovery, and restrictions.
 
+## Dart name collisions
+
+Every Dart library sees `dart:core` without importing it, and the generated code relies on that:
+slices become `List<T>`, maps become `Map<K, V>`, `time.Duration` becomes `Duration`, `time.Time`
+becomes `DateTime`, `[]byte` becomes `Uint8List`. A generated top-level class reusing one of those
+names would shadow the ambient type for the whole library, so `List<String>` would resolve to a
+generated class that takes no type argument and the library would not compile.
+
+Generated type names that would shadow an ambient type therefore receive a `Go` prefix, and the
+generator reports a warning:
+
+```go
+type List struct{ Size int }        // Dart: class GoList
+type Duration struct{ Ticks int }   // Dart: class GoDuration
+```
+
+```text
+warning: Dart type name "List" would shadow the ambient Dart type of the same name;
+the generated class is named "GoList" instead
+```
+
+The rule applies to every generated type name, whatever its origin: input-package structs and
+interfaces, dependency types pulled in as implementations, the `GoOpaque` fallback of a dependency
+interface (`error` becomes `GoError`), synthetic opaque types, and names chosen with
+`//fgb:rename`. An explicit rename is adjusted too, because the resulting library would otherwise
+fail to compile.
+
+Reserved names are all of `dart:core`, plus the names the renderers emit without a prefix:
+`Future`, `Stream`, `StreamController`, `StreamSink`, `StreamSubscription`, `Completer`, `Timer`,
+`FutureOr`, the `dart:typed_data` list and buffer types, and `InternetAddress` /
+`InternetAddressType`. `dart:ffi` is imported with an `ffi` prefix, so its names are free.
+
+To choose the Dart name yourself, rename the Go type or use `//fgb:rename` with a name that is not
+reserved.
+
 ## Atomic wrapper types
 
 | Go | Dart | Notes |

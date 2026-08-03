@@ -177,6 +177,36 @@ wire 上扁平化。
 的运行时实现使用接口级 `GoOpaque` fallback。完整分类、继承、实现发现和限制见
 [结构体与接口](/zh/reference/structs-interfaces)。
 
+## Dart 名称冲突
+
+每个 Dart library 都无需 import 就能看到 `dart:core`，而生成的代码正依赖这一点：slice 映射为
+`List<T>`，map 映射为 `Map<K, V>`，`time.Duration` 映射为 `Duration`，`time.Time` 映射为
+`DateTime`，`[]byte` 映射为 `Uint8List`。如果生成的顶层类占用了这些名字，就会在整个 library 内
+遮蔽同名的环境类型 —— `List<String>` 会解析到一个不接受类型参数的生成类，library 直接编译不过。
+
+因此，会遮蔽环境类型的生成类型名会被加上 `Go` 前缀，并输出一条警告：
+
+```go
+type List struct{ Size int }        // Dart: class GoList
+type Duration struct{ Ticks int }   // Dart: class GoDuration
+```
+
+```text
+warning: Dart type name "List" would shadow the ambient Dart type of the same name;
+the generated class is named "GoList" instead
+```
+
+该规则作用于所有生成的类型名，与来源无关：输入包的结构体和接口、作为实现被引入的依赖类型、依赖
+接口的 `GoOpaque` fallback（`error` 生成为 `GoError`）、合成 opaque 类型，以及通过 `//fgb:rename`
+指定的名字。显式 rename 同样会被调整，否则生成的 library 无法编译。
+
+保留名称包括 `dart:core` 的全部类型，以及渲染器不加前缀直接使用的名字：`Future`、`Stream`、
+`StreamController`、`StreamSink`、`StreamSubscription`、`Completer`、`Timer`、`FutureOr`、
+`dart:typed_data` 的各类 list 与 buffer 类型，以及 `InternetAddress` / `InternetAddressType`。
+`dart:ffi` 通过 `ffi` 前缀导入，其名称不受限制。
+
+想自己决定 Dart 名称时，请重命名 Go 类型，或用 `//fgb:rename` 指定一个不在保留列表中的名字。
+
 ## atomic 包装类型
 
 | Go | Dart | 说明 |

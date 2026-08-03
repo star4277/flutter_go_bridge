@@ -26,6 +26,71 @@ var dartReserved = map[string]struct{}{
 	"var": {}, "void": {}, "when": {}, "while": {}, "with": {}, "yield": {},
 }
 
+// dartAmbientTypes are type names that a generated Dart library sees without
+// writing an import for them. A generated top-level declaration reusing one of
+// these names shadows the ambient declaration inside that library, and the
+// generated code itself relies on the ambient meaning: `List<T>` for slices,
+// `Map<K, V>` for maps, `Duration(microseconds: ...)` for time.Duration,
+// `DateTime` for time.Time, `Uint8List` for []byte, `Stream`/`StreamSink` for
+// stream parameters. Shadowing therefore does not merely confuse a reader, it
+// makes the generated library fail to compile.
+//
+// The set covers all of dart:core, which needs no import at all, plus the
+// names from dart:typed_data, dart:async and dart:io that the renderers emit
+// unprefixed. dart:ffi is imported with the `ffi` prefix, so its names cannot
+// collide and are deliberately absent.
+var dartAmbientTypes = map[string]struct{}{
+	// dart:core
+	"Object": {}, "Null": {}, "Never": {}, "Function": {}, "Type": {},
+	"Symbol": {}, "Record": {}, "Enum": {}, "Deprecated": {}, "Invocation": {},
+	"BigInt": {}, "String": {}, "Comparable": {}, "Comparator": {},
+	"Duration": {}, "DateTime": {}, "Stopwatch": {},
+	"Uri": {}, "UriData": {}, "RegExp": {}, "Match": {}, "Pattern": {},
+	"List": {}, "Map": {}, "MapEntry": {}, "Set": {},
+	"Iterable": {}, "Iterator": {}, "Sink": {}, "StringSink": {},
+	"StringBuffer": {}, "Runes": {}, "RuneIterator": {}, "Expando": {},
+	"WeakReference": {}, "Finalizer": {},
+	"StackTrace": {}, "Exception": {}, "Error": {},
+	"ArgumentError": {}, "AssertionError": {}, "CastError": {},
+	"ConcurrentModificationError": {}, "FormatException": {}, "IndexError": {},
+	"IntegerDivisionByZeroException": {}, "NoSuchMethodError": {},
+	"OutOfMemoryError": {}, "RangeError": {}, "StackOverflowError": {},
+	"StateError": {}, "TypeError": {}, "UnimplementedError": {},
+	"UnsupportedError": {},
+	// dart:core re-exports these two from dart:async.
+	"Future": {}, "Stream": {},
+	// dart:async, emitted unprefixed by the stream renderers.
+	"StreamController": {}, "StreamSink": {}, "StreamSubscription": {},
+	"Completer": {}, "Timer": {}, "FutureOr": {},
+	// dart:typed_data, emitted unprefixed for byte and numeric slices.
+	"ByteBuffer": {}, "ByteData": {}, "Endian": {}, "TypedData": {},
+	"Int8List": {}, "Uint8List": {}, "Uint8ClampedList": {},
+	"Int16List": {}, "Uint16List": {}, "Int32List": {}, "Uint32List": {},
+	"Int64List": {}, "Uint64List": {}, "Float32List": {}, "Float64List": {},
+	// dart:io, emitted unprefixed for netip.Addr.
+	"InternetAddress": {}, "InternetAddressType": {},
+}
+
+// IsDartAmbientType reports whether a generated top-level Dart type named
+// value would shadow a type that is already in scope in the generated library.
+func IsDartAmbientType(value string) bool {
+	_, found := dartAmbientTypes[value]
+	return found
+}
+
+// AvoidDartAmbientType returns a top-level Dart type name that cannot shadow an
+// ambient type. A `Go` prefix keeps the original spelling readable, where an
+// underscore or digit suffix would not say why the name changed.
+//
+// The result is only a proposal: callers still have to resolve it against the
+// names they have already handed out.
+func AvoidDartAmbientType(value string) string {
+	if IsDartAmbientType(value) {
+		return "Go" + value
+	}
+	return value
+}
+
 func LowerCamel(value string) string {
 	return Sanitize(strcase.ToLowerCamel(normalizeIdentifier(value)), false)
 }
