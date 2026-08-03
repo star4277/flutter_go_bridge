@@ -97,6 +97,11 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 	}
 	for _, declaration := range api.Types {
 		if declaration != nil && declaration.Named != nil {
+			// Ambient names are never handed out as-is, so reserving one here
+			// would only keep dartNameFor from noticing the collision.
+			if names.IsDartAmbientType(declaration.DartName) {
+				continue
+			}
 			b.dartTypeNames[declaration.DartName] = declaration.Named
 		}
 	}
@@ -1465,6 +1470,7 @@ func (b *builder) mapSyntheticOpaque(original types.Type, identity types.Type) (
 	opaque := b.syntheticOpaques[key]
 	if opaque == nil {
 		base := b.syntheticOpaqueName(types.Unalias(identity))
+		base = names.AvoidDartAmbientType(base)
 		dartName := base
 		owner, namedIdentity := types.Unalias(identity).(*types.Named)
 		nameAvailable := func(candidate string) bool {
@@ -1578,6 +1584,16 @@ func (b *builder) registerExternalPackage(pkg *types.Package) {
 func (b *builder) dartNameFor(named *types.Named, preferred string) string {
 	if cached := b.dartNames[named]; cached != "" {
 		return cached
+	}
+	// dart:core needs no import, so a class reusing one of its names shadows it
+	// for the whole generated library -- including the generator's own uses of
+	// List<T>, Duration and friends. Rename before reserving anything.
+	if names.IsDartAmbientType(preferred) {
+		renamed := names.AvoidDartAmbientType(preferred)
+		b.warnings = append(b.warnings, fmt.Errorf(
+			"Dart type name %q would shadow the ambient Dart type of the same name; the generated class is named %q instead",
+			preferred, renamed))
+		preferred = renamed
 	}
 	owner := b.dartTypeNames[preferred]
 	if owner == nil || owner == named {

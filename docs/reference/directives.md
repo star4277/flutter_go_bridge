@@ -103,6 +103,10 @@ renamed constant in its own const spec; one directive on a multi-name spec appli
 each constant. Rename is also useful for resolving incompatible method shadowing created by embedded
 Go structs.
 
+A type renamed to a name that Dart already provides without an import, such as `List` or `Duration`,
+receives a `Go` prefix and a warning, because the generated library would otherwise fail to compile.
+See [Dart name collisions](/reference/type-mapping#dart-name-collisions).
+
 ## `//fgb:opaque`
 
 Opaque forces a struct to stay on the Go heap and cross FFI as a handle:
