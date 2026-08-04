@@ -419,7 +419,11 @@ func (r *splitDartRenderer) renderInterface(declaration *interfaceModel) {
 func (r *splitDartRenderer) renderInterfaceAbsentClass(declaration *interfaceModel) {
 	r.line("final class _%sAbsent implements %s, GoAbsent {", declaration.DartName, declaration.DartName)
 	r.line("  const _%sAbsent();", declaration.DartName)
+	declaresToString := false
 	for _, method := range declaration.Methods {
+		if method.DartName == "toString" {
+			declaresToString = true
+		}
 		resultType := dartResultType(method)
 		if isAsyncCall(method) {
 			resultType = "Future<" + resultType + ">"
@@ -427,8 +431,13 @@ func (r *splitDartRenderer) renderInterfaceAbsentClass(declaration *interfaceMod
 		r.line("  @override")
 		r.line("  %s %s(%s) => throw StateError(%s);", resultType, method.DartName, dartParams(method), strconv.Quote(declaration.DartName+" was nil on the Go side; this value has no implementation"))
 	}
-	r.line("  @override")
-	r.line("  String toString() => %s;", strconv.Quote(declaration.DartName+"(absent)"))
+	// An interface method may itself map onto toString. Emitting the
+	// descriptive override as well would define the name twice, so the
+	// throwing override above wins and the stand-in loses its label.
+	if !declaresToString {
+		r.line("  @override")
+		r.line("  String toString() => %s;", strconv.Quote(declaration.DartName+"(absent)"))
+	}
 	r.line("}")
 	r.line("")
 }
