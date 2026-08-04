@@ -107,6 +107,10 @@ A type renamed to a name that Dart already provides without an import, such as `
 receives a `Go` prefix and a warning, because the generated library would otherwise fail to compile.
 See [Dart name collisions](/reference/type-mapping#dart-name-collisions).
 
+Renaming an interface method renames it for every generated implementation as well, so the directive
+belongs on the interface only. See
+[Named interfaces](/reference/structs-interfaces#named-interfaces).
+
 ## `//fgb:opaque`
 
 Opaque forces a struct to stay on the Go heap and cross FFI as a handle:

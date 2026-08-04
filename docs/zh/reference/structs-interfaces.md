@@ -397,8 +397,38 @@ Dart `null`，因为字段级解码器在共享接口解码器运行之前就拦
 
 ### 接口方法指令
 
-输入包接口方法支持 `//fgb:sync`、`//fgb:async`、`//fgb:rename` 和 `//fgb:ignore`。实现方法的生成
-形状必须与接口声明兼容，例如接口方法标为 async 时，对应实现方法也应生成同样的 `Future` 签名。
+输入包接口方法支持 `//fgb:sync`、`//fgb:async`、`//fgb:rename` 和 `//fgb:ignore`。写在接口方法上的
+指令决定整份契约：它选定的 Dart 名称和调用模式会应用到该方法的每一个生成实现，因此只需在接口上写
+一次，不必在每个实现类型上重复。
+
+```go
+type Loader interface {
+	//fgb:async, rename = "fetch"
+	Load(id int) (string, error)
+}
+
+type Remote struct{ Host string }
+
+// 这里不需要再写指令，Dart 形状已由接口决定。
+func (r Remote) Load(id int) (string, error) { /* ... */ }
+```
+
+```dart
+abstract interface class Loader {
+  Future<String> fetch({required int id});
+}
+
+final class Remote implements Loader {
+  Future<String> fetch({required int id}) async { /* ... */ }
+}
+```
+
+以下两种情况会在生成阶段直接报错，而不是产出无法编译的 Dart 类：
+
+- 两个接口对同一个 Go 方法要求了不同的 Dart 形状。请让两处指令一致，或重命名其中一个 Go 方法。
+- 某个实现没有桥接接口声明的方法，通常是因为该方法带了 `//fgb:ignore`。请去掉该指令，或让这个类型
+  不再实现该接口。
+
 依赖接口的方法只作 marker，不读取这些指令。完整语法见[指令与字段 tag](/zh/reference/directives)。
 
 ## 如何选择

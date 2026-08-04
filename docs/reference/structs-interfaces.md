@@ -328,8 +328,41 @@ generated method declarations. Its absent class therefore has no methods to over
 dependency-interface value from a real one in that case.
 
 Input-package interface methods support `//fgb:sync`, `//fgb:async`, `//fgb:rename`, and
-`//fgb:ignore`. The generated implementation shape must remain compatible with the interface
-declaration. Dependency interface methods are marker-only and do not consume directives. See
+`//fgb:ignore`. A directive on an interface method shapes the whole contract: the Dart name and call
+mode it selects are applied to every generated implementation of that method, so you write the
+directive once on the interface rather than repeating it on each implementor.
+
+```go
+type Loader interface {
+	//fgb:async, rename = "fetch"
+	Load(id int) (string, error)
+}
+
+type Remote struct{ Host string }
+
+// No directive needed here; the interface already decided the Dart shape.
+func (r Remote) Load(id int) (string, error) { /* ... */ }
+```
+
+```dart
+abstract interface class Loader {
+  Future<String> fetch({required int id});
+}
+
+final class Remote implements Loader {
+  Future<String> fetch({required int id}) async { /* ... */ }
+}
+```
+
+Two situations are reported as generation errors instead of producing a Dart class that cannot
+compile:
+
+- Two interfaces ask for different Dart shapes of the same Go method. Make the directives agree, or
+  rename one of the Go methods.
+- An implementation does not bridge a method the interface declares, usually because that method
+  carries `//fgb:ignore`. Drop the directive, or keep the type out of the interface.
+
+Dependency interface methods are marker-only and do not consume directives. See
 [Directives and field tags](/reference/directives).
 
 ## Choosing a model

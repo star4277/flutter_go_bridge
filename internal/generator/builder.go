@@ -148,10 +148,131 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 	}
 
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
+	if err := b.propagateInterfaceMethodShapes(); err != nil {
+		return nil, b.warnings, err
+	}
 	if err := b.checkMethodOverrides(); err != nil {
 		return nil, b.warnings, err
 	}
+	if err := b.checkInterfaceImplementations(); err != nil {
+		return nil, b.warnings, err
+	}
 	return b.unit, b.warnings, nil
+}
+
+// propagateInterfaceMethodShapes copies the Dart name and call mode of an
+// interface method onto the implementations rendered under it.
+//
+// A directive on an interface method only shapes the declaration. Dart matches
+// an implementation by name and signature, so `//fgb:rename` on the interface
+// alone produced a class that claimed to implement it while exposing the
+// original name, and `//fgb:async` on the interface alone produced an invalid
+// override. Repeating the directive on every implementation would be silent
+// busywork, so the interface -- which owns the Dart contract -- wins.
+func (b *builder) propagateInterfaceMethodShapes() error {
+	// claimed remembers which interface already shaped a Go method, so two
+	// interfaces asking for different Dart shapes are reported instead of
+	// letting the last one win.
+	type claim struct {
+		iface     *interfaceModel
+		method    *callModel
+		signature string
+	}
+	claimed := map[*callModel]claim{}
+	for _, declaration := range b.unit.Interfaces {
+		for _, declared := range declaration.Methods {
+			for _, implementor := range declaration.Implementors {
+				if implementor.DecodeOnly {
+					continue
+				}
+				for _, concrete := range implementorMethods(implementor.Type) {
+					if concrete.GoName != declared.GoName {
+						continue
+					}
+					shape := declared.DartName + " " + string(declared.Mode)
+					if previous, seen := claimed[concrete]; seen && previous.signature != shape {
+						return fmt.Errorf(
+							"%s.%s implements both %s.%s and %s.%s, which ask for different Dart shapes (%s vs %s); make the two interface method directives agree",
+							implementor.DartName, concrete.GoName,
+							previous.iface.GoName, previous.method.GoName,
+							declaration.GoName, declared.GoName,
+							previous.signature, shape)
+					}
+					claimed[concrete] = claim{iface: declaration, method: declared, signature: shape}
+					concrete.DartName = declared.DartName
+					concrete.Mode = declared.Mode
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// implementorMethods collects the bridged methods a Dart implementation class
+// exposes, including the ones promoted from an embedded struct, because Dart
+// accepts an inherited member as the implementation of an interface method.
+func implementorMethods(mapped *wireType) []*callModel {
+	if mapped == nil {
+		return nil
+	}
+	switch mapped.Kind {
+	case kindStruct:
+		var methods []*callModel
+		for structure := mapped.Struct; structure != nil; structure = structure.Super {
+			methods = append(methods, structure.Methods...)
+		}
+		return methods
+	case kindOpaque:
+		return mapped.Opaque.Methods
+	case kindNamed:
+		return mapped.Named.Methods
+	default:
+		return nil
+	}
+}
+
+// checkInterfaceImplementations rejects an implementation whose Dart method
+// shape does not match the interface it is rendered with. Go is satisfied as
+// long as the Go signatures line up, but the bridge adds a per-declaration
+// call mode: an interface method marked //fgb:async becomes Future<T> while an
+// unmarked implementation stays synchronous, and Dart rejects that override.
+// Reporting it here names both declarations, where dart analyze would only
+// point at generated code.
+func (b *builder) checkInterfaceImplementations() error {
+	for _, declaration := range b.unit.Interfaces {
+		// Dependency interfaces are marker-only, so they promise nothing.
+		if len(declaration.Methods) == 0 {
+			continue
+		}
+		for _, implementor := range declaration.Implementors {
+			// A decode-only entry is another Go spelling of a Dart class that
+			// is already checked through its canonical implementor.
+			if implementor.DecodeOnly {
+				continue
+			}
+			available := map[string]*callModel{}
+			for _, method := range implementorMethods(implementor.Type) {
+				if _, seen := available[method.DartName]; !seen {
+					available[method.DartName] = method
+				}
+			}
+			for _, declared := range declaration.Methods {
+				concrete, found := available[declared.DartName]
+				if !found {
+					return fmt.Errorf(
+						"%s is rendered as a Dart implementation of %s but bridges no method for %s.%s; drop the //fgb:ignore on that method, or keep the type out of the interface",
+						implementor.DartName, declaration.DartName, declaration.GoName, declared.GoName)
+				}
+				if dartMethodSignature(concrete) != dartMethodSignature(declared) {
+					return fmt.Errorf(
+						"%s.%s implements %s.%s with a different Dart signature (%s vs %s); give both declarations the same //fgb:async or //fgb:sync directive",
+						implementor.DartName, concrete.GoName, declaration.GoName, declared.GoName,
+						dartMethodSignature(concrete), dartMethodSignature(declared))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (b *builder) disambiguateMethod(call *callModel, existing []*callModel) {
