@@ -343,7 +343,7 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif value == nil { var zero %s; return zero, nil }", goType)
 		r.line("\traw, ok := value.([]any)")
 		r.line("\tif !ok || len(raw) != 2 { var zero %s; return zero, fgbTypeError(path, \"interface envelope\", value) }", goType)
-		if len(typ.Interface.Implementors) > 0 && typ.Interface.Implementors[0].WireTag != "" {
+		if typ.Interface.UsesContentTags {
 			r.line("\ttag, ok := raw[0].(string)")
 			r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path+\".tag\", \"interface type tag\", raw[0]) }", goType)
 		} else {
@@ -352,7 +352,7 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		}
 		r.line("\tswitch tag {")
 		for index, implementor := range typ.Interface.Implementors {
-			r.line("\tcase %s:", interfaceWireTagLiteral(implementor, index))
+			r.line("\tcase %s:", interfaceWireTagLiteral(typ.Interface, implementor, index))
 			r.line("\t\treturn fgbDecode%d(raw[1], path)", implementor.Type.ID)
 		}
 		r.line("\t}")
@@ -524,8 +524,9 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindInterface:
 		// Tag the value with the concrete type so the other side knows which
 		// decoder to use. Most-derived first is irrelevant here: Go's type
-		// switch matches the dynamic type exactly.
-		r.line("\tif value == nil { return nil, fmt.Errorf(\"cannot send a nil %s to Dart\") }", typ.Interface.GoName)
+		// switch matches the dynamic type exactly. A nil interface encodes as
+		// null; the Dart decoder materializes an absent stand-in for it.
+		r.line("\tif value == nil { return nil, nil }")
 		r.line("\tswitch typed := value.(type) {")
 		for index, implementor := range typ.Interface.Implementors {
 			for _, dynamic := range implementor.GoTypes {
@@ -536,7 +537,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 				}
 				r.line("\t\tencoded, err := fgbEncode%d(%s, depth+1, transfer)", implementor.Type.ID, value)
 				r.line("\t\tif err != nil { return nil, err }")
-				r.line("\t\treturn []any{%s, encoded}, nil", goInterfaceWireTagLiteral(implementor, index))
+				r.line("\t\treturn []any{%s, encoded}, nil", goInterfaceWireTagLiteral(typ.Interface, implementor, index))
 			}
 		}
 		r.line("\t}")
@@ -554,8 +555,8 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	return nil
 }
 
-func goInterfaceWireTagLiteral(implementor *implementorModel, index int) string {
-	if implementor != nil && implementor.WireTag != "" {
+func goInterfaceWireTagLiteral(declaration *interfaceModel, implementor *implementorModel, index int) string {
+	if declaration.UsesContentTags {
 		return strconv.Quote(implementor.WireTag)
 	}
 	return fmt.Sprintf("int64(%d)", index)

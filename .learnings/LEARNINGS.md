@@ -1,5 +1,188 @@
 # Learnings
 
+## [LRN-20260804-001] knowledge_gap
+
+**Logged**: 2026-08-04T11:30:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+
+An interface field is nil in every struct's zero value, but the generated encoder rejects nil interfaces, so the zero value of any struct with an interface field cannot cross the bridge.
+
+### Details
+
+`renderEncoder`'s kindInterface branch emits `cannot send a nil <Iface> to Dart`, and the Dart field is non-nullable. Confirmed at runtime for both an input-package interface and a dependency interface: `ZeroSlot()` and `ZeroReport()` both fail with `FgbPlatformException(encode_error, ...)`. Pointers, slices and maps all normalize their nil form automatically; interfaces are the only nilable-without-pointer kind that does not. The `fgb:"nullable"` tag is a working escape hatch but is opt-in. The problem predates the third-round interface work, which widened its reach by turning external-interface fields from a GoOpaque downgrade into a value-class field.
+
+### Suggested Action
+
+Decided approach (not yet implemented): encode a nil interface as `null` and decode it on the Dart side into a generated per-interface "absent" implementation whose methods throw, marked with a shared `GoAbsent` interface so it stays detectable. Non-breaking, removes the encode failure, keeps methods unusable. The Dart encoder must map `GoAbsent` back to `null` or round trips break. Dependency interfaces are marker-only, so the throwing-method guarantee is vacuous there and `is GoAbsent` is the only signal. Full design and checklist in .audit/CODE_AUDIT_ROUND4.md.
+
+### Metadata
+
+- Source: conversation
+- Related Files: internal/generator/render_go.go, internal/generator/render_dart_split.go, internal/generator/dart_runtime.go, .audit/CODE_AUDIT_ROUND4.md
+- Tags: interface, nil, null-object, codegen, dart
+
+---
+
+## [LRN-20260804-002] best_practice
+
+**Logged**: 2026-08-04T11:30:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: tests
+
+### Summary
+
+`dart analyze` catches generated-code bugs that `go vet` cannot, but only a runtime smoke test catches semantic ones like the nil-interface encode failure.
+
+### Details
+
+Every severe finding in rounds 2-4 passed `go vet` and the full `go test` suite. The round-3 `dart analyze` gate now catches the compile-level class (ambient name shadowing). The round-4 finding is a level deeper: the generated code compiles, analyzes clean, and only fails when Go actually returns a struct whose interface field is nil. Substring assertions and static analysis both miss it.
+
+### Suggested Action
+
+Keep a fixed integration fixture in the repository and run generate, `-buildmode=c-shared` build, `dart analyze`, and a Dart smoke run in CI. The round-4 fixture under `build/r4` covers error positions, both interface flavours, ambient-name types, time, opaque, async and channel streams, plus a concurrency stress script; promote it out of the ignored `build/` directory.
+
+### Metadata
+
+- Source: conversation
+- Related Files: .audit/CODE_AUDIT_ROUND4.md
+- Tags: testing, integration, smoke, ci
+
+---
+
+## [LRN-20260803-011] knowledge_gap
+
+**Logged**: 2026-08-03T14:10:00+08:00
+**Priority**: critical
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+`names.Sanitize` guards Dart keywords but not `dart:core` type names, so a Go type named `List` or `Duration` generates Dart that does not compile.
+
+### Details
+
+`dart:core` is implicitly imported, so a generated top-level class shadows the core type of the same name in that library. The generator itself emits `List<T>`, `Map<K,V>`, `Duration(microseconds: ...)`, `DateTime`, `BigInt`. Measured: `type List struct{...}` plus a `[]string` field yields `final List<String> names;` alongside `final class List {}` (0 type parameters) — a hard compile error; `type Duration struct{...}` plus a `time.Duration` field breaks `Duration(microseconds:)` and `.inMicroseconds` the same way. Names the generator does not use (`Comparable`, `Sink`, `Iterator`, `Pattern`) shadow silently instead. The third-party interface feature widens the blast radius because it names Dart classes after dependency types the user cannot rename (`error` becomes `class Error`).
+
+### Suggested Action
+
+Add a `dartCoreTypes` set alongside `dartReserved`, prefix colliding upper-camel names (`GoList`), warn, and seed the existing `uniqueName` table with core type names. Add a `dart analyze` gate over generated fixtures — the Go side already has a `go vet` gate and this class of bug only shows up there. See .audit/CODE_AUDIT_ROUND3.md item C1.
+
+### Metadata
+
+- Source: conversation
+- Related Files: internal/names/names.go, internal/generator/render_dart_split.go, .audit/CODE_AUDIT_ROUND3.md
+- Tags: dart, naming, shadowing, codegen, compile-failure
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Ambient Dart names are renamed with a `Go` prefix, warnings are emitted, and generated Dart fixtures cover the collision.
+
+---
+
+## [LRN-20260803-012] knowledge_gap
+
+**Logged**: 2026-08-03T14:10:00+08:00
+**Priority**: critical
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+A dependency interface's union tags are a function of the input package's whole transitive import graph, not of the user's API.
+
+### Details
+
+`collectImplementors` scans every loaded package for types implementing a non-input-package interface and assigns positional tags. Measured twice (before and after the JSON rollback, identical result): a `fmt.Stringer` field produced 7 union members; adding one unrelated function that pulls `net/url` into the graph produced 16, shifting every tag (`*os.ProcessState` 0 to 8, the opaque fallback 6 to 15). Dart packages and native libraries are usually built separately, so any graph difference between the two builds decodes a tag as the wrong type — silently, when both types are field-compatible maps.
+
+### Suggested Action
+
+Restrict dependency-interface candidates to named types already bridged for another reason, and make the wire tag a stable content identifier (package path + type name, or its hash) rather than a position. Add a regression test that generates the same API under two different import graphs and asserts identical tags. See .audit/CODE_AUDIT_ROUND3.md item S1.
+
+### Metadata
+
+- Source: conversation
+- Related Files: internal/generator/builder.go, .audit/CODE_AUDIT_ROUND3.md
+- Tags: interface, wire-abi, tag-stability, codegen
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Dependency candidates now come only from callable-reachable types, dedicated mappings stop traversal, and content tags replace positional tags.
+
+---
+
+## [LRN-20260804-001] knowledge_gap
+
+**Logged**: 2026-08-04T00:00:00+08:00
+**Priority**: critical
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+Generated Go must never register a package already owned by the fixed runtime import set under a second `fgbextN` alias.
+
+### Details
+
+Dependency-interface implementor discovery could register `time`, `runtime`, `reflect`, `os`, `math/big`, or `sync/atomic` as an external package even though generated Go already imports it under its fixed name. `goType` continued emitting the fixed name, so the new alias was unused and generated code failed compilation. An ordinary `error` field naturally exposed the issue because the old open-world interface scan pulled fixed-package implementations into the union.
+
+### Suggested Action
+
+Treat fixed runtime imports and the generated support package as reserved in `registerExternalPackage`, and run `go vet` on a fixture whose dependency-interface implementor comes from a fixed package.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: internal/generator/builder.go, internal/generator/round3_audit_test.go
+- Tags: codegen, imports, alias, interface, compile-failure
+- See Also: LRN-20260803-012, LRN-20260801-003
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Fixed imports are skipped during external registration; all reserved paths have unit coverage and an `os.ProcessState` generated-module vet regression.
+
+---
+
+## [LRN-20260804-002] best_practice
+
+**Logged**: 2026-08-04T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: frontend
+
+### Summary
+
+Dart nullability widening must be idempotent because some dedicated mappings are already nullable.
+
+### Details
+
+The dedicated ordinary-`error` mapping uses `String?`. Generic encoder, field-tag, and parameter nullability helpers appended another `?`, producing invalid `String??` that source substring tests missed but `dart format` rejected.
+
+### Suggested Action
+
+Route every widening operation through one helper that returns an already-nullable Dart spelling unchanged, and keep a real generated Dart analysis gate.
+
+### Metadata
+
+- Source: error
+- Related Files: internal/generator/model.go, internal/generator/render_dart_split.go, internal/generator/round3_audit_test.go
+- Tags: dart, nullability, codegen, analyzer
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Added `nullableDartType`, regression coverage, and a successful generated-package `dart analyze` run.
+
+---
+
 ## [LRN-20260803-001] best_practice
 
 **Logged**: 2026-08-03T02:22:00+08:00
@@ -184,11 +367,15 @@ representative shapes there when generator signatures change.
 - Related Files: internal/generator/features_test.go, internal/generator/render_go_cst.go
 - Tags: codegen, go-vet, regression-test
 - See Also: LRN-20260801-002
+- Pattern-Key: generator.generated_printf_literals
+- Recurrence-Count: 2
+- First-Seen: 2026-08-01
+- Last-Seen: 2026-08-04
 
 ### Resolution
 
 - **Resolved**: 2026-08-01T12:35:00+09:00
-- **Notes**: Added generated-module vet coverage and fixed the malformed generated format strings.
+- **Notes**: Added generated-module vet coverage and fixed malformed generated format strings. The pattern recurred in round three; literal `%` source now uses renderer `raw` calls.
 
 ---
 

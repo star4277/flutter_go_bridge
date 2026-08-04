@@ -63,6 +63,11 @@ abstract base class GoOpaque implements ffi.Finalizable {
   final int fgbHandle;
 }
 
+/// Marks a value that was nil on the Go side. Its members are not usable.
+/// Check with an 'is GoAbsent' test when you need to tell an absent
+/// interface value apart from a real one.
+abstract interface class GoAbsent {}
+
 /// Wraps a registered Dart closure so the callback dispatcher can tell it
 /// apart from plain DartOpaque objects sharing the same registry.
 final class _FgbCallbackInvoker {

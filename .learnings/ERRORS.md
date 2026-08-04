@@ -1524,3 +1524,122 @@ Read both exact table tails before applying a multi-file bilingual documentation
 - **Notes**: Reapplied the note using the exact text from each page.
 
 ---
+## [ERR-20260804-001] powershell-rg-glob-and-quoting
+
+**Logged**: 2026-08-04T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Parallel diagnostics failed when a Unix-style `*_test.go` path glob and Markdown backticks were embedded directly in PowerShell commands.
+
+### Error
+
+```text
+rg: internal/generator/*test.go: 文件名、目录名或卷标语法不正确。
+The string is missing the terminator: ".
+```
+
+### Context
+
+- Operation: search generated-runtime tests and documentation text on Windows.
+- PowerShell passed the wildcard as a literal path, while backticks inside a double-quoted command changed PowerShell parsing.
+
+### Suggested Fix
+
+Use `rg -g '*_test.go' PATTERN directory` for file globs and avoid Markdown backticks inside double-quoted PowerShell command strings.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator, docs/reference, docs/zh/reference
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Re-ran the searches with `rg -g` and simpler PowerShell commands.
+
+---
+
+## [ERR-20260804-002] bilingual-doc-patch-context
+
+**Logged**: 2026-08-04T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+A combined bilingual documentation patch failed because it assumed the English error-table wording also appeared in the Chinese page.
+
+### Error
+
+```text
+apply_patch verification failed: Failed to find expected lines in docs/zh/reference/type-mapping.md
+```
+
+### Context
+
+- Operation: update round-three interface, error, and time behavior in both language variants.
+- The failed patch was atomic and did not partially modify code or documentation.
+
+### Suggested Fix
+
+Read the exact section in each language and apply smaller page-specific patches.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: docs/reference/type-mapping.md, docs/zh/reference/type-mapping.md
+- See Also: ERR-20260802-PATCH01
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Split the patch and updated each page against its actual text.
+
+---
+## [ERR-20260804-003] round3-generated-output-gates
+
+**Logged**: 2026-08-04T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+Real generated-code gates caught invalid Dart nullability and malformed Go format strings that repository compilation could not see.
+
+### Error
+
+```text
+bridge_generated.dart: Expected to find ')' at String??
+bridge_generated.go: fmt.Errorf call needs 0 args but has 1 arg
+aggregate coverage: 94.9% (required: 95.0%)
+```
+
+### Context
+
+- Operation: generate the round-three integration fixture, run `dart format`/`dart analyze`, run generated-module `go vet`, and enforce aggregate coverage.
+- `error -> String?` was widened twice by generic nullability helpers.
+- Renderer lines containing literal `%s` used the formatted writer incorrectly and emitted `%%s`.
+- New branches initially lowered aggregate statement coverage by 0.1 percentage point.
+
+### Suggested Fix
+
+Keep generated Go vet, generated Dart analysis, runtime smoke, and aggregate coverage as separate required gates.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/model.go, internal/generator/render_dart_split.go, internal/generator/render_go.go, internal/generator/render_go_cst.go
+- See Also: ERR-20260804-002
+
+### Resolution
+
+- **Resolved**: 2026-08-04T00:00:00+08:00
+- **Notes**: Nullability widening is idempotent, literal generated format source uses `raw`, focused branch tests raised aggregate coverage to 95.0%, and the full integration smoke passed.
+
+---

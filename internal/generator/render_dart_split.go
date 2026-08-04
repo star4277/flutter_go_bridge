@@ -158,6 +158,11 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 	runtime := strings.ReplaceAll(dartRuntimeSource, "__FGB_LIBRARY_NAME__", strconv.Quote(unit.LibraryName))
 	runtime = strings.ReplaceAll(runtime, "__FGB_BRIDGE_CLASS__", unit.ClassName)
 	centralRenderer.raw(runtime)
+	// Absent stand-in classes are library-private and live alongside the
+	// decoders that reference them in this central file.
+	for _, declaration := range unit.Interfaces {
+		centralRenderer.renderInterfaceAbsentClass(declaration)
+	}
 	for _, typ := range unit.Types {
 		if err := centralRenderer.renderDecoder(typ); err != nil {
 			return nil, err
@@ -400,6 +405,30 @@ func (r *splitDartRenderer) renderInterface(declaration *interfaceModel) {
 		}
 		r.line("  %s %s(%s);", resultType, method.DartName, dartParams(method))
 	}
+	r.line("}")
+	r.line("")
+}
+
+// renderInterfaceAbsentClass generates the Dart stand-in for a nil Go
+// interface value. Its methods throw so a stray call surfaces the problem
+// instead of silently returning a zero value. Dependency interfaces have no
+// methods, so only the marker and toString are emitted; detect the absent
+// value with `is GoAbsent`. The class lives in the central file alongside the
+// decoders that reference it, because the leading underscore makes it
+// library-private.
+func (r *splitDartRenderer) renderInterfaceAbsentClass(declaration *interfaceModel) {
+	r.line("final class _%sAbsent implements %s, GoAbsent {", declaration.DartName, declaration.DartName)
+	r.line("  const _%sAbsent();", declaration.DartName)
+	for _, method := range declaration.Methods {
+		resultType := dartResultType(method)
+		if isAsyncCall(method) {
+			resultType = "Future<" + resultType + ">"
+		}
+		r.line("  @override")
+		r.line("  %s %s(%s) => throw StateError(%s);", resultType, method.DartName, dartParams(method), strconv.Quote(declaration.DartName+" was nil on the Go side; this value has no implementation"))
+	}
+	r.line("  @override")
+	r.line("  String toString() => %s;", strconv.Quote(declaration.DartName+"(absent)"))
 	r.line("}")
 	r.line("")
 }
@@ -806,13 +835,14 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindStreamSink:
 		r.line("  throw UnsupportedError('$path: stream sinks only travel from Dart to Go');")
 	case kindInterface:
-		// Nullability only exists in the Dart -> Go direction (//fgb:nullable),
-		// so a value arriving from Go must be present.
-		r.line("  if (value == null) throw FormatException('$path: Go returned a nil %s');", typ.Interface.GoName)
+		// A nil Go interface arrives as null; materialize the absent stand-in
+		// so the Dart type stays non-nullable. fgb:"nullable" fields keep the
+		// real null through dartFieldDecode before reaching this decoder.
+		r.line("  if (value == null) return const _%sAbsent();", typ.Interface.DartName)
 		r.line("  if (value is! List || value.length != 2) throw FormatException('$path: expected an interface envelope');")
 		r.line("  switch (value[0]) {")
 		for index, implementor := range typ.Interface.Implementors {
-			r.line("    case %s:", interfaceWireTagLiteral(implementor, index))
+			r.line("    case %s:", interfaceWireTagLiteral(typ.Interface, implementor, index))
 			if strings.HasSuffix(implementor.Type.DartType, "?") {
 				r.line("      final decoded = fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
 				r.line("      if (decoded == null) throw FormatException('$path: nil %s implementation payload');", implementor.DartName)
@@ -894,9 +924,13 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	case kindStreamSink:
 		r.renderStreamSinkRegistration(typ, "bridge")
 	case kindInterface:
+		// An absent value (nil on the Go side) round-trips back to null so Go
+		// decodes nil again. This must precede the implementor checks: the
+		// absent stand-in implements the interface but matches no concrete type.
+		r.line("  if (value is GoAbsent) return null;")
 		// Most-derived first: a subclass also passes its superclass check.
 		for _, implementor := range sortedImplementors(typ.Interface) {
-			r.line("  if (value is %s) return <Object?>[%s, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, interfaceWireTagLiteral(implementor.implementorModel, implementor.Index), implementor.Type.ID)
+			r.line("  if (value is %s) return <Object?>[%s, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, interfaceWireTagLiteral(typ.Interface, implementor.implementorModel, implementor.Index), implementor.Type.ID)
 		}
 		r.line("  throw ArgumentError('$path: ${value.runtimeType} is not a Go implementation of %s');", typ.Interface.DartName)
 	case kindCallback:
@@ -912,8 +946,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	return nil
 }
 
-func interfaceWireTagLiteral(implementor *implementorModel, index int) string {
-	if implementor != nil && implementor.WireTag != "" {
+func interfaceWireTagLiteral(declaration *interfaceModel, implementor *implementorModel, index int) string {
+	if declaration.UsesContentTags {
 		return strconv.Quote(implementor.WireTag)
 	}
 	return strconv.Itoa(index)

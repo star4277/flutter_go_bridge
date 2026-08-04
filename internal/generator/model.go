@@ -359,6 +359,12 @@ type interfaceModel struct {
 	// stable order. Input interfaces use the index as the tag; dependency
 	// interfaces use WireTag.
 	Implementors []*implementorModel
+	// UsesContentTags reports whether every implementor carries a string
+	// WireTag (dependency interfaces) rather than a positional integer index
+	// (input-package interfaces). Decided once in mapInterface so the encoder,
+	// decoder, and tag-literal helpers all read the same source of truth
+	// instead of inferring the scheme from the first implementor.
+	UsesContentTags bool
 }
 
 // implementorModel links a concrete bridged type to the interface it

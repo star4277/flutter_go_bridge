@@ -363,8 +363,26 @@ func DescribeOptional(shape Shape) string {
 String describeOptional({Shape? shape})
 ```
 
-Go 返回 nil 命名接口时，Dart 无法知道它本应对应哪个具体实现，因此解码会抛出 `FormatException`。
-需要表达“可能没有值”的返回结果时，优先返回显式结果结构体、布尔标志，或其他可无歧义映射的类型。
+`//fgb:nullable` 让参数变成 `Shape?`，nil 在两个方向上都保持为真正的 Dart `null`。
+
+当 nil Go 接口出现在**非空**位置（必填字段、参数或返回值）时，不会报错。Go 编码器发送 `null`，Dart
+解码器会生成一个缺省实现——`final class _ShapeAbsent implements Shape, GoAbsent`，其方法覆盖抛出
+`StateError`，`toString` 返回 `'Shape(absent)'`。这样 Go 的零值结构体可以正常跨 bridge，同时 Dart 类型
+保持非空。
+
+通过共享的 `GoAbsent` marker 可以检测缺省值：
+
+```dart
+if (shape is GoAbsent) {
+  // shape 在 Go 侧为 nil，其方法不可调用。
+}
+```
+
+把缺省值回传给 Go 时会再次编码为 `null`，往返保持 nil。标记了 `fgb:"nullable"` 的字段仍然得到真正的
+Dart `null`，因为字段级解码器在共享接口解码器运行之前就拦截了 `null`。
+
+**依赖接口的限制。** 依赖接口在 Dart 中只是 marker——没有生成方法声明，因此其缺省类没有方法可以覆盖，
+`StateError` 保护是空的。此时 `GoAbsent` marker 是区分缺省依赖接口值与真实值的唯一方式。
 
 ### 接口方法指令
 
@@ -395,4 +413,3 @@ Go 返回 nil 命名接口时，Dart 无法知道它本应对应哪个具体实�
 | override signature 不兼容 | Go 遮蔽方法不满足 Dart override，使用 `//fgb:rename` |
 | 接口没有 bridged implementor | 只会发生在输入包接口；声明并暴露至少一个实现。依赖接口会使用 opaque fallback |
 | Dart 传入自定义 `implements Shape` 对象失败 | 只有生成器登记的 Go 实现能跨 bridge，不能传任意 Dart 实现 |
-| Go 返回 nil 接口后 `FormatException` | 返回值缺少具体实现 tag，改用显式可选结果模型 |
