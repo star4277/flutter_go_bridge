@@ -32,6 +32,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.line("  return value ? 1 : 0;")
 	case kindString:
 		r.renderCstStringBody("value")
+	case kindError:
+		r.renderCstStringBody("value")
 	case kindSigned, kindFloat:
 		r.line("  return value;")
 	case kindTime:

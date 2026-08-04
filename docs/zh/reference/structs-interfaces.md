@@ -199,10 +199,10 @@ Dart 无法重建的 Go 状态。这两种情况不能混为一谈。
 不同包的类型若产生相同 Dart 名称，生成器会添加 Go 包名前缀消除冲突。例如两个 `User` 可能生成
 为 `ModelsUser` 和 `AuthUser`。因此应从生成文件导入类型，不要假定外部类型一定保留短名称。
 
-可达的命名非空接口也会作为 tagged serialization union 分析。生成器会扫描输入 API 已加载的完整依赖图，
-寻找实现该接口的导出命名结构体，并追加一个接口级 `GoOpaque` 成员来保留生成 Go 无法命名的实现。
-依赖接口的方法不会生成 Dart 调用：Dart 接口只作为 marker，具体类负责携带可序列化字段或
-`GoOpaque` handle。
+可达的命名非空接口也会作为 tagged serialization union 分析。生成器只从公共 API 已经可达的类型中
+寻找实现该接口的导出命名结构体；无关 import 不会增加 union 成员或移动已有 tag，并追加一个接口级
+`GoOpaque` 成员来保留生成 Go 无法命名的实现。依赖接口的方法不会生成 Dart 调用：Dart 接口只作为
+marker，具体类负责携带可序列化字段或 `GoOpaque` handle；生成器会对这一能力边界输出 warning。
 
 ## 匿名嵌入与 Dart 继承
 
@@ -309,8 +309,9 @@ String describe({required Shape shape}) { /* bridge call */ }
 
 对于输入包接口，生成器检查输入包中参与桥接的结构体，并按声明顺序保持原有 wire 兼容性。
 
-对于依赖接口，生成器遍历 `go/packages` 已加载的完整依赖图，收集 `T` 或 `*T` method set 满足接口的
-导出、非泛型命名结构体。以下声明不会进入实现集合：名为 `main` 的包、受 Go `internal` 导入规则
+对于依赖接口，生成器只遍历公共 API 已经可达的类型，收集 `T` 或 `*T` method set 满足接口的导出、
+非泛型命名结构体；无关 import 不会增加 union 成员，也不会移动已有 tag。以下声明不会进入实现集合：
+名为 `main` 的包、受 Go `internal` 导入规则
 限制而无法由生成 bridge 引用的包、未导出类型、类型别名、非结构体命名类型，以及未实例化的泛型声明。
 这些类型不能作为具名 union 成员，但仍会由最后的接口级 opaque fallback 传输：Go handle registry
 保存接口值本身，运行时注册的新实现也使用同一 fallback。
@@ -331,16 +332,16 @@ FGB 调用指令，也没有对应的生成调用入口，因此 marker 语义�
 接口值使用 standard codec 的 tagged union 传输，逻辑形状是：
 
 ```text
-[implementorIndex, payload]
+[implementorTag, payload]
 ```
 
-`implementorIndex` 标识具体实现，`payload` 是该 value struct 的字段数据或 opaque handle。Dart 传入
+`implementorTag` 标识具体实现，`payload` 是该 value struct 的字段数据或 opaque handle。Dart 传入
 不属于已生成实现集合的对象时会抛出 `ArgumentError`；但 Go 先前返回的接口 fallback 对象可以原样
 传回。收到未知 tag 会报格式错误。
 
-输入包实现按 Go 声明位置保持稳定；依赖实现按完整包路径和 Go 类型名排序。若同一 value 类型的
-`T` 与 `*T` 都能作为 Go 动态实现，Dart → Go 使用值形态作为规范 tag。tag 数字仍属于生成协议的
-内部细节。Go bridge 与 Dart 目录必须由同一次生成结果配套发布，不要手写或持久化这些 tag。
+输入包实现按 Go 声明位置保持稳定并继续使用数字 tag；依赖实现按完整包路径和 Go 类型名排序，
+但 tag 是由相同内容生成的稳定字符串。若同一 value 类型的 `T` 与 `*T` 都能作为 Go 动态实现，
+Dart → Go 使用值形态作为规范 tag。生成版本不一致时会报告未知 tag，而不是静默解码成错误类型。
 
 接口 tagged union 走 standard codec，不走 CST 快速路径。
 

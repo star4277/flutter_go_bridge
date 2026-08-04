@@ -45,6 +45,11 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
 		r.line("\tif err != nil { return \"\", err }")
 		r.line("\treturn raw, nil")
+	case kindError:
+		r.line("\tif value == nil { return nil, nil }")
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { return nil, err }")
+		r.raw("\treturn fmt.Errorf(\"%s\", raw), nil")
 	case kindFloat:
 		r.line("\treturn %s(value), nil", goType)
 	case kindBigInt:
@@ -61,7 +66,7 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 			r.line("\treturn *raw, nil")
 		}
 	case kindTime:
-		r.line("\treturn time.UnixMicro(int64(value)), nil")
+		r.line("\treturn time.UnixMicro(int64(value)).UTC(), nil")
 	case kindInternetIP:
 		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null IP\", path) }", goType)
 		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
@@ -275,6 +280,9 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\treturn fgbDcoBool(value)")
 	case kindString:
 		r.line("\treturn fgbDcoString(value)")
+	case kindError:
+		r.line("\tif value == nil { return fgbDcoNull() }")
+		r.line("\treturn fgbDcoString(value.Error())")
 	case kindSigned:
 		if typ.BitSize <= 32 && typ.BasicKind != types.Int {
 			r.line("\treturn fgbDcoInt32(int32(value))")
@@ -300,7 +308,9 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 			r.line("\treturn fgbDcoString(value.Text(16))")
 		}
 	case kindTime:
-		r.line("\treturn fgbDcoInt64(value.UnixMicro())")
+		r.line("\tmicros, err := fgbTimeUnixMicro(value)")
+		r.line("\tif err != nil { return nil, err }")
+		r.line("\treturn fgbDcoInt64(micros)")
 	case kindInternetIP:
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindIPPrefix:

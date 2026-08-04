@@ -106,7 +106,7 @@ Go 指针表示可空，并不表示共享内存。普通 `*User` 返回值解�
 
 | Go | Dart | wire 与边界行为 |
 | --- | --- | --- |
-| `time.Time` | `DateTime` | wire 使用有符号 64 位 Unix 微秒时间戳；Go → Dart 使用 `DateTime.fromMicrosecondsSinceEpoch`，Dart → Go 使用 `microsecondsSinceEpoch`，Go 中不足 1 微秒的纳秒部分会被截断 |
+| `time.Time` | `DateTime` | wire 使用有符号 64 位 Unix 微秒时间戳；两端都重建为 UTC，Go 中不足 1 微秒的纳秒部分会被截断 |
 | `time.Duration` | `Duration` | wire 使用微秒；Go → Dart 会截断不足 1 微秒的纳秒部分 |
 | `math/big.Int` | `BigInt` | 使用无损大整数编码；`*big.Int` 映射为 `BigInt?` |
 | `net/netip.Addr` | `InternetAddress` | wire 使用 IP 文本；零值地址与空字符串互转；需要 `dart:io` |
@@ -114,8 +114,9 @@ Go 指针表示可空，并不表示共享内存。普通 `*User` 返回值解�
 | `net/url.URL` | `Uri` | wire 使用 `URL.String()`；Dart 使用 `Uri.parse` |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue` | wire 使用 UUID 字符串；需要 Dart `uuid` package |
 
-`time.Time` 旧版本使用 RFC3339Nano 文本。升级后必须同时重新生成 Go 与 Dart 代码；混用新旧
-生成文件会因 wire 类型不一致而失败。
+`time.Time` 旧版本使用 RFC3339Nano 文本。生成的 codec 会拒绝超出 Dart 微秒范围（±8.64e18）的值。
+升级后必须同时重新生成 Go 与 Dart 代码；混用新旧生成文件会因 wire 类型不一致而失败。原始 Go
+时区和不足 1 微秒的精度无法由 Dart 表示；需要本地显示时请对返回值调用 `toLocal()`。
 
 上表中的值类型使用 Go 指针时都会得到对应的 Dart 可空类型，例如：
 
@@ -172,9 +173,10 @@ import 'package:uuid/uuid.dart';
 `//fgb:opaque` 会使结构体使用 `GoOpaque`。匿名嵌入值结构体会映射为 Dart `extends`，被提升字段在
 wire 上扁平化。
 
-命名非空接口使用 `[实现序号, 载荷]` 的 tagged union，并走 standard codec。输入包接口会暴露生成
-方法；可达依赖接口只作为 marker，并从已加载依赖图中发现导出的命名结构体实现。生成 Go 无法命名
-的运行时实现使用接口级 `GoOpaque` fallback。完整分类、继承、实现发现和限制见
+命名非空接口使用 `[实现 tag, 载荷]` 的 tagged union，并走 standard codec。输入包接口会暴露生成
+方法，并保留声明顺序的数字 tag 以兼容旧 wire；可达依赖接口只作为 marker，只从公共 API 已经可达
+的导出命名结构体中发现实现，并使用稳定的包路径/类型名 tag。生成 Go 无法命名的运行时实现使用接口级
+`GoOpaque` fallback。完整分类、继承、实现发现和限制见
 [结构体与接口](/zh/reference/structs-interfaces)。
 
 ## Dart 名称冲突
@@ -197,7 +199,7 @@ the generated class is named "GoList" instead
 ```
 
 该规则作用于所有生成的类型名，与来源无关：输入包的结构体和接口、作为实现被引入的依赖类型、依赖
-接口的 `GoOpaque` fallback（`error` 生成为 `GoError`）、合成 opaque 类型，以及通过 `//fgb:rename`
+接口的 `GoOpaque` fallback、合成 opaque 类型，以及通过 `//fgb:rename`
 指定的名字。显式 rename 同样会被调整，否则生成的 library 无法编译。
 
 保留名称包括 `dart:core` 的全部类型，以及渲染器不加前缀直接使用的名字：`Future`、`Stream`、
@@ -234,9 +236,10 @@ handles，不会影响其他调用仍存活的 handles。
 
 | Go | Dart | 说明 |
 | --- | --- | --- |
-| `error` | `FgbPlatformException` | error slot 不进入 Dart 返回类型；非 nil 时抛出异常 |
+| 字段、参数或普通值中的 `error` | `String?` | 非 nil 错误编码为 `Error()` 文本；nil 编码为 `null` |
+| 返回值中的 `error` slot | `FgbPlatformException` | slot 不进入 Dart 返回类型；非 nil 时抛出异常 |
 
-`error` 可以位于任意返回位置，也可以声明多个。单个非 nil error 使用 `message`；多个 error 使用
+返回值中的 `error` 可以位于任意位置，也可以声明多个。单个非 nil error 使用 `message`；多个 error 使用
 `goErrors` 保存逐条消息。详见[返回值与 error](/zh/reference/returns-errors)。
 
 ## Stream、callback 与上下文

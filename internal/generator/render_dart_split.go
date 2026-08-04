@@ -71,9 +71,16 @@ func dartResultDecodeLines(call *callModel, wireExpression, indent string) []str
 // Callbacks marked `//fgb:nullable` accept null.
 func dartParamType(param *paramModel) string {
 	if param.Nullable {
-		return param.Type.DartType + "?"
+		return nullableDartType(param.Type.DartType)
 	}
 	return param.Type.DartType
+}
+
+func nullableDartType(value string) string {
+	if strings.HasSuffix(value, "?") {
+		return value
+	}
+	return value + "?"
 }
 
 // dartEncoderValueType is the Dart parameter type of a generated encoder.
@@ -83,7 +90,7 @@ func dartParamType(param *paramModel) string {
 // turns back into a nil value.
 func dartEncoderValueType(typ *wireType) string {
 	if typ.nilableWithoutPointer() {
-		return typ.DartType + "?"
+		return nullableDartType(typ.DartType)
 	}
 	return typ.DartType
 }
@@ -685,6 +692,10 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindString:
 		r.line("  if (value is! String) throw FormatException('$path: expected String');")
 		r.line("  return value;")
+	case kindError:
+		r.line("  if (value == null) return null;")
+		r.line("  if (value is! String) throw FormatException('$path: expected error string');")
+		r.line("  return value;")
 	case kindSigned, kindUnsigned:
 		if strings.TrimSuffix(typ.DartType, "?") == "BigInt" {
 			if strings.HasSuffix(typ.DartType, "?") {
@@ -709,7 +720,10 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  throw FormatException('$path: expected BigInt');")
 	case kindTime:
 		r.line("  if (value is! int) throw FormatException('$path: expected time microseconds');")
-		r.line("  return DateTime.fromMicrosecondsSinceEpoch(value);")
+		r.line("  if (value < -8640000000000000000 || value > 8640000000000000000) {")
+		r.line("    throw FormatException('$path: time microseconds outside Dart DateTime range');")
+		r.line("  }")
+		r.line("  return DateTime.fromMicrosecondsSinceEpoch(value, isUtc: true);")
 	case kindInternetIP:
 		r.line("  if (value is! String) throw FormatException('$path: expected InternetAddress string');")
 		r.line("  return InternetAddress(value);")
@@ -798,7 +812,7 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  if (value is! List || value.length != 2) throw FormatException('$path: expected an interface envelope');")
 		r.line("  switch (value[0]) {")
 		for index, implementor := range typ.Interface.Implementors {
-			r.line("    case %d:", index)
+			r.line("    case %s:", interfaceWireTagLiteral(implementor, index))
 			if strings.HasSuffix(implementor.Type.DartType, "?") {
 				r.line("      final decoded = fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
 				r.line("      if (decoded == null) throw FormatException('$path: nil %s implementation payload');", implementor.DartName)
@@ -831,7 +845,7 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  if (value == null) return null;")
 	}
 	switch typ.Kind {
-	case kindBool, kindString, kindSigned, kindFloat, kindAny, kindIPPrefix:
+	case kindBool, kindString, kindError, kindSigned, kindFloat, kindAny, kindIPPrefix:
 		r.line("  return value;")
 	case kindUnsigned, kindBigInt:
 		if strings.TrimSuffix(typ.DartType, "?") == "BigInt" {
@@ -882,7 +896,7 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	case kindInterface:
 		// Most-derived first: a subclass also passes its superclass check.
 		for _, implementor := range sortedImplementors(typ.Interface) {
-			r.line("  if (value is %s) return <Object?>[%d, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, implementor.Index, implementor.Type.ID)
+			r.line("  if (value is %s) return <Object?>[%s, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, interfaceWireTagLiteral(implementor.implementorModel, implementor.Index), implementor.Type.ID)
 		}
 		r.line("  throw ArgumentError('$path: ${value.runtimeType} is not a Go implementation of %s');", typ.Interface.DartName)
 	case kindCallback:
@@ -896,4 +910,11 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	}
 	r.line("}")
 	return nil
+}
+
+func interfaceWireTagLiteral(implementor *implementorModel, index int) string {
+	if implementor != nil && implementor.WireTag != "" {
+		return strconv.Quote(implementor.WireTag)
+	}
+	return strconv.Itoa(index)
 }

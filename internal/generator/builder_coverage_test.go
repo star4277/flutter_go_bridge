@@ -95,6 +95,86 @@ func TestCanReferenceImplementationPackageRespectsGoImportRules(t *testing.T) {
 	}
 }
 
+func TestRegisterExternalPackageSkipsFixedImports(t *testing.T) {
+	inputPackage := types.NewPackage("example.com/fixture/api", "api")
+	b := &builder{
+		api: &bridgemodel.API{Package: &packages.Package{Types: inputPackage}},
+		unit: &unit{
+			SupportPackagePath: "example.com/fixture/internal/fgb",
+			GoPackageAliases:   map[string]string{},
+		},
+	}
+	for _, path := range []string{
+		"bytes", "context", "encoding/binary", "fmt", "io", "math/big",
+		"os", "reflect", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe",
+		"time", "net/netip", "net/url", "github.com/gofrs/uuid/v5",
+		"example.com/fixture/internal/fgb",
+	} {
+		b.registerExternalPackage(types.NewPackage(path, filepath.Base(path)))
+	}
+	if len(b.unit.ExternalImports) != 0 || len(b.unit.GoPackageAliases) != 0 {
+		t.Fatalf("fixed imports must not be registered as external aliases: imports=%v aliases=%v", b.unit.ExternalImports, b.unit.GoPackageAliases)
+	}
+
+	b.registerExternalPackage(types.NewPackage("example.com/dependency/models", "models"))
+	if len(b.unit.ExternalImports) != 1 || b.unit.GoPackageAliases["example.com/dependency/models"] != "fgbext0" {
+		t.Fatalf("ordinary dependencies still need generated aliases: imports=%v aliases=%v", b.unit.ExternalImports, b.unit.GoPackageAliases)
+	}
+	b.registerExternalPackage(types.NewPackage("example.com/dependency/models", "models"))
+	b.registerExternalPackage(nil)
+	b.registerExternalPackage(types.NewPackage("", "empty"))
+	b.registerExternalPackage(inputPackage)
+	if len(b.unit.ExternalImports) != 1 || len(b.unit.GoPackageAliases) != 1 {
+		t.Fatalf("duplicate, nil, empty, and input packages must be ignored: imports=%v aliases=%v", b.unit.ExternalImports, b.unit.GoPackageAliases)
+	}
+}
+
+func TestStableWireTagUsesTypeIdentity(t *testing.T) {
+	pkg := types.NewPackage("example.com/dependency/models", "models")
+	name := types.NewTypeName(0, pkg, "Item", nil)
+	named := types.NewNamed(name, types.NewStruct(nil, nil), nil)
+	for _, test := range []struct {
+		typ  types.Type
+		want string
+	}{
+		{typ: named, want: "example.com/dependency/models.Item"},
+		{typ: types.NewPointer(named), want: "*example.com/dependency/models.Item"},
+		{typ: types.NewSlice(named), want: "[]example.com/dependency/models.Item"},
+		{typ: types.Universe.Lookup("error").Type(), want: "error"},
+	} {
+		if got := stableWireTag(test.typ); got != test.want {
+			t.Errorf("stableWireTag(%s) = %q, want %q", test.typ, got, test.want)
+		}
+	}
+}
+
+func TestCanReferenceImplementationTypeRejectsIncompleteTypes(t *testing.T) {
+	inputPackage := types.NewPackage("example.com/fixture/api", "api")
+	b := &builder{
+		api:  &bridgemodel.API{Package: &packages.Package{Types: inputPackage}},
+		unit: &unit{PackagePath: "example.com/fixture/bridge"},
+	}
+	if b.canReferenceImplementationType(nil) {
+		t.Fatal("nil named type must not be referenceable")
+	}
+	localName := types.NewTypeName(0, inputPackage, "Local", nil)
+	local := types.NewNamed(localName, types.NewStruct(nil, nil), nil)
+	if !b.canReferenceImplementationType(local) {
+		t.Fatal("an input-package type is always referenceable by generated code")
+	}
+	universeName := types.NewTypeName(0, nil, "BuiltinLike", nil)
+	universe := types.NewNamed(universeName, types.NewStruct(nil, nil), nil)
+	if b.canReferenceImplementationType(universe) {
+		t.Fatal("a named type without a package must not be registered as an implementation")
+	}
+	mainPackage := types.NewPackage("example.com/tool", "main")
+	mainName := types.NewTypeName(0, mainPackage, "Command", nil)
+	mainType := types.NewNamed(mainName, types.NewStruct(nil, nil), nil)
+	if b.canReferenceImplementationType(mainType) {
+		t.Fatal("a dependency package named main cannot be imported by generated code")
+	}
+}
+
 func TestAtomicStructRecursionAndCycleGuards(t *testing.T) {
 	atomicPackage, err := importer.Default().Import("sync/atomic")
 	if err != nil {

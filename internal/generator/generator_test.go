@@ -434,6 +434,11 @@ func Shapes() map[string]contracts.Shape {
 		"square": impl.Square{Size: 3},
 	}
 }
+
+func Circle() *impl.Circle { return impl.NewCircle(1) }
+func PointerEmbedded() *impl.PointerEmbedded { return &impl.PointerEmbedded{} }
+func PointerValue() *impl.PointerValue { return &impl.PointerValue{Value: 1} }
+func Square() impl.Square { return impl.Square{Size: 1} }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -447,9 +452,14 @@ func Shapes() map[string]contracts.Shape {
 import (
 	"example.com/thirdparty/contracts"
 	"example.com/thirdparty/factory"
+	"example.com/thirdparty/impl"
 )
 
 func Shapes() map[string]contracts.Shape { return factory.Shapes() }
+func Circle() *impl.Circle { return factory.Circle() }
+func PointerEmbedded() *impl.PointerEmbedded { return factory.PointerEmbedded() }
+func PointerValue() *impl.PointerValue { return factory.PointerValue() }
+func Square() impl.Square { return factory.Square() }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}

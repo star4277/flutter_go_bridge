@@ -486,6 +486,12 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 	case *types.Signature:
 		return nil, errors.New("function types are only supported as direct parameters of //fgb:async functions")
 	case *types.Named:
+		if isErrorType(typ) {
+			// Go's predeclared error is ubiquitous, but dependency implementor
+			// discovery cannot expose its methods. Carry the useful error text
+			// across the bridge instead of emitting an empty marker interface.
+			return b.newSimpleType(original, kindError, "String?"), nil
+		}
 		if isTime(typ) {
 			b.unit.UsesTime = true
 			return b.newSimpleType(original, kindTime, "DateTime"), nil
@@ -1116,13 +1122,24 @@ func (b *builder) mapInterface(original types.Type, named *types.Named, declared
 			declaration.Methods = append(declaration.Methods, bridged)
 		}
 	}
+	if decl == nil && declared.NumMethods() > 0 && !isErrorType(named) {
+		b.warnings = append(b.warnings, fmt.Errorf(
+			"interface %s.%s crosses the bridge as a marker-only Dart interface: its %d methods are not callable from Dart because only interfaces declared in the input package get generated entrypoints",
+			named.Obj().Pkg().Path(), named.Obj().Name(), declared.NumMethods()))
+	}
 
 	if err := b.collectImplementors(named, declaration); err != nil {
 		return nil, err
 	}
 	if named.Obj().Pkg() != b.api.Package.Types {
 		fallback := b.mapInterfaceOpaqueFallback(named, declaration)
-		b.registerInterfaceImplementor(declaration, fallback, false)
+		implementation := b.registerInterfaceImplementor(declaration, fallback, false)
+		implementation.WireTag = stableWireTag(named) + "#opaque"
+	}
+	if named.Obj().Pkg() != b.api.Package.Types && len(declaration.Implementors) > 8 {
+		b.warnings = append(b.warnings, fmt.Errorf(
+			"interface %s.%s has %d generated wire members; prefer a narrower bridge surface or an opaque wrapper",
+			named.Obj().Pkg().Path(), named.Obj().Name(), len(declaration.Implementors)))
 	}
 	if len(declaration.Implementors) == 0 {
 		return nil, fmt.Errorf("no bridged type implements interface %s; declare at least one so its values can cross the bridge", named.Obj().Name())
@@ -1180,8 +1197,8 @@ func (b *builder) mapInterfaceMethod(owner *types.Named, method *types.Func, dir
 
 // collectImplementors finds every bridged concrete type that satisfies the
 // interface. Input interfaces preserve source declaration order for wire
-// compatibility. Dependency interfaces scan the complete loaded dependency
-// graph and use package path plus type name order for deterministic wire tags.
+// compatibility. Dependency interfaces use public-API reachability and stable
+// package path plus type name tags.
 func (b *builder) collectImplementors(iface *types.Named, declaration *interfaceModel) error {
 	declared := iface.Underlying().(*types.Interface)
 	candidates := b.interfaceImplementorCandidates(iface)
@@ -1247,6 +1264,9 @@ func (b *builder) registerInterfaceImplementor(declaration *interfaceModel, mapp
 		DartName: dartName, Type: mapped, DecodeOnly: decodeOnly,
 		GoTypes: []implementorGoType{{Type: mapped.Original}},
 	}
+	if named, ok := types.Unalias(declaration.Type.Original).(*types.Named); ok && named.Obj().Pkg() != b.api.Package.Types {
+		implementation.WireTag = stableWireTag(mapped.Original)
+	}
 	declaration.Implementors = append(declaration.Implementors, implementation)
 	switch mapped.Kind {
 	case kindStruct:
@@ -1273,35 +1293,70 @@ func (b *builder) interfaceImplementorCandidates(iface *types.Named) []*types.Ty
 		return candidates
 	}
 
-	packagesByPath := map[string]*packages.Package{}
-	var visit func(*packages.Package)
-	visit = func(pkg *packages.Package) {
-		if pkg == nil || pkg.Types == nil || packagesByPath[pkg.PkgPath] != nil {
-			return
-		}
-		packagesByPath[pkg.PkgPath] = pkg
-		paths := make([]string, 0, len(pkg.Imports))
-		for path := range pkg.Imports {
-			paths = append(paths, path)
-		}
-		sort.Strings(paths)
-		for _, path := range paths {
-			visit(pkg.Imports[path])
-		}
-	}
-	visit(b.api.Package)
-
-	var candidates []*types.TypeName
-	for _, loaded := range packagesByPath {
-		if !b.canReferenceImplementationPackage(loaded) {
-			continue
-		}
-		for _, name := range loaded.Types.Scope().Names() {
-			object, ok := loaded.Types.Scope().Lookup(name).(*types.TypeName)
-			if ok && object.Exported() && !object.IsAlias() {
-				candidates = append(candidates, object)
+	// Dependency interfaces are open-world, but only concrete types that are
+	// themselves reachable from the public API can be named safely. Scanning
+	// every loaded package makes tags depend on unrelated imports and can pull
+	// fixed runtime packages into the generated import block.
+	seen := map[*types.Named]bool{}
+	var visit func(types.Type)
+	visit = func(typ types.Type) {
+		typ = types.Unalias(typ)
+		switch typed := typ.(type) {
+		case *types.Named:
+			if typed.Obj() == nil || seen[typed] {
+				return
+			}
+			seen[typed] = true
+			if b.hasDedicatedMapping(typed) {
+				return
+			}
+			if _, isInterface := typed.Underlying().(*types.Interface); isInterface {
+				return
+			}
+			visit(typed.Underlying())
+		case *types.Pointer:
+			visit(typed.Elem())
+		case *types.Slice:
+			visit(typed.Elem())
+		case *types.Array:
+			visit(typed.Elem())
+		case *types.Map:
+			visit(typed.Key())
+			visit(typed.Elem())
+		case *types.Signature:
+			if typed.Recv() != nil {
+				visit(typed.Recv().Type())
+			}
+			for i := 0; i < typed.Params().Len(); i++ {
+				visit(typed.Params().At(i).Type())
+			}
+			for i := 0; i < typed.Results().Len(); i++ {
+				visit(typed.Results().At(i).Type())
+			}
+		case *types.Struct:
+			for i := 0; i < typed.NumFields(); i++ {
+				visit(typed.Field(i).Type())
+			}
+		case *types.Interface:
+			for i := 0; i < typed.NumMethods(); i++ {
+				visit(typed.Method(i).Type())
 			}
 		}
+	}
+	for _, callable := range b.api.Callables {
+		if callable.Receiver != nil {
+			visit(callable.Receiver)
+		}
+		visit(callable.Signature)
+	}
+
+	var candidates []*types.TypeName
+	for named := range seen {
+		if named.Obj() == nil || !named.Obj().Exported() || named.Obj().Pkg() == nil ||
+			!b.canReferenceImplementationType(named) || b.hasDedicatedMapping(named) {
+			continue
+		}
+		candidates = append(candidates, named.Obj())
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		left, right := candidates[i], candidates[j]
@@ -1317,7 +1372,23 @@ func (b *builder) canReferenceImplementationPackage(pkg *packages.Package) bool 
 	if pkg == nil || pkg.Types == nil || pkg.Name == "main" {
 		return false
 	}
-	path := pkg.PkgPath
+	return b.canReferenceImplementationPackagePath(pkg.PkgPath)
+}
+
+func (b *builder) canReferenceImplementationType(named *types.Named) bool {
+	if named == nil || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	if named.Obj().Pkg() == b.api.Package.Types {
+		return true
+	}
+	if named.Obj().Pkg().Name() == "main" {
+		return false
+	}
+	return b.canReferenceImplementationPackagePath(named.Obj().Pkg().Path())
+}
+
+func (b *builder) canReferenceImplementationPackagePath(path string) bool {
 	marker := "/internal/"
 	index := strings.LastIndex(path, marker)
 	if index < 0 {
@@ -1573,9 +1644,44 @@ func (b *builder) registerExternalPackage(pkg *types.Package) {
 	if _, exists := b.unit.GoPackageAliases[pkg.Path()]; exists {
 		return
 	}
+	if b.isFixedGoImport(pkg.Path()) {
+		return
+	}
 	alias := fmt.Sprintf("fgbext%d", len(b.unit.ExternalImports))
 	b.unit.GoPackageAliases[pkg.Path()] = alias
 	b.unit.ExternalImports = append(b.unit.ExternalImports, goImportModel{Alias: alias, Path: pkg.Path()})
+}
+
+func (b *builder) isFixedGoImport(path string) bool {
+	if path == b.unit.SupportPackagePath {
+		return true
+	}
+	switch path {
+	case "bytes", "context", "encoding/binary", "fmt", "io", "math/big", "os", "reflect", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe", "time", "net/netip", "net/url", "github.com/gofrs/uuid/v5":
+		return true
+	default:
+		return false
+	}
+}
+
+func stableWireTag(typ types.Type) string {
+	typ = types.Unalias(typ)
+	if pointer, ok := typ.(*types.Pointer); ok {
+		return "*" + stableWireTag(pointer.Elem())
+	}
+	named, ok := typ.(*types.Named)
+	if !ok || named.Obj() == nil {
+		return types.TypeString(typ, func(pkg *types.Package) string {
+			if pkg == nil {
+				return ""
+			}
+			return pkg.Path()
+		})
+	}
+	if pkg := named.Obj().Pkg(); pkg != nil {
+		return pkg.Path() + "." + named.Obj().Name()
+	}
+	return named.Obj().Name()
 }
 
 // dartNameFor keeps the Go declaration name when it is unambiguous. Input
@@ -1666,7 +1772,7 @@ func (b *builder) hasDedicatedMapping(named *types.Named) bool {
 	if named == nil {
 		return false
 	}
-	if isTime(named) || isDuration(named) || isBigInt(named) ||
+	if isErrorType(named) || isTime(named) || isDuration(named) || isBigInt(named) ||
 		isInternetIP(named) || isIPPrefix(named) || isURL(named) || isUUID(named) {
 		return true
 	}

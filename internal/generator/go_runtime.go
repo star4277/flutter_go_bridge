@@ -1147,7 +1147,15 @@ func fgb_cst_async(callID C.int32_t, args unsafe.Pointer, port C.int64_t) {
 	// blocked until the Go function returns. The CST arena stays alive on the
 	// Dart side until the reply lands on the port, so reading args here is safe.
 	if !fgbSchedule(func() {
-		response, transfer := fgbHandleCst(int32(callID), args)
+		var transfer *fgbOpaqueTransfer
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if transfer != nil { transfer.rollback() }
+				fgbPostDco(int64(port), fgbDcoEnvelopeError(&fgbCallError{Code: "panic", Message: fmt.Sprintf("panic: %v", recovered)}))
+			}
+		}()
+		var response *C.FgbDartCObject
+		response, transfer = fgbHandleCst(int32(callID), args)
 		if fgbPostDco(int64(port), response) { transfer.commit() } else { transfer.rollback() }
 	}, func(recovered any) {
 		fgbPostDco(int64(port), fgbDcoEnvelopeError(&fgbCallError{Code: "panic", Message: fmt.Sprintf("panic: %v", recovered)}))
