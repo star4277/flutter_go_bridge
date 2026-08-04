@@ -367,8 +367,19 @@ String describeOptional({Shape? shape})
 
 当 nil Go 接口出现在**非空**位置（必填字段、参数或返回值）时，不会报错。Go 编码器发送 `null`，Dart
 解码器会生成一个缺省实现——`final class _ShapeAbsent implements Shape, GoAbsent`，其方法覆盖抛出
-`StateError`，`toString` 返回 `'Shape(absent)'`。这样 Go 的零值结构体可以正常跨 bridge，同时 Dart 类型
-保持非空。
+`StateError`，`toString` 返回 `'Shape(absent)'`。
+
+这一机制存在是因为 Go 接口的零值就是 `nil`——它是唯一一种无需指针就天然可为 nil 的 Go 类型，但 Dart 侧
+却将该字段声明为非空。缺省实例让 Go 的零值结构体可以正常跨 bridge，与其他 nil-able Go 类型的处理方式
+保持一致：`*T` 将 nil 映射为 `null`，slice 和 map 将 nil 归一化为空集合，接口将 nil 归一化为一个缺省
+对象。Dart 类型保持非空，这样已有代码（期望 `Shape` 而非 `Shape?`）可以继续编译。
+
+**缺省实例是兜底机制，不是推荐用法。** 它把编码边界处的响亮失败换成了使用点的安静失败——该值在 Dart
+分析器看来是一个正常的 `Shape`，但背后没有真实实现。如果字段或参数确实可能为 nil，请标记
+`fgb:"nullable"`（字段）或 `//fgb:nullable`（参数），让 Dart 类型变成 `Shape?`，由类型系统显式强制 nil 检查。
+
+不要在 Dart 中手动构造生成的缺省类型再传给 Go。该类是库私有的（`_ShapeAbsent`），仅供解码器在 Go 发送
+`null` 时使用。Dart 代码需要表达「没有值」时，应通过 nullable 参数传递 `null`。
 
 通过共享的 `GoAbsent` marker 可以检测缺省值：
 

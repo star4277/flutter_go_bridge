@@ -291,8 +291,24 @@ an optional `Shape?` parameter and preserves a nil Go interface as a real Dart `
 A nil Go interface in a **non-nullable** position (a required field, parameter, or result) does not
 fail. The Go encoder sends `null`, and the Dart decoder materializes a generated absent stand-in —
 a `final class _ShapeAbsent implements Shape, GoAbsent` whose method overrides throw `StateError` and
-whose `toString` returns `'Shape(absent)'`. This lets a zero-value Go struct cross the bridge
-without a runtime error while keeping the Dart type non-nullable.
+whose `toString` returns `'Shape(absent)'`.
+
+This bridge exists because a Go interface's zero value is `nil` — it is the only Go type that is
+naturally nil without a pointer, yet the Dart side declares the field as non-nullable. The absent
+stand-in lets a zero-value Go struct cross the bridge without a runtime error, consistent with how
+other nil-able Go types are handled: `*T` maps nil to `null`, slices and maps normalize nil to
+empty collections, and an interface normalizes nil to an absent object. The Dart type stays
+non-nullable so existing code that expects `Shape` (not `Shape?`) continues to compile.
+
+**The absent stand-in is a fallback, not a recommended pattern.** It trades a loud failure at the
+encoding boundary for a quieter failure at the point of use, because the value looks like a normal
+`Shape` to the Dart analyzer but has no real implementation behind it. If a field or parameter can
+genuinely be nil, mark it `fgb:"nullable"` (for fields) or `//fgb:nullable` (for parameters) so the
+Dart type becomes `Shape?` and the type system enforces the nil check explicitly.
+
+Do not manually construct the generated absent type in Dart to pass to Go. The class is
+library-private (`_ShapeAbsent`) and exists only for the decoder to use when Go sends `null`. Dart
+code that needs to represent "no value" should pass `null` through a nullable parameter instead.
 
 Detect an absent value with the shared `GoAbsent` marker:
 
