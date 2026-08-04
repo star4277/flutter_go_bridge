@@ -144,10 +144,12 @@ Name collisions receive a Go package prefix, so two external `User` types may be
 and `AuthUser`.
 
 Reachable named non-empty interfaces are analyzed as tagged serialization unions. Their exported
-named struct implementations are discovered across the complete package graph loaded for the input
-API. A final interface-level `GoOpaque` member preserves implementations that generated Go code
-cannot name. Dependency interface methods are not generated as Dart calls: the Dart interface is
-marker-only, and its concrete classes carry either serialized fields or a `GoOpaque` handle.
+named struct implementations are discovered only when the concrete type is already reachable from
+the public API; unrelated imports do not change the union. Dependency implementations use stable
+package-path/type-name tags, and a final interface-level `GoOpaque` member preserves implementations
+that generated Go code cannot name. Dependency interface methods are not generated as Dart calls: the
+Dart interface is marker-only, and its concrete classes carry either serialized fields or a `GoOpaque`
+handle. A warning reports this method limitation.
 
 ## Anonymous embedding and inheritance
 
@@ -242,11 +244,12 @@ which owns either serialized fields or an opaque handle.
 For an input-package interface, the generator collects bridged structs from that package whose `T`
 or `*T` method set satisfies the interface, preserving declaration order for compatibility.
 
-For a dependency interface, the generator walks the complete dependency graph already loaded by
-`go/packages`, then collects exported, non-generic named structs whose `T` or `*T` method set satisfies
-the interface. Packages named `main`, packages hidden by Go's `internal` import rule, unexported types,
-aliases, non-struct named types, and uninstantiated generic declarations are excluded because the
-generated bridge cannot name them safely as concrete union members. They remain transportable through
+For a dependency interface, the generator walks the types already reachable from the public API, then
+collects exported, non-generic named structs whose `T` or `*T` method set satisfies the interface.
+Unrelated imports therefore do not add union members or shift existing tags. Packages named `main`,
+packages hidden by Go's `internal` import rule, unexported types, aliases, non-struct named types, and
+uninstantiated generic declarations are excluded because the generated bridge cannot name them safely
+as concrete union members. They remain transportable through
 the final interface-level opaque fallback, which boxes the interface value itself in the Go handle
 registry. Runtime-registered implementations use the same fallback.
 
@@ -267,18 +270,18 @@ directives or generated call entrypoints.
 Interface values use the standard codec with this logical shape:
 
 ```text
-[implementorIndex, payload]
+[implementorTag, payload]
 ```
 
 The payload contains value-struct fields or an opaque handle. Passing an arbitrary Dart object that
 merely `implements Shape` throws `ArgumentError`; it must be one of the registered generated Go
 implementations or an interface fallback object previously returned by Go. Unknown tags fail decoding.
 
-Input-package implementor order follows Go declaration position. Dependency implementations are
-ordered by full package path and Go type name; when both value and pointer dynamic forms exist, the
-value form is canonical for Dart-to-Go encoding. Numeric tags remain generated protocol details.
-Always deploy the Go bridge and Dart tree produced by the same generation run. Interface unions use
-the standard codec rather than the CST fast path.
+Input-package implementor order follows Go declaration position and uses numeric tags for compatibility.
+Dependency implementations are ordered by full package path and Go type name, but their tags are stable
+string identifiers derived from the same content; when both value and pointer dynamic forms exist, the
+value form is canonical for Dart-to-Go encoding. A mismatched generation reports an unknown tag instead
+of silently decoding the wrong type. Interface unions use the standard codec rather than the CST fast path.
 
 ### Nullability and directives
 

@@ -127,9 +127,9 @@ func Make(h Holder) Holder { return h }
 	}
 }
 
-// The dependency-interface fallback names its Dart class after the Go type, so
-// `error` produced `abstract interface class Error`, shadowing dart:core.Error
-// under a name the user has no way to rename.
+// Go's predeclared error is mapped to String? rather than a dependency
+// interface, so it cannot produce a generated Error declaration that shadows
+// dart:core.Error.
 func TestGenerateRenamesDependencyInterfaceShadowingAmbientDartType(t *testing.T) {
 	files := generateAllDartFiles(t, `package api
 
@@ -141,21 +141,15 @@ type Box struct {
 func Make() Box { return Box{} }
 `)
 	ambient := map[string]bool{"Error": true, "Exception": true, "StackTrace": true}
-	joined := make([]string, 0, len(files))
 	for name, content := range files {
 		for _, declared := range declaredDartTypeNames(content) {
 			if ambient[declared] {
 				t.Fatalf("%s declares %q, which shadows the ambient Dart type:\n%s", name, declared, content)
 			}
 		}
-		joined = append(joined, content)
 	}
-	all := strings.Join(joined, "\n")
-	if !strings.Contains(all, "abstract interface class GoError") {
-		t.Fatalf("expected the error interface to be renamed:\n%s", all)
-	}
-	if !strings.Contains(files["api.dart"], "final GoError err;") {
-		t.Fatalf("field should use the renamed interface:\n%s", files["api.dart"])
+	if !strings.Contains(files["api.dart"], "final String? err;") {
+		t.Fatalf("error fields should map to nullable strings:\n%s", files["api.dart"])
 	}
 }
 

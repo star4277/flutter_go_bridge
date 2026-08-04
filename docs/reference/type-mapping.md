@@ -79,7 +79,7 @@ Only a `GoOpaque` handle continues to resolve to the same Go object across calls
 
 | Go | Dart | Wire and boundary behavior |
 | --- | --- | --- |
-| `time.Time` | `DateTime` | Signed 64-bit Unix microseconds on the wire; Go → Dart uses `DateTime.fromMicrosecondsSinceEpoch`, Dart → Go uses `microsecondsSinceEpoch`, and sub-microsecond Go nanoseconds are truncated |
+| `time.Time` | `DateTime` | Signed 64-bit Unix microseconds on the wire; both sides reconstruct UTC, and sub-microsecond Go nanoseconds are truncated |
 | `time.Duration` | `Duration` | Microseconds on the wire; sub-microsecond Go nanoseconds are truncated |
 | `math/big.Int` | `BigInt` | Lossless big-integer encoding; `*big.Int` becomes `BigInt?` |
 | `net/netip.Addr` | `InternetAddress` | IP text on the wire; zero address maps to an empty string; imports `dart:io` |
@@ -87,8 +87,10 @@ Only a `GoOpaque` handle continues to resolve to the same Go object across calls
 | `net/url.URL` | `Uri` | Uses `URL.String()` and `Uri.parse` |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue` | UUID string on the wire; requires the Dart `uuid` package |
 
-`time.Time` used RFC3339Nano text before the Unix-microseconds mapping. Regenerate the Go and Dart
-outputs together when upgrading; mixing old and new generated files fails wire-type validation.
+`time.Time` used RFC3339Nano text before the Unix-microseconds mapping. Generated codecs reject values
+outside Dart's supported microsecond range (±8.64e18). Regenerate the Go and Dart outputs together when
+upgrading; mixing old and new generated files fails wire-type validation. The original Go location and
+sub-microsecond precision are not representable; call `toLocal()` in Dart when local display is needed.
 
 Pointers to these value types produce the nullable Dart equivalent.
 
@@ -132,10 +134,11 @@ Value structs travel by fields and use named Dart constructor parameters. Unsupp
 state or explicit `//fgb:opaque` selects handle semantics. Anonymous embedded value structs become
 Dart inheritance with flattened promoted fields.
 
-Named non-empty interfaces use a `[implementation index, payload]` tagged union through the standard
-codec. Input-package interfaces expose generated methods. Reachable dependency interfaces are
-marker-only, discover exported named struct implementations across the loaded dependency graph, and
-use an interface-level `GoOpaque` fallback for concrete runtime types generated Go cannot name.
+Named non-empty interfaces use a `[implementation tag, payload]` tagged union through the standard
+codec. Input-package interfaces expose generated methods and retain declaration-order numeric tags for
+wire compatibility. Reachable dependency interfaces are marker-only, discover exported named struct
+implementations already reachable from the public API, and use stable package-path/type-name tags plus
+an interface-level `GoOpaque` fallback for concrete runtime types generated Go cannot name.
 See [Structs and interfaces](/reference/structs-interfaces) for classification, inheritance,
 implementor discovery, and restrictions.
 
@@ -162,7 +165,7 @@ the generated class is named "GoList" instead
 
 The rule applies to every generated type name, whatever its origin: input-package structs and
 interfaces, dependency types pulled in as implementations, the `GoOpaque` fallback of a dependency
-interface (`error` becomes `GoError`), synthetic opaque types, and names chosen with
+interface, synthetic opaque types, and names chosen with
 `//fgb:rename`. An explicit rename is adjusted too, because the resulting library would otherwise
 fail to compile.
 
@@ -201,9 +204,10 @@ the handles created for that transfer are rolled back; live handles from other c
 
 | Go | Dart | Notes |
 | --- | --- | --- |
-| `error` | `FgbPlatformException` | The error slot is removed from the return type; non-nil throws |
+| `error` in a field, parameter, or ordinary value | `String?` | A non-nil error is encoded as `Error()` text; nil becomes `null` |
+| `error` result slot | `FgbPlatformException` | The slot is removed from the Dart return type; non-nil throws |
 
-Errors may appear anywhere and several may be declared. See [Returns and errors](/reference/returns-errors).
+Several error result slots may be declared. See [Returns and errors](/reference/returns-errors).
 
 ## Streams, callbacks, and context
 

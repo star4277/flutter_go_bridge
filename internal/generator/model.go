@@ -14,6 +14,7 @@ const (
 	kindSigned      typeKind = "signed"
 	kindUnsigned    typeKind = "unsigned"
 	kindFloat       typeKind = "float"
+	kindError       typeKind = "error"
 	kindBigInt      typeKind = "big_int"
 	kindTime        typeKind = "time"
 	kindInternetIP  typeKind = "internet_ip"
@@ -250,7 +251,7 @@ func (t *wireType) nilableWithoutPointer() bool {
 		return false
 	}
 	switch t.Kind {
-	case kindCallback, kindSlice, kindMap, kindBytes, kindInt32List, kindInt64List, kindFloat64List, kindInterface:
+	case kindError, kindCallback, kindSlice, kindMap, kindBytes, kindInt32List, kindInt64List, kindFloat64List, kindInterface:
 		return true
 	default:
 		// Arrays are fixed-size values in Go and can never be nil.
@@ -334,7 +335,7 @@ type fieldModel struct {
 // field carries `fgb:"nullable"`. Pointer fields already carry their `?`.
 func (f *fieldModel) dartType() string {
 	if f.Nullable {
-		return f.Type.DartType + "?"
+		return nullableDartType(f.Type.DartType)
 	}
 	return f.Type.DartType
 }
@@ -343,8 +344,8 @@ func (f *fieldModel) dartType() string {
 func (f *fieldModel) optional() bool { return f.Optional || f.Nullable }
 
 // interfaceModel is a Go interface rendered as a Dart
-// `abstract interface class`. Values travel tagged with the index of their
-// concrete type, so the receiving side knows which decoder to use.
+// `abstract interface class`. Values travel with an implementation tag and
+// payload, so the receiving side knows which decoder to use.
 type interfaceModel struct {
 	GoName     string
 	DartName   string
@@ -355,7 +356,8 @@ type interfaceModel struct {
 	// to the concrete Dart class, which owns the bridged implementation.
 	Methods []*callModel
 	// Implementors are the bridged types that satisfy the interface, in a
-	// stable order; the index is the wire tag.
+	// stable order. Input interfaces use the index as the tag; dependency
+	// interfaces use WireTag.
 	Implementors []*implementorModel
 }
 
@@ -364,6 +366,9 @@ type interfaceModel struct {
 type implementorModel struct {
 	DartName string
 	Type     *wireType
+	// WireTag is a stable content identifier for dependency interfaces. Input
+	// package interfaces leave it empty and retain their historical index ABI.
+	WireTag string
 	// DecodeOnly marks an additional Go dynamic representation of the same
 	// Dart class. For example, both T and *T implement an interface when T has
 	// value-receiver methods; Dart encodes the canonical T tag, while Go may

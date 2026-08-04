@@ -71,6 +71,9 @@ func renderGo(unit *unit) ([]byte, error) {
 	r.line("")
 	r.raw(strings.TrimSpace(goRuntimeSource))
 	r.line("")
+	if unit.UsesTime {
+		r.renderTimeHelpers()
+	}
 	if unit.NeedsMain {
 		r.line("// Required for c-shared and c-archive build modes.")
 		r.line("func main() {}")
@@ -113,6 +116,21 @@ func renderGo(unit *unit) ([]byte, error) {
 	return r.buffer.Bytes(), nil
 }
 
+func (r *goRenderer) renderTimeHelpers() {
+	r.line("const (")
+	r.line("\tfgbDartDateTimeMinMicroseconds int64 = -8640000000000000000")
+	r.line("\tfgbDartDateTimeMaxMicroseconds int64 = 8640000000000000000")
+	r.line(")")
+	r.line("")
+	r.line("func fgbTimeUnixMicro(value time.Time) (int64, error) {")
+	r.line("\tif value.Before(time.UnixMicro(fgbDartDateTimeMinMicroseconds)) || value.After(time.UnixMicro(fgbDartDateTimeMaxMicroseconds)) {")
+	r.raw("\t\treturn 0, fmt.Errorf(\"time %s is outside Dart DateTime range\", value.Format(time.RFC3339Nano))")
+	r.line("\t}")
+	r.line("\treturn value.UnixMicro(), nil")
+	r.line("}")
+	r.line("")
+}
+
 func (r *goRenderer) renderDecoder(typ *wireType) error {
 	goType := r.goType(typ.Original)
 	decodeType := goType
@@ -129,6 +147,11 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tresult, ok := value.(string)")
 		r.line("\tif !ok { return \"\", fgbTypeError(path, \"string\", value) }")
 		r.line("\treturn result, nil")
+	case kindError:
+		r.line("\tif value == nil { return nil, nil }")
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { return nil, fgbTypeError(path, \"error string\", value) }")
+		r.raw("\treturn fmt.Errorf(\"%s\", raw), nil")
 	case kindSigned:
 		r.line("\traw, err := fgbAsInt64(value, path)")
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -148,7 +171,7 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 	case kindTime:
 		r.line("\traw, err := fgbAsInt64(value, path)")
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
-		r.line("\treturn time.UnixMicro(raw), nil")
+		r.line("\treturn time.UnixMicro(raw).UTC(), nil")
 	case kindInternetIP:
 		r.line("\traw, ok := value.(string)")
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"IP string\", value) }", goType)
@@ -315,19 +338,25 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif raw == 0 { var zero %s; return zero, fmt.Errorf(\"%%s: invalid stream handle 0\", path) }", goType)
 		r.line("\treturn fgbMakeStreamSink%d(raw), nil", typ.ID)
 	case kindInterface:
-		// A tagged union: [implementorIndex, payload].
+		// A tagged union: [implementorTag, payload]. Dependency interfaces use
+		// content tags; input interfaces retain their historical integer ABI.
 		r.line("\tif value == nil { var zero %s; return zero, nil }", goType)
 		r.line("\traw, ok := value.([]any)")
 		r.line("\tif !ok || len(raw) != 2 { var zero %s; return zero, fgbTypeError(path, \"interface envelope\", value) }", goType)
-		r.line("\ttag, err := fgbAsInt64(raw[0], path+\".tag\")")
-		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		if len(typ.Interface.Implementors) > 0 && typ.Interface.Implementors[0].WireTag != "" {
+			r.line("\ttag, ok := raw[0].(string)")
+			r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path+\".tag\", \"interface type tag\", raw[0]) }", goType)
+		} else {
+			r.line("\ttag, err := fgbAsInt64(raw[0], path+\".tag\")")
+			r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		}
 		r.line("\tswitch tag {")
 		for index, implementor := range typ.Interface.Implementors {
-			r.line("\tcase %d:", index)
+			r.line("\tcase %s:", interfaceWireTagLiteral(implementor, index))
 			r.line("\t\treturn fgbDecode%d(raw[1], path)", implementor.Type.ID)
 		}
 		r.line("\t}")
-		r.line("\tvar zero %s; return zero, fmt.Errorf(\"%%s: unknown %s implementation %%d\", path, tag)", goType, typ.Interface.GoName)
+		r.line("\tvar zero %s; return zero, fmt.Errorf(\"%%s: unknown %s implementation %%v\", path, tag)", goType, typ.Interface.GoName)
 	case kindNamed:
 		r.line("\tdecoded, err := fgbDecode%d(value, path)", typ.Named.Underlying.ID)
 		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
@@ -365,6 +394,9 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	switch typ.Kind {
 	case kindBool, kindString:
 		r.line("\treturn value, nil")
+	case kindError:
+		r.line("\tif value == nil { return nil, nil }")
+		r.line("\treturn value.Error(), nil")
 	case kindSigned:
 		if typ.BitSize <= 32 && typ.BasicKind != types.Int {
 			r.line("\treturn int32(value), nil")
@@ -384,7 +416,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	case kindBigInt:
 		r.renderBigIntEncoder(typ)
 	case kindTime:
-		r.line("\treturn value.UnixMicro(), nil")
+		r.line("\treturn fgbTimeUnixMicro(value)")
 	case kindInternetIP:
 		// netip.Addr.String returns an empty string for the invalid zero value,
 		// which InternetAddress represents without changing pointer nullability.
@@ -504,7 +536,7 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 				}
 				r.line("\t\tencoded, err := fgbEncode%d(%s, depth+1, transfer)", implementor.Type.ID, value)
 				r.line("\t\tif err != nil { return nil, err }")
-				r.line("\t\treturn []any{int64(%d), encoded}, nil", index)
+				r.line("\t\treturn []any{%s, encoded}, nil", goInterfaceWireTagLiteral(implementor, index))
 			}
 		}
 		r.line("\t}")
@@ -520,6 +552,13 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 	}
 	r.line("}")
 	return nil
+}
+
+func goInterfaceWireTagLiteral(implementor *implementorModel, index int) string {
+	if implementor != nil && implementor.WireTag != "" {
+		return strconv.Quote(implementor.WireTag)
+	}
+	return fmt.Sprintf("int64(%d)", index)
 }
 
 // renderCallbackFactory synthesizes the Go func value handed to user code for
