@@ -1136,6 +1136,12 @@ func (b *builder) mapInterface(original types.Type, named *types.Named, declared
 		implementation := b.registerInterfaceImplementor(declaration, fallback, false)
 		implementation.WireTag = stableWireTag(named) + "#opaque"
 	}
+	// Decide the wire-tag scheme once, after every implementor - including the
+	// opaque fallback above - has been collected. Both the decoder branch
+	// selector and the per-case tag literals read this field so they can never
+	// disagree about whether an interface uses string content tags or integer
+	// indices.
+	declaration.UsesContentTags = named.Obj().Pkg() != b.api.Package.Types
 	if named.Obj().Pkg() != b.api.Package.Types && len(declaration.Implementors) > 8 {
 		b.warnings = append(b.warnings, fmt.Errorf(
 			"interface %s.%s has %d generated wire members; prefer a narrower bridge surface or an opaque wrapper",

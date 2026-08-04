@@ -286,9 +286,30 @@ of silently decoding the wrong type. Interface unions use the standard codec rat
 ### Nullability and directives
 
 Interface parameters are non-nullable and required by default. `//fgb:nullable = "shape"` produces
-an optional `Shape?` parameter and preserves a nil Go interface. A nil named-interface result cannot
-identify a concrete implementation and is rejected on the Dart side with `FormatException`; prefer
-an explicit result struct or presence flag for optional results.
+an optional `Shape?` parameter and preserves a nil Go interface as a real Dart `null`.
+
+A nil Go interface in a **non-nullable** position (a required field, parameter, or result) does not
+fail. The Go encoder sends `null`, and the Dart decoder materializes a generated absent stand-in —
+a `final class _ShapeAbsent implements Shape, GoAbsent` whose method overrides throw `StateError` and
+whose `toString` returns `'Shape(absent)'`. This lets a zero-value Go struct cross the bridge
+without a runtime error while keeping the Dart type non-nullable.
+
+Detect an absent value with the shared `GoAbsent` marker:
+
+```dart
+if (shape is GoAbsent) {
+  // shape was nil on the Go side; its methods are not callable.
+}
+```
+
+Sending an absent value back to Go encodes it as `null` again, so the round trip preserves the nil.
+A field marked `fgb:"nullable"` still receives a real Dart `null` instead of the absent stand-in,
+because the field-level decoder intercepts `null` before the shared interface decoder runs.
+
+**Dependency interface limitation.** A dependency interface is marker-only in Dart — it has no
+generated method declarations. Its absent class therefore has no methods to override, so the
+`StateError` guard is empty. The `GoAbsent` marker is the only way to distinguish an absent
+dependency-interface value from a real one in that case.
 
 Input-package interface methods support `//fgb:sync`, `//fgb:async`, `//fgb:rename`, and
 `//fgb:ignore`. The generated implementation shape must remain compatible with the interface
@@ -318,4 +339,3 @@ declaration. Dependency interface methods are marker-only and do not consume dir
 | Incompatible override | Go shadowing is invalid in Dart; rename one method |
 | No bridged implementor | Add and expose at least one implementation in the input package |
 | Custom Dart implementation rejected | Only generated Go implementations may cross the bridge |
-| Nil interface result gives `FormatException` | Return an explicit optional-result model instead |

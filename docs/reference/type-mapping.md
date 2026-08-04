@@ -135,7 +135,9 @@ state or explicit `//fgb:opaque` selects handle semantics. Anonymous embedded va
 Dart inheritance with flattened promoted fields.
 
 Named non-empty interfaces use a `[implementation tag, payload]` tagged union through the standard
-codec. Input-package interfaces expose generated methods and retain declaration-order numeric tags for
+codec. A nil Go interface encodes as `null` and materializes as a generated absent stand-in on the
+Dart side; see [Structs and interfaces](/reference/structs-interfaces) for details.
+Input-package interfaces expose generated methods and retain declaration-order numeric tags for
 wire compatibility. Reachable dependency interfaces are marker-only, discover exported named struct
 implementations already reachable from the public API, and use stable package-path/type-name tags plus
 an interface-level `GoOpaque` fallback for concrete runtime types generated Go cannot name.
@@ -208,6 +210,10 @@ the handles created for that transfer are rolled back; live handles from other c
 | `error` result slot | `FgbPlatformException` | The slot is removed from the Dart return type; non-nil throws |
 
 Several error result slots may be declared. See [Returns and errors](/reference/returns-errors).
+
+An error that crosses the bridge is rebuilt from its text on the far side. It is a new value:
+`errors.Is`, `errors.As`, and `errors.Unwrap` no longer match the original. Compare error text, or
+carry a discriminator field, when the far side needs to branch on the error kind.
 
 ## Streams, callbacks, and context
 

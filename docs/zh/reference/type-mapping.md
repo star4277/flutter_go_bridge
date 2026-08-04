@@ -173,8 +173,9 @@ import 'package:uuid/uuid.dart';
 `//fgb:opaque` 会使结构体使用 `GoOpaque`。匿名嵌入值结构体会映射为 Dart `extends`，被提升字段在
 wire 上扁平化。
 
-命名非空接口使用 `[实现 tag, 载荷]` 的 tagged union，并走 standard codec。输入包接口会暴露生成
-方法，并保留声明顺序的数字 tag 以兼容旧 wire；可达依赖接口只作为 marker，只从公共 API 已经可达
+命名非空接口使用 `[实现 tag, 载荷]` 的 tagged union，并走 standard codec。nil Go 接口编码为
+`null`，在 Dart 侧会生成一个缺省实现替代；详见[结构体与接口](/zh/reference/structs-interfaces)。
+输入包接口会暴露生成方法，并保留声明顺序的数字 tag 以兼容旧 wire；可达依赖接口只作为 marker，只从公共 API 已经可达
 的导出命名结构体中发现实现，并使用稳定的包路径/类型名 tag。生成 Go 无法命名的运行时实现使用接口级
 `GoOpaque` fallback。完整分类、继承、实现发现和限制见
 [结构体与接口](/zh/reference/structs-interfaces)。
@@ -241,6 +242,9 @@ handles，不会影响其他调用仍存活的 handles。
 
 返回值中的 `error` 可以位于任意位置，也可以声明多个。单个非 nil error 使用 `message`；多个 error 使用
 `goErrors` 保存逐条消息。详见[返回值与 error](/zh/reference/returns-errors)。
+
+跨越 bridge 的 error 会在对端从文本重建为一个全新的值：`errors.Is`、`errors.As` 和 `errors.Unwrap`
+都无法匹配原始 error。当对端需要按错误类型分支时，请比较 error 文本，或通过额外的判别字段传递错误种类。
 
 ## Stream、callback 与上下文
 
