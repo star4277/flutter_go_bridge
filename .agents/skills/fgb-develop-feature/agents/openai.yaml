@@ -1,4 +1,4 @@
 interface:
   display_name: "FGB Feature Development"
   short_description: "Develop FGB with change-aware tests and docs"
-  default_prompt: "Use $fgb-develop-feature to implement or document a Flutter Go Bridge change, select validation from the final diff, and synchronize development documentation for behavior changes or new features."
+  default_prompt: "Use $fgb-develop-feature to implement or document a Flutter Go Bridge change, select validation from the final diff, commit each finished item locally as a rollback checkpoint, synchronize development documentation for behavior changes or new features, and publish the finished branch with a pull request or a pull request document."
