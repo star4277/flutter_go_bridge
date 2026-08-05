@@ -77,6 +77,59 @@ Go 字段名转 lowerCamelCase。两个字段最终得到相同 wire key 时，�
 
 `defaultValue` 是原始 Dart 编译期常量，只影响 Dart 构造对象的行为，不会修改 Go 零值。
 
+### 相等性与 hashCode
+
+值结构体按字段跨界，所以从同一份 wire 字节解出来的两个实例代表同一个 Go 值。Dart 默认按引用比较
+会把它们判为不同，因此**至少有一个桥接字段**的值类会生成 `operator ==` 和 `hashCode`：
+
+```go
+type Point struct {
+	X int
+	Y int
+}
+```
+
+```dart
+final class Point {
+  final int x;
+  final int y;
+
+  const Point({required this.x, required this.y});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Point &&
+          other.runtimeType == runtimeType &&
+          fgbInternalDeepEquals(x, other.x) &&
+          fgbInternalDeepEquals(y, other.y);
+
+  @override
+  int get hashCode {
+    var result = runtimeType.hashCode;
+    result = result * 31 + fgbInternalDeepHash(x);
+    result = result * 31 + fgbInternalDeepHash(y);
+    return result;
+  }
+}
+```
+
+`Set` 去重、`Map` 的 key、`List.contains`、以及 Flutter 判断是否重建，全都依赖这两个成员，
+所以跨界回来的值和 Dart 本地构造的值行为一致。
+
+几个需要知道的细节：
+
+- **集合字段按内容比较。** Dart 的 `List` 和 `Map` 默认按引用比较，与 Go 的值语义相反，
+  所以每个字段都经过 `fgbInternalDeepEquals`。map 的比较和哈希都不受插入顺序影响。
+- **`hashCode` 以 31 累积。** 每个字段的哈希按 `result * 31 + fieldHash` 折入，
+  初值取 `runtimeType.hashCode`。31 是经验上在性能和散列分布之间较均衡的奇质数。
+- **继承链会被纳入，并且父子不会互等。** 匿名嵌入的结构体成为 Dart 父类，子类同时比较被提升的
+  字段；`runtimeType` 检查保证字段值相同的父类实例不会等于子类实例。
+- **没有可桥接字段的结构体保持引用相等。** 没有东西可比时，任意两个实例都会相等，
+  这比 `Object` 原本的语义更没用。
+- **`GoOpaque` 句柄保持引用相等。** 它的身份就是句柄，而同一个 Go 对象可能以多个句柄跨界，
+  生成 `==` 会给出兑现不了的承诺。需要按值比较句柄时，请在 Go 侧提供方法。
+
 ### 指针字段与指针 receiver 不是一回事
 
 字段类型为 `*T` 表示这个字段本身可以是 nil，因此映射为 `T?`。方法的 receiver 为 `*T` 则表示
