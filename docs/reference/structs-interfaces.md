@@ -63,63 +63,6 @@ Classes are `final class` unless they participate in inheritance.
 
 See [Directives and field tags](/reference/directives) for the complete tag syntax.
 
-### Equality and hashCode
-
-A value struct travels by fields, so two instances decoded from the same wire bytes represent the
-same Go value. Dart compares objects by identity by default, which would call them different, so a
-value class with at least one bridged field gets a generated `operator ==` and `hashCode`:
-
-```go
-type Point struct {
-	X int
-	Y int
-}
-```
-
-```dart
-final class Point {
-  final int x;
-  final int y;
-
-  const Point({required this.x, required this.y});
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is Point &&
-          other.runtimeType == runtimeType &&
-          fgbInternalDeepEquals(x, other.x) &&
-          fgbInternalDeepEquals(y, other.y);
-
-  @override
-  int get hashCode {
-    var result = runtimeType.hashCode;
-    result = result * 31 + fgbInternalDeepHash(x);
-    result = result * 31 + fgbInternalDeepHash(y);
-    return result;
-  }
-}
-```
-
-`Set`, `Map` keys, `List.contains`, and Flutter's rebuild comparisons all work off these, so a value
-that crossed the bridge behaves like one built in Dart.
-
-Details worth knowing:
-
-- **Collection fields compare by content.** Dart's `List` and `Map` are identity-compared, which
-  contradicts Go value semantics, so the generated code routes every field through
-  `fgbInternalDeepEquals`. Map comparison and hashing ignore entry order.
-- **`hashCode` accumulates with 31.** Each field hash is folded in as `result * 31 + fieldHash`,
-  seeded from `runtimeType.hashCode`.
-- **Inheritance is included and kept distinct.** An anonymous embedded struct becomes a Dart
-  superclass; the subclass compares its promoted fields too, and the `runtimeType` check stops a
-  parent holding the same values from comparing equal to its subclass.
-- **A struct with no bridged fields keeps identity equality.** With nothing to compare, every
-  instance would equal every other, which is less useful than what `Object` already provides.
-- **`GoOpaque` handles keep identity equality.** Their identity is the handle, and the same Go
-  object can cross the bridge under more than one, so a generated `==` would promise more than it
-  can deliver. Expose a Go method when a handle needs a value comparison.
-
 ### Pointer fields and pointer receivers
 
 A `*T` field is nullable data. A `*T` method receiver is different: for a value class the bridge
