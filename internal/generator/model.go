@@ -147,6 +147,20 @@ type callModel struct {
 	Operator string
 }
 
+// dartMember is what the call occupies in its receiver's Dart member
+// namespace. An operator does not take the ordinary method name, so collision
+// checks and override detection compare this rather than DartName: otherwise a
+// promoted `operator +` looks like the member an unrelated `add()` overrides.
+func (c *callModel) dartMember() string {
+	if c == nil {
+		return ""
+	}
+	if c.Operator != "" {
+		return "operator " + c.Operator
+	}
+	return c.DartName
+}
+
 // resultModel is one non-error result of a bridged call.
 type resultModel struct {
 	GoName   string
