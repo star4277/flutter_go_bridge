@@ -211,24 +211,20 @@ func (b *builder) propagateInterfaceMethodShapes() error {
 // implementorMethods collects the bridged methods a Dart implementation class
 // exposes, including the ones promoted from an embedded struct, because Dart
 // accepts an inherited member as the implementation of an interface method.
+//
+// collectImplementors only ever registers value structs and GoOpaque handles,
+// so anything else is a future shape that owns no methods yet.
 func implementorMethods(mapped *wireType) []*callModel {
-	if mapped == nil {
-		return nil
-	}
-	switch mapped.Kind {
-	case kindStruct:
-		var methods []*callModel
-		for structure := mapped.Struct; structure != nil; structure = structure.Super {
-			methods = append(methods, structure.Methods...)
-		}
-		return methods
-	case kindOpaque:
+	if mapped.Kind == kindOpaque {
 		return mapped.Opaque.Methods
-	case kindNamed:
-		return mapped.Named.Methods
-	default:
-		return nil
 	}
+	// Anything else registered as an implementor is a value struct. A kind
+	// without a struct model simply owns no methods, so the walk ends at once.
+	var methods []*callModel
+	for structure := mapped.Struct; structure != nil; structure = structure.Super {
+		methods = append(methods, structure.Methods...)
+	}
+	return methods
 }
 
 // checkInterfaceImplementations rejects an implementation whose Dart method
@@ -265,7 +261,7 @@ func (b *builder) checkInterfaceImplementations() error {
 				}
 				if dartMethodSignature(concrete) != dartMethodSignature(declared) {
 					return fmt.Errorf(
-						"%s.%s implements %s.%s with a different Dart signature (%s vs %s); give both declarations the same //fgb:async or //fgb:sync directive",
+						"%s.%s implements %s.%s with a different Dart signature (%s vs %s); the call mode is taken from the interface, so the difference comes from another directive such as //fgb:nullable",
 						implementor.DartName, concrete.GoName, declaration.GoName, declared.GoName,
 						dartMethodSignature(concrete), dartMethodSignature(declared))
 				}

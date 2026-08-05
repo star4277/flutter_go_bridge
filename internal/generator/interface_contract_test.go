@@ -150,3 +150,63 @@ func Use(w Worker) {}
 		t.Fatalf("a synchronous interface method must stay synchronous:\n%s", apiDart)
 	}
 }
+
+// A GoOpaque handle satisfies an interface through its own method list rather
+// than a struct field set, so it needs the same directive propagation.
+func TestGenerateInterfaceShapeReachesOpaqueImplementation(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+type Loader interface {
+	//fgb:async, rename = "fetch"
+	Load(id int) (string, error)
+}
+
+//fgb:opaque
+type Remote struct{ host string }
+
+func (r *Remote) Load(id int) (string, error) { return "", nil }
+
+func New() *Remote      { return &Remote{} }
+func Use(loader Loader) {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "final class Remote extends GoOpaque implements Loader {") {
+		t.Fatalf("expected an opaque implementation:\n%s", apiDart)
+	}
+	if !strings.Contains(apiDart, "Future<String> fetch({required int id}) async {") {
+		t.Fatalf("an opaque implementation must adopt the interface shape:\n%s", apiDart)
+	}
+}
+
+// The call mode now comes from the interface, but another directive can still
+// pull the two Dart signatures apart. //fgb:nullable on the implementation only
+// makes its parameter optional, which Dart rejects as an override.
+func TestGenerateRejectsImplementationWithDivergentParameterNullability(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+type Shape interface{ Area() int }
+
+type Circle struct{ R int }
+
+func (c Circle) Area() int { return c.R }
+
+type Loader interface {
+	Load(s Shape) error
+}
+
+type Remote struct{ Host string }
+
+//fgb:nullable = "s"
+func (r Remote) Load(s Shape) error { return nil }
+
+func Use(loader Loader) {}
+`)
+	if err == nil || !strings.Contains(err.Error(), "different Dart signature") {
+		t.Fatalf("expected a signature mismatch error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "//fgb:nullable") {
+		t.Fatalf("the error should point at the remaining directive, got %v", err)
+	}
+}
