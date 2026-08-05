@@ -36,6 +36,7 @@ const reference: DefaultTheme.SidebarItem = {
     { text: '类型映射', link: '/zh/reference/type-mapping' },
     { text: '指令与字段 tag', link: '/zh/reference/directives' },
     { text: '结构体与接口', link: '/zh/reference/structs-interfaces' },
+    { text: '运算符重载', link: '/zh/reference/operators' },
     { text: '返回值与 error', link: '/zh/reference/returns-errors' },
     { text: 'Stream', link: '/zh/reference/stream' },
     { text: 'Dart 闭包回调', link: '/zh/reference/callbacks' },

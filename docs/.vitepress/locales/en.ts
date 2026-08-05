@@ -36,6 +36,7 @@ const reference: DefaultTheme.SidebarItem = {
     { text: 'Type mapping', link: '/reference/type-mapping' },
     { text: 'Directives and tags', link: '/reference/directives' },
     { text: 'Structs and interfaces', link: '/reference/structs-interfaces' },
+    { text: 'Operator overloading', link: '/reference/operators' },
     { text: 'Returns and errors', link: '/reference/returns-errors' },
     { text: 'Stream', link: '/reference/stream' },
     { text: 'Dart closure callbacks', link: '/reference/callbacks' },

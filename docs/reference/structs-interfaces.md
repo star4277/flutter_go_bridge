@@ -120,6 +120,9 @@ Details worth knowing:
   object can cross the bridge under more than one, so a generated `==` would promise more than it
   can deliver. Expose a Go method when a handle needs a value comparison.
 
+`==` is the only operator that comes from the fields. Every other Dart operator comes from a matching
+Go method instead — see [Operator overloading](/reference/operators).
+
 ### Pointer fields and pointer receivers
 
 A `*T` field is nullable data. A `*T` method receiver is different: for a value class the bridge
