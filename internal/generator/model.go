@@ -141,6 +141,10 @@ type callModel struct {
 	// Overrides marks a method that shadows one promoted from an embedded
 	// struct, so the Dart declaration carries @override.
 	Overrides bool
+	// Operator is the Dart operator symbol this method is rendered as ("+",
+	// "<=", "~", ...), or "" for an ordinary method. A Go method qualifies by
+	// name and signature alone; see dartOperatorFor.
+	Operator string
 }
 
 // resultModel is one non-error result of a bridged call.
