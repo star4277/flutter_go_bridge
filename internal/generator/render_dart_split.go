@@ -507,8 +507,50 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 		r.line("")
 		r.renderInstanceCall(call, "this", "__FGB_BRIDGE_CLASS__.instance", true, "  ")
 	}
+	r.renderStructEquality(structure)
 	r.line("}")
 	r.line("")
+}
+
+// renderStructEquality gives a value class structural equality, because two
+// structs decoded from the same wire bytes represent the same Go value and
+// Dart's default identity comparison would call them different.
+//
+// A struct with no bridged fields is left alone: there is nothing to compare,
+// so every instance would be equal to every other, which is less useful than
+// the identity semantics Object already provides.
+func (r *splitDartRenderer) renderStructEquality(structure *structModel) {
+	fields := structure.allFields()
+	if len(fields) == 0 {
+		return
+	}
+	r.line("")
+	r.line("  @override")
+	r.line("  bool operator ==(Object other) =>")
+	r.line("      identical(this, other) ||")
+	r.line("      other is %s &&", structure.DartName)
+	// An embedded struct becomes a Dart superclass, and a subclass carries the
+	// promoted fields too. Without the runtimeType check a parent and a child
+	// holding the same values would compare equal.
+	r.line("          other.runtimeType == runtimeType &&")
+	for index, field := range fields {
+		terminator := " &&"
+		if index == len(fields)-1 {
+			terminator = ";"
+		}
+		r.line("          fgbInternalDeepEquals(%s, other.%s)%s", field.DartName, field.DartName, terminator)
+	}
+	r.line("")
+	r.line("  @override")
+	r.line("  int get hashCode {")
+	r.line("    var result = runtimeType.hashCode;")
+	for _, field := range fields {
+		// 31 is the conventional odd prime for this accumulation: it spreads
+		// the field hashes without clustering, and the multiply stays cheap.
+		r.line("    result = result * 31 + fgbInternalDeepHash(%s);", field.DartName)
+	}
+	r.line("    return result;")
+	r.line("  }")
 }
 
 // dartFieldDecode reads one struct field. A field marked `fgb:"nullable"`
