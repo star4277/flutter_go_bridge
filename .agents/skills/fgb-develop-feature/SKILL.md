@@ -1,12 +1,15 @@
 ---
 name: fgb-develop-feature
-description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Docs-only and skill-only changes skip code tests; code behavior changes and new features must update the development documentation.
+description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Docs-only and skill-only changes skip code tests; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/; test and coverage follow-ups stay on the branch that owns the code.
 ---
 
 # FGB Feature Development
 
 Classify the final diff before selecting validation. Code changes follow the staged analysis and test
 workflow. Docs-only and skill-only changes do not run code tests.
+
+A new feature or a behavior change also needs a git-ignored plan under `.plans/`, kept current as the
+work proceeds. A bug fix does not.
 
 ## 0. Classify the Change
 
@@ -45,7 +48,28 @@ run the code validation required by the affected area.
 
 ## 1. Prepare Git Before Editing
 
-Create a fresh branch from the latest remote `main` before changing files.
+`main` is protected: never develop or commit on it. Everything else depends on whether the task
+starts new work or continues work that is already on the current branch.
+
+### Stay on the current branch
+
+Do not create a branch when the task only supplements or repairs the verification of work that is
+already on the current branch, for example:
+
+- adding or extending tests for code this branch introduced;
+- raising coverage that a patch-coverage gate flagged;
+- fixing a test that this branch's changes made fail or made flaky;
+- following up on review feedback about this branch's own commits.
+
+Committing that work anywhere else would separate it from the change it validates. The only
+exception is `main`: if the current branch is `main`, create a branch first even for a test-only
+follow-up.
+
+### Create a branch
+
+Create a fresh branch from the latest remote `main` when the task starts new work: a new feature, a
+behavior change, a bug fix in code the current branch does not own, or maintenance unrelated to the
+current branch.
 
 1. Inspect the worktree with `git status --short`.
 2. If unrelated or user-owned changes exist, preserve them. Do not reset, discard, or stash them without explicit permission.
@@ -65,7 +89,10 @@ git switch -c fix/<short-name>      # bug fix
 git switch -c chore/<short-name>    # maintenance only
 ```
 
-Never develop or commit directly on `main`. If work already exists before this workflow was applied, stop and preserve it before updating `main`; do not risk losing changes merely to satisfy the branch sequence.
+If work already exists before this workflow was applied, stop and preserve it before updating
+`main`; do not risk losing changes merely to satisfy the branch sequence. When a fix depends on an
+unmerged commit that only exists on the current branch, branching from `main` would leave nothing to
+fix: stay on that branch and say so in the report.
 
 ## 2. Understand the Change
 
@@ -87,6 +114,50 @@ For generated-code changes, determine whether these areas also need updates:
 - command/config behavior
 
 ## 3. Implement and Document
+
+### Plan a feature or a behavior change first
+
+A new feature or a change to existing behavior needs a written plan before the first edit. A bug fix
+does not: go straight to the implementation.
+
+Write the plan to `.plans/<short-name>.md`. That directory is git-ignored on purpose — the plan is a
+working aid for this task, not a deliverable, so it must never be staged or committed. Do not put it
+under `docs/`, and do not add it to a commit "for context".
+
+The plan lists the work as checkable items, each small enough to finish and verify on its own:
+
+```markdown
+# <short-name>
+
+Goal: one or two sentences on the behavior being added or changed.
+
+## Items
+
+- [ ] 1. <the smallest change that stands on its own>
+      Files: internal/generator/builder.go
+      Done when: <the observable result, e.g. a named test passes>
+- [ ] 2. ...
+
+## Decisions
+
+- <choice made, and the reason, so a later item does not relitigate it>
+
+## Open questions
+
+- <anything that needs the user's answer before a specific item can start>
+```
+
+Update the file as the work proceeds, not at the end:
+
+- tick an item the moment it is finished and verified;
+- record a decision when you make one, especially when you rejected an alternative;
+- add an item you discovered rather than silently widening an existing one;
+- when an item turns out to be wrong or unnecessary, strike it and say why.
+
+The plan is also the handover: if the session ends mid-task, the next one must be able to read it and
+continue without re-deriving the design.
+
+### Implement
 
 Implement the smallest complete change. Preserve user edits and avoid unrelated refactors.
 
@@ -267,11 +338,13 @@ After every applicable validation phase passes:
 
 1. Run `git diff --check`.
 2. Review `git diff` and `git status --short`.
-3. Confirm the current branch is the new task branch, never `main`.
+3. Confirm the current branch is correct: a task branch for new work, the existing branch for a
+   test or coverage follow-up, and never `main`.
 4. For code changes, confirm the coverage gate excluded `cmd/**` and `template/**` and reported at
    least 95.0% total statement coverage.
-5. Ensure build artifacts, DLLs, caches, and temporary smoke fixtures are ignored.
-6. Stage only intended files.
+5. Ensure build artifacts, DLLs, caches, temporary smoke fixtures, and `.plans/**` are ignored.
+6. Stage only intended files. A feature plan is never one of them; check that `git status --short`
+   shows no `.plans/` entry before staging.
 7. Commit with a focused conventional message, for example:
 
 ```text
@@ -285,11 +358,12 @@ Push only when the user requests remote publication or the requested workflow ex
 git push -u origin <branch-name>
 ```
 
-Report the branch and commit when created. For code changes, report analysis commands, unit tests,
-the exact aggregate coverage percentage and exclusions, integration tests, smoke results,
-documentation updates, and residual platform coverage gaps. For a docs-only or skill-only change,
-explicitly report that code tests were not required by this workflow and list only the relevant
-documentation or Skill checks performed.
+Report the branch and commit when created, and say which branch rule applied when the work stayed on
+an existing branch. For code changes, report analysis commands, unit tests, the exact aggregate
+coverage percentage and exclusions, integration tests, smoke results, documentation updates, and
+residual platform coverage gaps. For a feature or behavior change, report the plan path and which
+items are now ticked. For a docs-only or skill-only change, explicitly report that code tests were
+not required by this workflow and list only the relevant documentation or Skill checks performed.
 
 ## Failure Rules
 
@@ -301,3 +375,8 @@ documentation or Skill checks performed.
   examples, configuration behavior, or generated API behavior.
 - Do not finish a code behavior change or new feature without updating its owning development
   documentation under `docs/`.
+- Do not commit a plan file, and do not move it out of `.plans/` to keep it.
+- Do not start a feature or behavior change without its plan, and do not leave the plan behind the
+  implementation: an item ticked before it is verified is worse than no plan at all.
+- Do not branch away from work this branch owns. A test, coverage, or flake follow-up belongs on the
+  branch that introduced the code it verifies.
