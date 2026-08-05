@@ -120,6 +120,31 @@ func dartParams(call *callModel) string {
 	return "{" + strings.Join(params, ", ") + "}"
 }
 
+// dartOperatorParams renders the operand list of a generated Dart operator.
+// Dart only accepts positional parameters there, where the rest of the
+// generated API uses named ones.
+func dartOperatorParams(call *callModel) string {
+	if call == nil || len(call.Params) == 0 {
+		return ""
+	}
+	operands := make([]string, 0, len(call.Params))
+	for _, param := range call.Params {
+		operands = append(operands, fmt.Sprintf("%s %s", dartParamType(param), param.DartName))
+	}
+	return strings.Join(operands, ", ")
+}
+
+// dartSyncDeclaration is the Dart signature of a synchronous instance call:
+// an operator when the Go method qualified as one, an ordinary method
+// otherwise.
+func dartSyncDeclaration(call *callModel) string {
+	resultType := dartResultType(call)
+	if call.Operator == "" {
+		return fmt.Sprintf("%s %s(%s)", resultType, call.DartName, dartParams(call))
+	}
+	return fmt.Sprintf("%s operator %s(%s)", resultType, call.Operator, dartOperatorParams(call))
+}
+
 func isAsyncCall(call *callModel) bool {
 	return call != nil && call.Mode == bridgemodel.CallModeAsync
 }
@@ -639,7 +664,7 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 			r.line("%s  return await %s;", indent, invocation)
 		}
 	} else {
-		r.line("%s%s %s(%s) {", indent, resultType, call.DartName, params)
+		r.line("%s%s {", indent, dartSyncDeclaration(call))
 		if len(call.Results) == 0 {
 			r.line("%s  %s;", indent, invocation)
 		} else {

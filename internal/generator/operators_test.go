@@ -2,6 +2,7 @@ package generator
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/star4277/flutter_go_bridge/internal/model"
@@ -140,5 +141,77 @@ func Echo(v Value) Value { return v }
 	// Guard the nil paths the builder never reaches but callers could.
 	if got := dartOperatorFor(nil); got != "" {
 		t.Fatalf("nil callable produced operator %q", got)
+	}
+}
+
+// A qualifying method is rendered as the operator itself, with the positional
+// operand Dart requires, and is not additionally exposed under its ordinary
+// name.
+func TestRenderDartOperators(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+type Point struct {
+	X int
+	Y int
+}
+
+func (p Point) Add(other Point) Point       { return p }
+func (p Point) Subtract(other *Point) Point { return p }
+func (p Point) LessThan(other Point) bool   { return p.X < other.X }
+func (p Point) BitwiseNot() Point           { return p }
+func (p Point) Scale(factor int) Point      { return p }
+
+func Echo(p Point) Point { return p }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"  Point operator +(Point other) {",
+		// A pointer operand keeps its nullable Dart spelling.
+		"  Point operator -(Point? other) {",
+		"  bool operator <(Point other) {",
+		"  Point operator ~() {",
+		// A method that qualifies for nothing keeps the ordinary named-parameter
+		// shape.
+		"  Point scale({required int factor}) {",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("missing %q:\n%s", expected, apiDart)
+		}
+	}
+	// The operator replaces the ordinary method rather than doubling it.
+	for _, unwanted := range []string{
+		"Point add(", "Point subtract(", "bool lessThan(", "Point bitwiseNot(",
+	} {
+		if strings.Contains(apiDart, unwanted) {
+			t.Fatalf("operator method also exposed as %q:\n%s", unwanted, apiDart)
+		}
+	}
+}
+
+// An extension type carries operators too: a named Go type with a qualifying
+// method is the same rule as a struct.
+func TestRenderDartOperatorsOnNamedType(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+type Meters float64
+
+func (m Meters) Add(other Meters) Meters      { return m + other }
+func (m Meters) GreaterThan(other Meters) bool { return m > other }
+
+func Echo(m Meters) Meters { return m }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"extension type const Meters(double value) {",
+		"  Meters operator +(Meters other) {",
+		"  bool operator >(Meters other) {",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("missing %q:\n%s", expected, apiDart)
+		}
 	}
 }
