@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -42,8 +43,13 @@ func TestClientRequestBufferedBeforeDone(t *testing.T) {
 			result <- err
 		}()
 
-		// Let Request register its waiter and block on the write lock.
-		time.Sleep(2 * time.Millisecond)
+		// Wait for the waiter to be registered rather than sleeping for it.
+		// Request records pending[id] under mu and only then blocks on the
+		// write lock, so seeing the entry proves it is past the guard that
+		// rejects a request once done is closed. A fixed sleep let a loaded
+		// machine run the rest of this iteration first, and Request then
+		// failed with "flutter daemon is not running".
+		waitForPendingRequest(t, client)
 
 		// Deliver the response, then end the reader: the read loop completes
 		// the waiter and only afterwards closes done, exactly as in flight.
@@ -54,11 +60,29 @@ func TestClientRequestBufferedBeforeDone(t *testing.T) {
 		client.writeMu.Unlock()
 
 		if err := <-result; err != nil {
-			t.Fatalf("Request returned %v, want success", err)
+			t.Fatalf("iteration %d: Request returned %v, want success", i, err)
 		}
 		_ = toClientReader.Close()
 	}
 	wg.Wait()
+}
+
+// waitForPendingRequest blocks until a Request has registered its waiter.
+func waitForPendingRequest(t *testing.T, client *Client) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		client.mu.Lock()
+		pending := len(client.pending)
+		client.mu.Unlock()
+		if pending > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Request never registered its waiter")
+		}
+		runtime.Gosched()
+	}
 }
 
 // TestClientReadLoopStopsWhenClosing fills the event buffer so the read loop
