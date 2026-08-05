@@ -1,6 +1,6 @@
 ---
 name: fgb-develop-feature
-description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Documentation-only changes (docs/, README, skills) run no code validation at all; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/; test and coverage follow-ups stay on the branch that owns the code.
+description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Documentation-only changes (docs/, README, skills) run no code validation at all; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/; a branch carrying several changes commits each finished item locally as a rollback checkpoint; when the work is complete the branch is pushed and a pull request opened with gh, or a pull request document written under .plans/ when gh is unavailable; test and coverage follow-ups stay on the branch that owns the code.
 ---
 
 # FGB Feature Development
@@ -133,7 +133,8 @@ Write the plan to `.plans/<short-name>.md`. That directory is git-ignored on pur
 working aid for this task, not a deliverable, so it must never be staged or committed. Do not put it
 under `docs/`, and do not add it to a commit "for context".
 
-The plan lists the work as checkable items, each small enough to finish and verify on its own:
+The plan lists the work as checkable items, each small enough to finish, verify, and commit on its
+own:
 
 ```markdown
 # <short-name>
@@ -158,7 +159,7 @@ Goal: one or two sentences on the behavior being added or changed.
 
 Update the file as the work proceeds, not at the end:
 
-- tick an item the moment it is finished and verified;
+- tick an item the moment it is finished, verified, and committed, and record its commit hash;
 - record a decision when you make one, especially when you rejected an alternative;
 - add an item you discovered rather than silently widening an existing one;
 - when an item turns out to be wrong or unnecessary, strike it and say why.
@@ -191,6 +192,63 @@ the high-level feature list, or other repository-front-page information. README 
 the required detailed development documentation under `docs/`.
 
 Regenerate checked-in generated output when the repository treats it as source. Never hand-edit generated files when the generator is the source of truth.
+
+### Checkpoint each finished item with a local commit
+
+A branch that carries several changes must not carry them all as one uncommitted pile. Commit to the
+local repository as soon as a piece of work is finished and verified, so a later edit that goes wrong
+cannot damage what already worked and the branch can be returned to a known-good state.
+
+This applies to every branch that accumulates more than one separable change, plan or no plan:
+
+- with a plan, each item is a checkpoint: tick it and commit it in the same step;
+- without a plan, checkpoint whenever the work reaches a self-contained verified state -- the fix
+  itself, then its regression test, then a follow-up correction;
+- a change that is only meaningful together with the next one stays uncommitted until both are done.
+  Never create a checkpoint that cannot compile on its own.
+
+Before each checkpoint commit, run the validation that is narrow enough to be worth repeating per
+item:
+
+1. analysis on the files this item changed (Section 4);
+2. the item's own `Done when` test and the tests of the packages it touched (Section 5).
+
+On a documentation-only branch the per-item check is the documentation review from Section 0 instead;
+committing prose in steps never justifies running a code gate.
+
+A checkpoint must build, and must not knowingly break a test that passed before it. The expensive
+gates -- the full unit suite with the coverage threshold, integration, and smoke -- still run over
+the finished branch in Sections 5 through 7, not once per item; the fixes they force become their own
+checkpoints.
+
+Commit each checkpoint with the conventional message its own change deserves, so the history reads as
+the sequence of items rather than one squashed lump. Stage only that item's files: `.plans/**` is
+ignored and must never appear in a checkpoint. Commit locally only -- the remote is published once, at
+the end, under Section 9.
+
+Record the checkpoint next to the item it finished, so the rollback target survives the session:
+
+```markdown
+- [x] 1. <the smallest change that stands on its own>
+      Files: internal/generator/builder.go
+      Done when: TestBuilderRejectsUnsupportedType passes
+      Commit: 1a2b3c4
+```
+
+### Roll back to a checkpoint
+
+When a later item breaks earlier work, return to the last good checkpoint instead of debugging a
+worktree that mixes several states:
+
+```text
+git diff <sha>                       # what changed since the checkpoint
+git restore --source <sha> -- <path> # take specific files back to the checkpoint
+git revert <sha>                     # undo an already committed item, keeping history
+```
+
+`git reset --hard`, `git clean -f`, and anything else that discards commits or uncommitted work
+require the user's explicit permission first. Report which checkpoint you returned to, what was
+undone, and whether the plan item went back to unticked.
 
 ## 4. Run Code Analysis
 
@@ -288,8 +346,9 @@ go tool cover -func=build/coverage.out
 The final `total:` statement coverage must be at least 95.0%. Coverage below 95.0%, a missing
 profile, or a failed package test is a blocking failure: add meaningful tests and rerun the gate.
 Never weaken, skip, or delete existing assertions merely to get green results or inflate coverage.
-Do not proceed to integration tests, smoke tests, review, or commit until all unit tests pass and this
-coverage threshold is met.
+Do not proceed to integration tests, smoke tests, final review, or publication until all unit tests
+pass and this coverage threshold is met. A per-item checkpoint commit from Section 3 is not blocked by
+this gate -- it carries its own narrow verification and never leaves the local repository.
 
 ## 6. Integration Test Gate
 
@@ -346,7 +405,15 @@ For type or codec features, include both bridge directions and at least one fail
 After every applicable validation phase passes:
 
 1. Run `git diff --check`.
-2. Review `git diff` and `git status --short`.
+2. Review the branch as a whole, not only what is still uncommitted:
+
+```text
+git status --short
+git diff
+git log --oneline origin/main..HEAD
+git diff origin/main...HEAD
+```
+
 3. Confirm the current branch is correct: a task branch for new work, the existing branch for a
    test or coverage follow-up, and never `main`.
 4. For code changes, confirm the coverage gate excluded `cmd/**` and `template/**` and reported at
@@ -354,25 +421,125 @@ After every applicable validation phase passes:
 5. Ensure build artifacts, DLLs, caches, temporary smoke fixtures, and `.plans/**` are ignored.
 6. Stage only intended files. A feature plan is never one of them; check that `git status --short`
    shows no `.plans/` entry before staging.
-7. Commit with a focused conventional message, for example:
+7. Commit whatever remains with a focused conventional message, for example:
 
 ```text
 git commit -m "feat: support <behavior>"
 git commit -m "fix: handle <failure>"
 ```
 
-Push only when the user requests remote publication or the requested workflow explicitly includes it. When pushing a new branch:
+The worktree must be clean when this section finishes: no finished work left uncommitted. Prefer a
+new commit over `git commit --amend`, and never rewrite a checkpoint that already validated, so each
+item stays a reachable rollback target.
+
+## 9. Publish the Branch
+
+Publish when the task is actually finished: every plan item ticked or struck with a reason, every
+applicable gate in Sections 4 through 7 green, the documentation updated, and the worktree clean. A
+mid-task checkpoint is never published, and `main` is never pushed.
+
+Once that holds, push the branch to the remote without waiting to be asked -- the only exception is a
+user who asked to keep the work local:
 
 ```text
-git push -u origin <branch-name>
+git push -u origin <branch-name>   # first push of a new branch
+git push                           # branch already tracks a remote
 ```
 
+If the push is rejected as non-fast-forward, fetch and rebase or merge `origin/main`, rerun the gates
+the rebase could invalidate, then push again. `git push --force` and `--force-with-lease` need the
+user's explicit permission.
+
+If the remote rejects the push for access reasons -- read-only clone, or a fork without write
+permission -- stop pushing, say so, and still write the pull request document below so the work is not
+lost.
+
+### Open the pull request with `gh`
+
+Check for a usable GitHub CLI: it must exist *and* be authenticated.
+
+```powershell
+$gh = Get-Command gh -ErrorAction SilentlyContinue
+if ($gh) { gh auth status }
+```
+
+```sh
+command -v gh >/dev/null 2>&1 && gh auth status
+```
+
+When both succeed, write the body to `.plans/pr-<short-name>.md` and open the pull request:
+
+```text
+gh pr create --base main --head <branch-name> --title "<conventional title>" --body-file .plans/pr-<short-name>.md
+```
+
+Keep the title under about 70 characters and put the detail in the body. Add `--draft` when a gate was
+skipped for a missing prerequisite, and name that gate in the body. Report the URL `gh pr create`
+prints. Do not open a second pull request for a branch that already has one: `gh pr view` first, and
+push the new commits to update the existing one instead.
+
+### Fall back to a pull request document
+
+When `gh` is missing, unauthenticated, or fails, write the same body to `.plans/pr-<short-name>.md` and
+stop there. That document is the handover: a developer must be able to open the pull request from it by
+hand, pasting the title and body unchanged. Give it a `Title:` line at the top, then the body.
+
+`.plans/**` is git-ignored, so the document is never staged and never committed. Report its path and
+the compare URL the developer can open:
+
+```text
+https://github.com/<owner>/<repo>/compare/main...<branch-name>?expand=1
+```
+
+Derive `<owner>/<repo>` from `git remote get-url origin` rather than guessing it.
+
+### Pull request body
+
+```markdown
+## Summary
+
+<what changed and why, in two or three sentences>
+
+## Changes
+
+- <area>: <change>
+
+## Validation
+
+- Analysis: <commands run, or "not required: documentation-only">
+- Unit tests and coverage: <commands, exact total statement coverage, exclusions>
+- Integration: <what ran, or the exact missing prerequisite>
+- Smoke: <what ran, or the exact missing prerequisite>
+
+## Documentation
+
+- <pages updated, English and Chinese>
+
+## Checkpoints
+
+- <sha> <subject>
+
+## Risks and rollback
+
+- <what could regress, and the checkpoint to return to>
+```
+
+Report a gate that did not run as not run, together with the prerequisite that was missing. A pull
+request that claims validation it never performed is worse than one that admits the gap.
+
+## 10. Report
+
 Report the branch and commit when created, and say which branch rule applied when the work stayed on
-an existing branch. For code changes, report analysis commands, unit tests, the exact aggregate
-coverage percentage and exclusions, integration tests, smoke results, documentation updates, and
-residual platform coverage gaps. For a feature or behavior change, report the plan path and which
-items are now ticked. For a documentation-only change, state plainly that this workflow required no
-code validation, and list only the documentation or Skill checks actually performed.
+an existing branch. When the branch carries several changes, list its checkpoint commits in order so
+the user can see what is already safe to roll back to. For code changes, report analysis commands,
+unit tests, the exact aggregate coverage percentage and exclusions, integration tests, smoke results,
+documentation updates, and residual platform coverage gaps. For a feature or behavior change, report
+the plan path and which items are now ticked. For a documentation-only change, state plainly that this
+workflow required no code validation, and list only the documentation or Skill checks actually
+performed.
+
+Close with the publication outcome: the pushed branch and its pull request URL, or the pull request
+document path plus the compare URL when `gh` was unavailable, or the reason nothing was published.
 
 ## Failure Rules
 
@@ -389,3 +556,16 @@ code validation, and list only the documentation or Skill checks actually perfor
   implementation: an item ticked before it is verified is worse than no plan at all.
 - Do not branch away from work this branch owns. A test, coverage, or flake follow-up belongs on the
   branch that introduced the code it verifies.
+- Do not let several finished items pile up as one uncommitted change. Work that was never committed
+  has no checkpoint to roll back to.
+- Do not commit a checkpoint that fails to build, or that knowingly breaks a test that passed before
+  it. Fix it first, or leave the item open.
+- Do not discard commits or uncommitted work to recover from a bad item without the user's explicit
+  permission, and do not rewrite a checkpoint that already validated.
+- Do not publish an unfinished branch: pushing before the applicable gates are green turns a private
+  mistake into a public one. Force pushing needs the user's explicit permission.
+- Do not finish a completed branch without publishing it -- pushed with a pull request when `gh` works,
+  or pushed with a pull request document under `.plans/` when it does not. If neither was possible, say
+  why.
+- Do not open a pull request that claims a gate which was skipped, and do not commit the pull request
+  document.
