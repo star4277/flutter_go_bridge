@@ -1,6 +1,6 @@
 ---
 name: fgb-develop-feature
-description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Documentation-only changes (docs/, README, skills) run no code validation at all; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/; a branch carrying several changes commits each finished item locally as a rollback checkpoint; when the work is complete the branch is pushed and a pull request opened with gh, or a pull request document written under .plans/ when gh is unavailable; test and coverage follow-ups stay on the branch that owns the code.
+description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Documentation-only changes (docs/, README, skills) run no code validation at all; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/. A branch owns one independent feature and commits each finished item locally as a rollback checkpoint; multiple independent features use separate branches and are published individually, never batched into one branch. After the final commit, keep a local completion record under .plans/ as merge-conflict context and completion proof; merge-conflict resolutions must use the code-review skill. Test and coverage follow-ups stay on the branch that owns the code.
 ---
 
 # FGB Feature Development
@@ -59,6 +59,11 @@ exemption: run the code validation required by the affected area.
 
 `main` is protected: never develop or commit on it. Everything else depends on whether the task
 starts new work or continues work that is already on the current branch.
+
+One branch owns one independent feature or behavior change. If the incoming request contains
+multiple independent features, split them before editing: create one branch per feature, with its
+own plan, checkpoints, validation, completion record, and pull request. Do not combine the features
+onto one branch and do not wait for all of them to finish before publishing one of them.
 
 ### Stay on the current branch
 
@@ -223,8 +228,8 @@ checkpoints.
 
 Commit each checkpoint with the conventional message its own change deserves, so the history reads as
 the sequence of items rather than one squashed lump. Stage only that item's files: `.plans/**` is
-ignored and must never appear in a checkpoint. Commit locally only -- the remote is published once, at
-the end, under Section 9.
+ignored and must never appear in a checkpoint. Commit locally only -- the remote for that branch is
+published independently under Section 9, not once for a batch of unrelated feature branches.
 
 Record the checkpoint next to the item it finished, so the rollback target survives the session:
 
@@ -419,8 +424,8 @@ git diff origin/main...HEAD
 4. For code changes, confirm the coverage gate excluded `cmd/**` and `template/**` and reported at
    least 95.0% total statement coverage.
 5. Ensure build artifacts, DLLs, caches, temporary smoke fixtures, and `.plans/**` are ignored.
-6. Stage only intended files. A feature plan is never one of them; check that `git status --short`
-   shows no `.plans/` entry before staging.
+6. Stage only intended files. A feature plan or completion record is never one of them; check that
+   `git status --short` shows no `.plans/` entry before staging.
 7. Commit whatever remains with a focused conventional message, for example:
 
 ```text
@@ -432,11 +437,20 @@ The worktree must be clean when this section finishes: no finished work left unc
 new commit over `git commit --amend`, and never rewrite a checkpoint that already validated, so each
 item stays a reachable rollback target.
 
+After the final commit, write the local completion record to `.plans/completed/<short-name>.md`
+before publishing the branch. It is git-ignored and must stay untracked. Include the branch name,
+the final commit hash, a saved copy of the final diff/patch, the changed files and behaviors, the
+validation that ran, and any notes that will help resolve a later merge conflict. This record is the
+completion proof and the local context for the `code-review` step in Section 9.
+
 ## 9. Publish the Branch
 
-Publish when the task is actually finished: every plan item ticked or struck with a reason, every
-applicable gate in Sections 4 through 7 green, the documentation updated, and the worktree clean. A
-mid-task checkpoint is never published, and `main` is never pushed.
+Publish each feature branch independently when its own task is actually finished: every plan item
+ticked or struck with a reason, every applicable gate in Sections 4 through 7 green, the
+documentation updated, the completion record written to `.plans/completed/`, and the worktree clean.
+In a multi-feature request, do not wait for the other branches and do not create an integration
+branch just to publish them together. A mid-task checkpoint is never published, and `main` is never
+pushed.
 
 Once that holds, push the branch to the remote without waiting to be asked -- the only exception is a
 user who asked to keep the work local:
@@ -453,6 +467,15 @@ user's explicit permission.
 If the remote rejects the push for access reasons -- read-only clone, or a fork without write
 permission -- stop pushing, say so, and still write the pull request document below so the work is not
 lost.
+
+### Merge conflicts and code review
+
+When merging the branch into `main` produces conflicts, resolve them locally and then call the
+`code-review` skill before completing the merge. Use the same fixed point the pull request was
+reviewed against, normally `origin/main`, and use the `.plans/completed/<short-name>.md` record as
+the local reference for what this branch changed. Address the review findings in new commits, rerun
+the applicable gates if the conflict resolution touched code, and rerun `code-review` on the resolved
+merge before finishing.
 
 ### Open the pull request with `gh`
 
@@ -534,9 +557,9 @@ an existing branch. When the branch carries several changes, list its checkpoint
 the user can see what is already safe to roll back to. For code changes, report analysis commands,
 unit tests, the exact aggregate coverage percentage and exclusions, integration tests, smoke results,
 documentation updates, and residual platform coverage gaps. For a feature or behavior change, report
-the plan path and which items are now ticked. For a documentation-only change, state plainly that this
-workflow required no code validation, and list only the documentation or Skill checks actually
-performed.
+the plan path, the `.plans/completed/` completion record path, and which items are now ticked. For a
+documentation-only change, state plainly that this workflow required no code validation, and list only
+the documentation or Skill checks actually performed.
 
 Close with the publication outcome: the pushed branch and its pull request URL, or the pull request
 document path plus the compare URL when `gh` was unavailable, or the reason nothing was published.
@@ -552,10 +575,14 @@ document path plus the compare URL when `gh` was unavailable, or the reason noth
 - Do not finish a code behavior change or new feature without updating its owning development
   documentation under `docs/`.
 - Do not commit a plan file, and do not move it out of `.plans/` to keep it.
+- Do not commit a completion record: keep it under `.plans/completed/` as local, untracked proof of
+  the branch's finished work.
 - Do not start a feature or behavior change without its plan, and do not leave the plan behind the
   implementation: an item ticked before it is verified is worse than no plan at all.
 - Do not branch away from work this branch owns. A test, coverage, or flake follow-up belongs on the
   branch that introduced the code it verifies.
+- Do not combine multiple independent features into one branch or publish them as one batch. Each
+  feature branch is published when its own gates pass.
 - Do not let several finished items pile up as one uncommitted change. Work that was never committed
   has no checkpoint to roll back to.
 - Do not commit a checkpoint that fails to build, or that knowingly breaks a test that passed before
@@ -564,6 +591,7 @@ document path plus the compare URL when `gh` was unavailable, or the reason noth
   permission, and do not rewrite a checkpoint that already validated.
 - Do not publish an unfinished branch: pushing before the applicable gates are green turns a private
   mistake into a public one. Force pushing needs the user's explicit permission.
+- Do not complete a merge-conflict resolution without invoking `code-review` on the resolved merge.
 - Do not finish a completed branch without publishing it -- pushed with a pull request when `gh` works,
   or pushed with a pull request document under `.plans/` when it does not. If neither was possible, say
   why.
