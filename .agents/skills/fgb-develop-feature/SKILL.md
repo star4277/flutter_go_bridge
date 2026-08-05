@@ -1,12 +1,13 @@
 ---
 name: fgb-develop-feature
-description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Docs-only and skill-only changes skip code tests; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/; test and coverage follow-ups stay on the branch that owns the code.
+description: Develop, fix, document, or refactor flutter_go_bridge with change-aware validation and required documentation synchronization. Use for changes to the Go parser/generator/runtime, generated Dart API, CLI, integration templates, examples, docs, skills, or bridge behavior. Documentation-only changes (docs/, README, skills) run no code validation at all; code behavior changes and new features must update the development documentation and keep a git-ignored plan under .plans/; test and coverage follow-ups stay on the branch that owns the code.
 ---
 
 # FGB Feature Development
 
 Classify the final diff before selecting validation. Code changes follow the staged analysis and test
-workflow. Docs-only and skill-only changes do not run code tests.
+workflow. Documentation-only changes -- `docs/`, the README files, and Skill content -- run no code
+validation at all.
 
 A new feature or a behavior change also needs a git-ignored plan under `.plans/`, kept current as the
 work proceeds. A bug fix does not.
@@ -15,36 +16,44 @@ work proceeds. A bug fix does not.
 
 Classify from the files and behavior in the final diff, not only from the task title.
 
-### Docs-only
+### Documentation-only
 
-A change is docs-only when every changed file is under `docs/`.
+A change is documentation-only when every changed file is prose that ships no behavior:
 
-- Do not run Go, Dart, Flutter, integration, or smoke tests.
-- Run only documentation-relevant checks when available, such as Markdown review, link checks, or the
-  docs site's own type-check/build commands.
-- If the repository's docs tooling is unavailable, review the rendered structure and report that no
-  code tests were needed.
+- anything under `docs/`;
+- `README.md`, `README.zh-CN.md`, and other repository-level Markdown such as
+  `THIRD_PARTY_NOTICES.md`;
+- `.agents/skills/**`, including a Skill's own metadata and resources.
 
-Changes to `README.md`, `README.zh-CN.md`, examples, templates, or source comments are not docs-only
-under this rule because they are outside `docs/`.
+Sections 4 through 7 do not apply. **Run no code validation at all**: no `gofmt`/`go vet`/`gopls`, no
+`go test`, no coverage gate, no `dart analyze`, no generated-code compile, no integration run, and no
+smoke run. There is nothing for them to prove, and a green code gate on a prose diff only adds noise
+to the report.
 
-### Skill-only
+Do instead:
 
-A change is skill-only when every changed file creates, modifies, moves, or deletes Skill content,
-including `.agents/skills/**` and the Skill's own metadata/resources.
+- read the changed pages end to end for accuracy against the current behavior, not just for typos;
+- keep English and Chinese pages in sync when both cover the changed area;
+- check links and anchors that the change introduces or moves;
+- run the docs site's own type-check/build when the change touches `docs/` and the tooling is
+  available (this repository uses Bun: `bun run typecheck`, `bun run build`);
+- for a Skill, review its instructions and frontmatter for internal consistency, and run
+  Skill-specific validation only if it exists and works.
 
-- Do not run Go, Dart, Flutter, integration, or smoke tests.
-- Review the Skill instructions and metadata for consistency.
-- Run Skill-specific validation only when it exists and is currently usable. If that validation is
-  unavailable or intentionally disabled, state that it was skipped; do not substitute code tests.
+When a documentation tool is unavailable or deliberately disabled, say it was skipped. Never
+substitute code tests for it.
 
 ### Code or product behavior
 
 All other changes use the applicable analysis and test phases below. This includes parser,
 generator, runtime, CLI, template, example, configuration, and generated API behavior changes.
 
-If a docs-only or skill-only task also changes code or product behavior, it is no longer exempt:
-run the code validation required by the affected area.
+Source comments, `example/**`, and `template/**` are **not** documentation-only: comments live in
+compiled files, and examples and templates are inputs to generation. A diff touching them runs the
+validation its area requires.
+
+If a documentation-only task also changes code or product behavior, the whole diff loses the
+exemption: run the code validation required by the affected area.
 
 ## 1. Prepare Git Before Editing
 
@@ -185,7 +194,7 @@ Regenerate checked-in generated output when the repository treats it as source. 
 
 ## 4. Run Code Analysis
 
-Skip this section for a docs-only or skill-only diff.
+Skip this section for a documentation-only diff.
 
 Run analysis before declaring unit tests ready, and repeat it after relevant fixes.
 
@@ -234,7 +243,7 @@ Prefer `fvm dart` / `fvm flutter` when the project pins Flutter with FVM. For Fl
 
 ## 5. Unit Test Gate
 
-Skip this section for a docs-only or skill-only diff.
+Skip this section for a documentation-only diff.
 
 Write focused unit tests for the changed behavior. Cover success, failure, boundary, nullability, range, and platform-sensitive cases that apply.
 
@@ -284,7 +293,7 @@ coverage threshold is met.
 
 ## 6. Integration Test Gate
 
-Skip this section for a docs-only or skill-only diff.
+Skip this section for a documentation-only diff.
 
 After unit tests pass, validate the complete generation/build boundary rather than only inspecting strings.
 
@@ -312,7 +321,7 @@ Do not proceed to smoke tests until integration generation, compilation, and ana
 
 ## 7. Smoke Test Gate
 
-Skip this section for a docs-only or skill-only diff.
+Skip this section for a documentation-only diff.
 
 Run an end-to-end smoke test with a real dynamic library and a real Dart process:
 
@@ -362,8 +371,8 @@ Report the branch and commit when created, and say which branch rule applied whe
 an existing branch. For code changes, report analysis commands, unit tests, the exact aggregate
 coverage percentage and exclusions, integration tests, smoke results, documentation updates, and
 residual platform coverage gaps. For a feature or behavior change, report the plan path and which
-items are now ticked. For a docs-only or skill-only change, explicitly report that code tests were
-not required by this workflow and list only the relevant documentation or Skill checks performed.
+items are now ticked. For a documentation-only change, state plainly that this workflow required no
+code validation, and list only the documentation or Skill checks actually performed.
 
 ## Failure Rules
 
@@ -371,7 +380,7 @@ not required by this workflow and list only the relevant documentation or Skill 
 - Re-read files after formatters, generators, package managers, or timed-out commands because they may have partially modified the worktree.
 - Do not claim a test passed when it was skipped, timed out, or only compiled.
 - Keep generated-code compile tests and runtime smoke tests separate in the final report.
-- Do not use the docs-only or skill-only exemption when the same diff changes code, templates,
+- Do not use the documentation-only exemption when the same diff changes code, templates,
   examples, configuration behavior, or generated API behavior.
 - Do not finish a code behavior change or new feature without updating its owning development
   documentation under `docs/`.
