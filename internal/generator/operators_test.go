@@ -190,8 +190,108 @@ func Echo(p Point) Point { return p }
 	}
 }
 
+// An operator holds no ordinary member name. A subclass method that merely
+// shares the promoted operator's Go name overrides nothing, and rejecting it as
+// an incompatible shadow would refuse a perfectly valid pair of members.
+func TestRenderDartOperatorDoesNotShadowOrdinaryMethod(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+type Base struct{ ID int }
+
+func (b Base) Add(other Base) Base { return b }
+
+type Derived struct {
+	Base
+	Label string
+}
+
+// Not an operator: the operand is not the receiver's type, so this stays an
+// ordinary method next to the inherited operator +.
+func (d Derived) Add(scale int) Derived { return d }
+
+func Echo(d Derived) Derived { return d }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	for _, expected := range []string{
+		"  Base operator +(Base other) {",
+		"  Derived add({required int scale}) {",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("missing %q:\n%s", expected, apiDart)
+		}
+	}
+	// The ordinary method overrides nothing, so it must not claim to.
+	if strings.Contains(apiDart, "@override\n  Derived add(") {
+		t.Fatalf("add() is not an override of operator +:\n%s", apiDart)
+	}
+}
+
+// A method renamed onto the Dart spelling an operator's Go name would have used
+// keeps that name: the operator is not occupying it.
+func TestRenderDartOperatorLeavesOrdinaryNameFree(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+type Point struct{ X int }
+
+func (p Point) Add(other Point) Point { return p }
+
+//fgb:rename = "add"
+func (p Point) Combine(other Point) Point { return p }
+
+func Echo(p Point) Point { return p }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected rename warnings: %v", warnings)
+	}
+	for _, expected := range []string{
+		"  Point operator +(Point other) {",
+		"  Point add({required Point other}) {",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("missing %q:\n%s", expected, apiDart)
+		}
+	}
+	if strings.Contains(apiDart, "add2") {
+		t.Fatalf("the ordinary method should not have been renamed:\n%s", apiDart)
+	}
+}
+
+// A subclass cannot own its own version of a promoted operator: its operand and
+// result would have to be its own type, which is not the signature Dart accepts
+// as an override of the parent's. The generator says so instead of emitting Dart
+// that fails to analyze.
+func TestRenderDartOperatorSubclassRedeclarationIsRejected(t *testing.T) {
+	_, _, _, _, err := generateFixture(t, `package api
+
+type Base struct{ ID int }
+
+func (b Base) Add(other Base) Base { return b }
+
+type Derived struct {
+	Base
+	Label string
+}
+
+func (d Derived) Add(other Derived) Derived { return d }
+
+func Echo(d Derived) Derived { return d }
+`)
+	if err == nil || !strings.Contains(err.Error(), "shadows") {
+		t.Fatalf("expected a shadowing error, got %v", err)
+	}
+}
+
 // An extension type carries operators too: a named Go type with a qualifying
 // method is the same rule as a struct.
+
 func TestRenderDartOperatorsOnNamedType(t *testing.T) {
 	apiDart, _, _, _, err := generateFixture(t, `package api
 

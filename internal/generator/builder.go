@@ -248,6 +248,11 @@ func (b *builder) checkInterfaceImplementations() error {
 			}
 			available := map[string]*callModel{}
 			for _, method := range implementorMethods(implementor.Type) {
+				// An operator provides no named member, so it can never satisfy
+				// an interface method declaration.
+				if method.Operator != "" {
+					continue
+				}
 				if _, seen := available[method.DartName]; !seen {
 					available[method.DartName] = method
 				}
@@ -272,11 +277,19 @@ func (b *builder) checkInterfaceImplementations() error {
 }
 
 func (b *builder) disambiguateMethod(call *callModel, existing []*callModel) {
+	// An operator occupies no ordinary name, so it neither needs renaming nor
+	// blocks a method that happens to share its Go name's Dart spelling.
+	if call.Operator != "" {
+		return
+	}
 	base := call.DartName
 	candidate := base
 	for suffix := 2; ; suffix++ {
 		collision := false
 		for _, other := range existing {
+			if other.Operator != "" {
+				continue
+			}
 			if other.DartName == candidate {
 				collision = true
 				break
@@ -306,21 +319,21 @@ func (b *builder) checkMethodOverrides() error {
 		inheritedOwner := map[string]*structModel{}
 		for super := structure.Super; super != nil; super = super.Super {
 			for _, call := range super.Methods {
-				if _, seen := inherited[call.DartName]; !seen {
-					inherited[call.DartName] = call
-					inheritedOwner[call.DartName] = super
+				if _, seen := inherited[call.dartMember()]; !seen {
+					inherited[call.dartMember()] = call
+					inheritedOwner[call.dartMember()] = super
 				}
 			}
 		}
 		for _, call := range structure.Methods {
-			promoted, shadows := inherited[call.DartName]
+			promoted, shadows := inherited[call.dartMember()]
 			if !shadows {
 				continue
 			}
 			if dartMethodSignature(call) != dartMethodSignature(promoted) {
 				return fmt.Errorf(
 					"%s.%s shadows %s.%s with a different signature; Dart cannot express that on a subclass, so rename one of them with //fgb:rename",
-					structure.GoName, call.GoName, inheritedOwner[call.DartName].GoName, promoted.GoName)
+					structure.GoName, call.GoName, inheritedOwner[call.dartMember()].GoName, promoted.GoName)
 			}
 			call.Overrides = true
 		}
@@ -333,6 +346,9 @@ func dartMethodSignature(call *callModel) string {
 	prefix := ""
 	if isAsyncCall(call) {
 		prefix = "async "
+	}
+	if call.Operator != "" {
+		return prefix + dartResultType(call) + " operator " + call.Operator + " (" + dartOperatorParams(call) + ")"
 	}
 	return prefix + dartResultType(call) + " (" + dartParams(call) + ")"
 }
