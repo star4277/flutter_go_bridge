@@ -289,6 +289,47 @@ func Echo(d Derived) Derived { return d }
 	}
 }
 
+// An interface owns the Dart shape of the methods it declares. Turning an
+// implementation into an operator would leave the `implements` clause without
+// the named member the interface promises, so the operator is given up and the
+// reason is reported.
+func TestRenderDartOperatorYieldsToInterfaceContract(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+type Adder interface {
+	Add(other Point) Point
+}
+
+type Point struct{ X int }
+
+func (p Point) Add(other Point) Point { return p }
+
+func Combine(a Adder) Point { return a.Add(Point{}) }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "  Point add({required Point other}) {") {
+		t.Fatalf("the implementation must keep the interface's named member:\n%s", apiDart)
+	}
+	if strings.Contains(apiDart, "operator +") {
+		t.Fatalf("an interface-claimed method must not become an operator:\n%s", apiDart)
+	}
+	// The interface declaration itself is never an operator either.
+	if !strings.Contains(apiDart, "abstract interface class Adder") {
+		t.Fatalf("missing interface declaration:\n%s", apiDart)
+	}
+	found := false
+	for _, warning := range warnings {
+		if strings.Contains(warning.Error(), "matches Dart operator +") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("giving up an operator has to be reported: %v", warnings)
+	}
+}
+
 // An extension type carries operators too: a named Go type with a qualifying
 // method is the same rule as a struct.
 

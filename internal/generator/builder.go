@@ -201,6 +201,21 @@ func (b *builder) propagateInterfaceMethodShapes() error {
 					claimed[concrete] = claim{iface: declaration, method: declared, signature: shape}
 					concrete.DartName = declared.DartName
 					concrete.Mode = declared.Mode
+					// The same principle applies to an operator, and more
+					// sharply: an operator provides no named member at all, so
+					// the `implements` clause would be left without the one the
+					// interface promises and the generated Dart would not
+					// compile. An interface declaration never becomes an
+					// operator itself - mapInterfaceMethod builds it without a
+					// receiver, and the operand type of a method on an
+					// interface is the interface, never the implementation.
+					if concrete.Operator != "" {
+						b.warnings = append(b.warnings, fmt.Errorf(
+							"%s.%s matches Dart operator %s, but it implements %s.%s, which declares a method; the interface owns the Dart shape, so it stays %s()",
+							implementor.DartName, concrete.GoName, concrete.Operator,
+							declaration.GoName, declared.GoName, declared.DartName))
+						concrete.Operator = ""
+					}
 				}
 			}
 		}
