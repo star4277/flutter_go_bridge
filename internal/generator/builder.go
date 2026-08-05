@@ -497,6 +497,9 @@ func (b *builder) mapCallable(source *model.Callable) (*callModel, error) {
 			call.StreamParam = sinkParams[0]
 		}
 	}
+	// A method whose name and signature match one of the Dart operators is
+	// rendered as that operator instead of an ordinary method.
+	call.Operator = dartOperatorFor(source)
 	return call, nil
 }
 
