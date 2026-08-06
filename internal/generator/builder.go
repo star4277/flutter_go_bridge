@@ -181,8 +181,30 @@ func (b *builder) selectValueToStringMethods() {
 	}
 	for _, named := range b.unit.Named {
 		b.selectToStringForMethods(named.GoName, named.Methods)
-		named.LocalToString = !hasToStringMethod(named.Methods)
+		named.LocalToString = !named.Enum && !hasToStringMethod(named.Methods)
 		b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
+		if named.Enum {
+			b.disambiguateEnumMethods(named)
+		}
+	}
+}
+
+func (b *builder) disambiguateEnumMethods(named *namedModel) {
+	used := map[string]bool{"values": true, "value": true, "name": true, "index": true}
+	for _, method := range named.Methods {
+		if method.Operator != "" || method.ToString {
+			continue
+		}
+		base := method.DartName
+		candidate := base
+		for suffix := 2; used[candidate]; suffix++ {
+			candidate = fmt.Sprintf("%s%d", base, suffix)
+		}
+		if candidate != base {
+			b.warnings = append(b.warnings, fmt.Errorf("enum %s method Dart name %q is reserved by Dart enum behavior; renamed %s to %q", named.GoName, base, method.GoName, candidate))
+			method.DartName = candidate
+		}
+		used[candidate] = true
 	}
 }
 
@@ -1053,7 +1075,9 @@ func uniqueEnumCaseName(base string, used map[string]int, typeName, goName strin
 		*warnings = append(*warnings, fmt.Errorf("enum %s case %s has reserved or duplicate Dart name %q; renamed to %q", typeName, goName, base, candidate))
 	}
 	used[base]++
-	used[candidate]++
+	if candidate != base {
+		used[candidate]++
+	}
 	return candidate
 }
 
