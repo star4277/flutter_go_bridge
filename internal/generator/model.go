@@ -89,6 +89,15 @@ type unit struct {
 	codecSupport     map[codecCacheKey]bool
 }
 
+func (u *unit) usesCgoScalars() bool {
+	for _, typ := range u.Types {
+		if typ != nil && typ.CgoScalar {
+			return true
+		}
+	}
+	return false
+}
+
 type goImportModel struct {
 	Alias string
 	Path  string
@@ -153,6 +162,10 @@ type callModel struct {
 	// Object.toString override rather than as an ordinary generated member.
 	ToString       bool
 	ToStringFormat toStringFormat
+	// Reflective is used when a direct parameter or result is a cmd/cgo
+	// package-private scalar. Reflection converts the public transport scalar
+	// to/from the unnameable `_Ctype_*` type at the call boundary.
+	Reflective bool
 }
 
 type toStringFormat uint8
@@ -242,6 +255,9 @@ type wireType struct {
 	BasicKind     types.BasicKind
 	BitSize       int
 	Signed        bool
+	// CgoScalar marks a cmd/cgo synthetic scalar whose private named Go type
+	// cannot be referenced from a separately generated bridge package.
+	CgoScalar bool
 }
 
 // atomicModel maps a Go atomic wrapper to the value returned by Load and
