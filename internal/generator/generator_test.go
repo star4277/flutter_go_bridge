@@ -462,7 +462,7 @@ replace example.com/unrelated => ./unrelated
 	}
 
 	externalDir := filepath.Join(dir, "thirdparty")
-	for _, subdir := range []string{"contracts", "factory", "impl", "internal/secret"} {
+	for _, subdir := range []string{"contracts", "factory", "impl", "otherimpl", "internal/secret"} {
 		if err := os.MkdirAll(filepath.Join(externalDir, subdir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -539,12 +539,24 @@ func (Shape) Area() int { return 0 }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(externalDir, "otherimpl", "other.go"), []byte(`package otherimpl
+
+type Triangle struct {
+	Edge int
+}
+
+func (Triangle) Area() int { return 0 }
+func (Triangle) String() string { return "triangle" }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(externalDir, "factory", "factory.go"), []byte(`package factory
 
 import (
 	"example.com/thirdparty/contracts"
 	"example.com/thirdparty/impl"
 	"example.com/thirdparty/internal/secret"
+	"example.com/thirdparty/otherimpl"
 )
 
 type hidden struct{}
@@ -559,6 +571,7 @@ func Shapes() map[string]contracts.Shape {
 		"pointerValue": &impl.PointerValue{Value: 4},
 		"secret": secret.Shape{},
 		"square": impl.Square{Size: 3},
+		"triangle": otherimpl.Triangle{Edge: 5},
 	}
 }
 `), 0o644); err != nil {
@@ -634,6 +647,7 @@ func Shapes() map[string]contracts.Shape { return factory.Shapes() }
 		"final class PointerValue implements Shape {",
 		"final class ShapeOpaque extends GoOpaque implements Shape {",
 		"final class Square implements Shape {",
+		"final class Triangle implements Shape {",
 		"final int size;",
 		"String toString()",
 	} {
@@ -641,7 +655,7 @@ func Shapes() map[string]contracts.Shape { return factory.Shapes() }
 			t.Fatalf("external interface mapping missing %q:\n%s", expected, externalDart)
 		}
 	}
-	if count := strings.Count(externalDart, "String toString() {"); count != 4 {
+	if count := strings.Count(externalDart, "String toString() {"); count != 5 {
 		t.Fatalf("each discovered implementation should receive its selected string representation, got %d:\n%s", count, externalDart)
 	}
 	if !strings.Contains(externalDart, "String asString() {") {
@@ -680,6 +694,7 @@ func Shapes() map[string]contracts.Shape { return factory.Shapes() }
 		`"dependency:example.com/thirdparty/impl:Circle.String"`,
 		`"dependency:example.com/thirdparty/impl:Square.ToString"`,
 		`"dependency:example.com/thirdparty/impl:PointerValue.MarshalJSON"`,
+		`"dependency:example.com/thirdparty/otherimpl:Triangle.String"`,
 	} {
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("generated dependency method dispatch missing %q:\n%s", expected, goSource)
