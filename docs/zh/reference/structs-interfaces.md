@@ -365,12 +365,12 @@ String describe({required Shape shape}) { /* bridge call */ }
 
 对于输入包接口，生成器检查输入包中参与桥接的结构体，并按声明顺序保持原有 wire 兼容性。
 
-对于依赖接口，生成器只遍历公共 API 已经可达的类型，收集 `T` 或 `*T` method set 满足接口的导出、
-非泛型命名结构体；无关 import 不会增加 union 成员，也不会移动已有 tag。以下声明不会进入实现集合：
-名为 `main` 的包、受 Go `internal` 导入规则
-限制而无法由生成 bridge 引用的包、未导出类型、类型别名、非结构体命名类型，以及未实例化的泛型声明。
-这些类型不能作为具名 union 成员，但仍会由最后的接口级 opaque fallback 传输：Go handle registry
-保存接口值本身，运行时注册的新实现也使用同一 fallback。
+对于依赖接口，生成器会保留公共 API 明确可达的类型，并额外扫描接口声明所在第三方 Go module
+中已经加载的包。这样可以发现 sibling 包中的实现，同时不会扫描无关 module 或标准库。实现类型
+必须是导出的非泛型命名结构体，且其 `T` 或 `*T` method set 满足接口。名为 `main` 的包、受 Go
+`internal` 导入规则限制而无法由生成 bridge 引用的包、未导出类型、类型别名、非结构体命名类型，
+以及未实例化的泛型声明不会进入 union；这些类型仍会由最后的接口级 opaque fallback 传输，Go
+handle registry 保存接口值本身，运行时注册的新实现也使用同一 fallback。
 
 - value 实现按字段传输；
 - 只有 `*T` 实现接口时，Go 解码会重建指针，Dart 仍看到对应 value class；
@@ -382,6 +382,11 @@ String describe({required Shape shape}) { /* bridge call */ }
 
 输入包接口不能包含未导出方法。依赖接口在 Dart 中只作为 marker，不生成其方法；第三方声明没有
 FGB 调用指令，也没有对应的生成调用入口，因此 marker 语义只负责安全序列化具体实现。
+
+对于自动发现的具体实现，生成器还会检查提升后名为 `ToString`、`String` 和 `MarshalJSON` 的方法，
+并把选中的方法挂到具体 Dart 类上，使 `toString()` 在运行时派发到 Go 实现（优先级为
+`ToString` > `String` > `MarshalJSON`）。当 `String()` 没有胜出时仍以 `asString()` 暴露。其他依赖
+方法不会生成，除非它们属于输入包接口的桥接契约。
 
 ### 接口值的 wire 格式
 

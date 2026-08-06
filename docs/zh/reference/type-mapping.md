@@ -230,9 +230,10 @@ wire 上扁平化。
 
 命名非空接口使用 `[实现 tag, 载荷]` 的 tagged union，并走 standard codec。nil Go 接口编码为
 `null`，在 Dart 侧会生成一个缺省实现替代；详见[结构体与接口](/zh/reference/structs-interfaces)。
-输入包接口会暴露生成方法，并保留声明顺序的数字 tag 以兼容旧 wire；可达依赖接口只作为 marker，只从公共 API 已经可达
-的导出命名结构体中发现实现，并使用稳定的包路径/类型名 tag。生成 Go 无法命名的运行时实现使用接口级
-`GoOpaque` fallback。完整分类、继承、实现发现和限制见
+输入包接口会暴露生成方法，并保留声明顺序的数字 tag 以兼容旧 wire；依赖接口只作为 marker，保留公共 API
+明确可达的类型，并额外收集接口所在第三方 Go module 中已经加载的包里的导出命名具体结构体实现。它们使用
+稳定的包路径/类型名 tag。生成 Go 无法命名的运行时实现使用接口级 `GoOpaque` fallback。自动发现的实现如果
+提供 `ToString`、`String` 或 `MarshalJSON`，具体 Dart 类会派发到对应的 Go 方法；其他依赖方法仍保持 marker-only。
 [结构体与接口](/zh/reference/structs-interfaces)。
 
 ## Dart 名称冲突

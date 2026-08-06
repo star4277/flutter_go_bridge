@@ -333,12 +333,13 @@ which owns either serialized fields or an opaque handle.
 For an input-package interface, the generator collects bridged structs from that package whose `T`
 or `*T` method set satisfies the interface, preserving declaration order for compatibility.
 
-For a dependency interface, the generator walks the types already reachable from the public API, then
-collects exported, non-generic named structs whose `T` or `*T` method set satisfies the interface.
-Unrelated imports therefore do not add union members or shift existing tags. Packages named `main`,
-packages hidden by Go's `internal` import rule, unexported types, aliases, non-struct named types, and
-uninstantiated generic declarations are excluded because the generated bridge cannot name them safely
-as concrete union members. They remain transportable through
+For a dependency interface, the generator keeps explicitly reachable public-API types and also scans
+the already-loaded packages in the same third-party Go module as the interface declaration. This finds
+implementations in sibling packages without scanning unrelated modules or the standard library.
+Implementations are exported, non-generic named structs whose `T` or `*T` method set satisfies the
+interface. Packages named `main`, packages hidden by Go's `internal` import rule, unexported types,
+aliases, non-struct named types, and uninstantiated generic declarations are excluded because the
+generated bridge cannot name them safely as concrete union members. They remain transportable through
 the final interface-level opaque fallback, which boxes the interface value itself in the Go handle
 registry. Runtime-registered implementations use the same fallback.
 
@@ -353,6 +354,12 @@ interfaces always include the opaque fallback, even when no concrete type can be
 methods are rejected for interfaces in the input package. Dependency interfaces are marker-only in
 Dart: their methods are intentionally not generated because dependency declarations have no FGB call
 directives or generated call entrypoints.
+
+For an automatically discovered concrete implementation, the generator also inspects promoted methods
+named `ToString`, `String`, and `MarshalJSON`. The selected method is bridged on the concrete Dart
+class, so `toString()` dispatches to the runtime implementation (`ToString` > `String` > `MarshalJSON`).
+`String()` remains available as `asString()` when it does not win. Other dependency methods are not
+generated unless they are part of an input-package interface contract.
 
 ### Tagged-union encoding
 
