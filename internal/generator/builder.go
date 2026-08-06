@@ -671,6 +671,16 @@ func (b *builder) mapType(original types.Type) (*wireType, error) {
 			b.unit.UsesUUID = true
 			return b.newSimpleType(original, kindUUID, "UuidValue"), nil
 		}
+		if isShopspringDecimal(typ) {
+			b.unit.UsesDecimal = true
+			b.unit.UsesShopspringDecimal = true
+			return b.newSimpleType(original, kindDecimal, "Decimal"), nil
+		}
+		if isAPDDecimal(typ) {
+			b.unit.UsesDecimal = true
+			b.unit.UsesAPDDecimal = true
+			return b.newSimpleType(original, kindDecimal, "Decimal"), nil
+		}
 		if b.isDartOpaque(typ) {
 			b.unit.UsesDartOpaque = true
 			b.unit.UsesRuntimePackage = true
@@ -1814,7 +1824,7 @@ func (b *builder) isFixedGoImport(path string) bool {
 		return true
 	}
 	switch path {
-	case "bytes", "context", "encoding/binary", "fmt", "io", "math/big", "os", "reflect", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe", "time", "net/netip", "net/url", "github.com/gofrs/uuid/v5":
+	case "bytes", "context", "encoding/binary", "fmt", "io", "math/big", "os", "reflect", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe", "time", "net/netip", "net/url", "github.com/gofrs/uuid/v5", "github.com/shopspring/decimal", "github.com/cockroachdb/apd/v3":
 		return true
 	default:
 		return false
@@ -1930,7 +1940,8 @@ func (b *builder) hasDedicatedMapping(named *types.Named) bool {
 		return false
 	}
 	if isErrorType(named) || isTime(named) || isDuration(named) || isBigInt(named) ||
-		isInternetIP(named) || isIPPrefix(named) || isURL(named) || isUUID(named) {
+		isInternetIP(named) || isIPPrefix(named) || isURL(named) || isUUID(named) ||
+		isShopspringDecimal(named) || isAPDDecimal(named) {
 		return true
 	}
 	if b.isDartOpaque(named) || b.isStreamSink(named) {
@@ -1941,6 +1952,14 @@ func (b *builder) hasDedicatedMapping(named *types.Named) bool {
 }
 
 func isUUID(named *types.Named) bool { return isNamed(named, "github.com/gofrs/uuid/v5", "UUID") }
+
+func isShopspringDecimal(named *types.Named) bool {
+	return isNamed(named, "github.com/shopspring/decimal", "Decimal")
+}
+
+func isAPDDecimal(named *types.Named) bool {
+	return isNamed(named, "github.com/cockroachdb/apd/v3", "Decimal")
+}
 
 // isSupportType matches a type from the generated support package, whose
 // import path depends on the module that owns it.

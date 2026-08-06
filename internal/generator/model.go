@@ -21,6 +21,7 @@ const (
 	kindIPPrefix    typeKind = "ip_prefix"
 	kindURL         typeKind = "url"
 	kindUUID        typeKind = "uuid"
+	kindDecimal     typeKind = "decimal"
 	kindDuration    typeKind = "duration"
 	kindAny         typeKind = "any"
 	kindPointer     typeKind = "pointer"
@@ -56,21 +57,24 @@ type unit struct {
 	GoPreamble   string
 	DartPreamble string
 
-	Calls          []*callModel
-	TopCalls       []*callModel
-	Types          []*wireType
-	Structs        []*structModel
-	Opaques        []*opaqueModel
-	Named          []*namedModel
-	Interfaces     []*interfaceModel
-	UsesTime       bool
-	UsesInternetIP bool
-	UsesIPPrefix   bool
-	UsesURL        bool
-	UsesUUID       bool
-	UsesBigInt     bool
-	UsesDartOpaque bool
-	UsesStreamSink bool
+	Calls                 []*callModel
+	TopCalls              []*callModel
+	Types                 []*wireType
+	Structs               []*structModel
+	Opaques               []*opaqueModel
+	Named                 []*namedModel
+	Interfaces            []*interfaceModel
+	UsesTime              bool
+	UsesInternetIP        bool
+	UsesIPPrefix          bool
+	UsesURL               bool
+	UsesUUID              bool
+	UsesDecimal           bool
+	UsesShopspringDecimal bool
+	UsesAPDDecimal        bool
+	UsesBigInt            bool
+	UsesDartOpaque        bool
+	UsesStreamSink        bool
 	// UsesRuntimePackage tracks whether the generated bridge has to import the
 	// fgb runtime package (DartOpaque and StreamSink live there).
 	UsesRuntimePackage bool

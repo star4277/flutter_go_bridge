@@ -50,6 +50,9 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 	if unit.UsesUUID {
 		dartDependencies = append(dartDependencies, "uuid")
 	}
+	if unit.UsesDecimal {
+		dartDependencies = append(dartDependencies, "decimal")
+	}
 
 	goSource, err := renderGo(unit)
 	if err != nil {
