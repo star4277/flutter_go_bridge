@@ -7,6 +7,17 @@ bun install
 bun run dev
 ```
 
+也可以从仓库根目录通过 Make 执行相同流程。这些 target 会先执行 `bun install`：
+
+```sh
+make docs dev
+make docs build
+make docs preview
+```
+
+`make docs preview` 会先构建，再启动 `vitepress preview`。也可以使用规范 target 名
+`make docs-dev`、`make docs-build` 和 `make docs-preview`。
+
 提交文档前执行：
 
 ```sh
