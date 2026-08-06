@@ -296,6 +296,7 @@ func (t *wireType) nilableWithoutPointer() bool {
 type namedModel struct {
 	GoName        string
 	DartName      string
+	Enum          bool
 	Docs          string
 	SourceFile    string
 	Type          *wireType
