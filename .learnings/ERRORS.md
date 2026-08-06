@@ -1722,3 +1722,42 @@ Add Decimal to codec support and implement its CST storage/encoders and Go CST d
 - **Notes**: Added Decimal codec support, byte-string CST storage, Dart CST encoding, and Go CST/DCO branches; the focused test passed.
 
 ---
+
+## [ERR-20260806-003] tostring-smoke-dart-name
+
+**Logged**: 2026-08-06T21:35:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The dedicated toString smoke initially used the Go acronym spelling `JSONOnly` instead of the generated Dart name `JsonOnly`.
+
+### Error
+
+```text
+undefined_function: echoJSONOnly
+creation_with_non_type: JSONOnly
+```
+
+### Context
+
+- Operation: run `dart analyze` on the new standalone toString fixture.
+- The generator correctly applies Dart UpperCamel/lowerCamel acronym normalization.
+
+### Suggested Fix
+
+Inspect the generated public API before finalizing a runtime smoke script and use the emitted Dart names.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: build/tostring_fixture/dart_test/smoke.dart
+
+### Resolution
+
+- **Resolved**: 2026-08-06T21:36:00+08:00
+- **Notes**: Updated the smoke to `JsonOnly` and `echoJsonOnly`; `dart analyze` and all seven real-DLL assertions pass.
+
+---
