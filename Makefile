@@ -8,8 +8,8 @@ CGO_ENABLED ?= 0
 DOCS_BUN ?= bun
 LOCAL_GOOS ?= $(strip $(shell go env GOOS))
 LOCAL_GOARCH ?= $(strip $(shell go env GOARCH))
-LOCAL_GOBIN := $(strip $(shell go env GOBIN))
-ifeq ($(LOCAL_GOBIN),)
+LOCAL_GOBIN ?= $(strip $(shell go env GOBIN))
+ifeq ($(strip $(LOCAL_GOBIN)),)
 LOCAL_GOBIN := $(strip $(shell go env GOPATH))/bin
 endif
 LOCAL_SYSTEM := $(patsubst darwin,macos,$(LOCAL_GOOS))
