@@ -59,7 +59,7 @@ func (t *wireType) codecSupportResult(mode codecMode, seen map[int]bool, cache m
 
 	switch t.Kind {
 	case kindBool, kindString, kindError, kindSigned, kindUnsigned, kindFloat, kindBigInt,
-		kindTime, kindInternetIP, kindIPPrefix, kindURL, kindUUID, kindDuration, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
+		kindTime, kindInternetIP, kindIPPrefix, kindURL, kindUUID, kindDecimal, kindDuration, kindBytes, kindInt32List, kindInt64List, kindFloat64List,
 		kindOpaque, kindDartOpaque, kindCallback, kindStreamSink:
 		if cache != nil {
 			cache[key] = true
