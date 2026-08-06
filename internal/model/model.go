@@ -88,4 +88,5 @@ type Constant struct {
 	Position token.Pos
 	Docs     string
 	DartName string
+	Renamed  bool
 }

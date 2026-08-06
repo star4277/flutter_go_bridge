@@ -293,7 +293,7 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 							dartName = names.LowerCamel(identifier.Name)
 						}
 						api.Constants[named] = append(api.Constants[named], &model.Constant{
-							Object: object, Position: identifier.Pos(), Docs: cleanDocs(docs), DartName: dartName,
+							Object: object, Position: identifier.Pos(), Docs: cleanDocs(docs), DartName: dartName, Renamed: directives.Rename != "",
 						})
 					}
 				}
