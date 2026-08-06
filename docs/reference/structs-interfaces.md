@@ -104,6 +104,24 @@ final class Point {
 `Set`, `Map` keys, `List.contains`, and Flutter's rebuild comparisons all work off these, so a value
 that crossed the bridge behaves like one built in Dart.
 
+### `toString()`
+
+Value structs and named value types get a useful `toString()` without changing their wire codec.
+The generator checks receiver methods in this order:
+
+1. `ToString() string`
+2. `String() string`
+3. `MarshalJSON() ([]byte, error)`
+
+An eligible method is called through the synchronous bridge. `MarshalJSON` bytes are decoded as
+UTF-8 only for this `toString()` call; ordinary `[]byte` fields and results keep their existing
+CST/DCO or standard encoding. `String()` is exposed as `asString()` when another method wins.
+
+When no eligible method exists, the generated value class formats its bridged fields locally. A
+method with required parameters cannot override Dart's zero-argument `Object.toString()` and is
+skipped with a warning; selection then falls back to the next method. Opaque handles are not given
+a field-based `toString()`.
+
 Details worth knowing:
 
 - **Collection fields compare by content.** Dart's `List` and `Map` are identity-compared, which
