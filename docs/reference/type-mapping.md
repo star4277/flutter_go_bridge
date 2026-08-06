@@ -200,9 +200,12 @@ Named non-empty interfaces use a `[implementation tag, payload]` tagged union th
 codec. A nil Go interface encodes as `null` and materializes as a generated absent stand-in on the
 Dart side; see [Structs and interfaces](/reference/structs-interfaces) for details.
 Input-package interfaces expose generated methods and retain declaration-order numeric tags for
-wire compatibility. Reachable dependency interfaces are marker-only, discover exported named struct
-implementations already reachable from the public API, and use stable package-path/type-name tags plus
-an interface-level `GoOpaque` fallback for concrete runtime types generated Go cannot name.
+wire compatibility. Dependency interfaces are marker-only, retain explicitly reachable public-API
+types, and additionally discover exported named concrete structs in already-loaded packages from the
+same third-party Go module as the interface. They use stable package-path/type-name tags plus an
+interface-level `GoOpaque` fallback for concrete runtime types generated Go cannot name. Discovered
+implementations dispatch `ToString`, `String`, or `MarshalJSON` on the concrete Dart class when one is
+available; other dependency methods remain marker-only.
 See [Structs and interfaces](/reference/structs-interfaces) for classification, inheritance,
 implementor discovery, and restrictions.
 
