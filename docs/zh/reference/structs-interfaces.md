@@ -523,6 +523,11 @@ bridge 调用；`MarshalJSON` 返回的字节只在这条 `toString()` 路径上
 `Object.toString()`，生成器会发出 warning 并回退到下一候选；opaque handle 不生成字段格式化的
 `toString()`。空值结构体也会生成稳定的 `Type()` 形式。
 
+生成成 Dart extension type 的命名基础类型是例外：Dart 禁止 extension type 声明从 `Object` 继承的
+成员，包括 `toString`。因此它们保留 Dart 默认的 `toString`，也不生成字段本地 fallback。被选中的
+Go `String` 仍可通过 `asString()` 调用；被选中的 `ToString` 和 `MarshalJSON` 会使用安全的普通名称
+`toStringValue` 和 `marshalJson`。增强型 Dart enum 可以正常覆盖 `toString`。
+
 接口声明与具体生成类使用同一套选择规则；`String() string` 接口会导出 `toString()`，嵌入值
 结构体提升的方法也会参与优先级判断。普通方法如果占用了保留的 `toString` 或 `asString` 名称，
 生成器会发出 warning 并追加数字后缀。
