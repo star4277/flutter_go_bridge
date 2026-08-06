@@ -17,7 +17,7 @@ func Echo(value time.Time) time.Time { return value }
 	}
 
 	for _, expected := range []string{
-		"if (value is! int) throw FormatException('$path: expected time microseconds');",
+		"if (value is! int) {",
 		"if (value < -8640000000000000000 || value > 8640000000000000000)",
 		"return DateTime.fromMicrosecondsSinceEpoch(value, isUtc: true);",
 		"return value.microsecondsSinceEpoch;",

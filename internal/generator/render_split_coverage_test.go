@@ -34,7 +34,7 @@ func TestRenderDecoderNullableBigInt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.buffer.String(), "if (value == null) return null;") {
+	if !strings.Contains(r.buffer.String(), "if (value == null) {") {
 		t.Fatalf("nullable BigInt decoder should guard null:\n%s", r.buffer.String())
 	}
 }

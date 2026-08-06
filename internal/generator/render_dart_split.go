@@ -827,9 +827,13 @@ func sortedImplementors(declaration *interfaceModel) []taggedImplementor {
 // 0 so Go receives a nil func value.
 func (r *splitDartRenderer) renderCallbackRegistration(typ *wireType, bridge string) {
 	callback := typ.Callback
-	r.line("  if (value == null) return 0;")
+	r.line("  if (value == null) {")
+	r.line("    return 0;")
+	r.line("  }")
 	r.line("  return %s.fgbInternalRegisterCallback((List<Object?> args) async {", bridge)
-	r.line("    if (args.length != %d) throw FormatException('callback expects %d arguments');", len(callback.Params), len(callback.Params))
+	r.line("    if (args.length != %d) {", len(callback.Params))
+	r.line("      throw FormatException('callback expects %d arguments');", len(callback.Params))
+	r.line("    }")
 	arguments := make([]string, len(callback.Params))
 	for index, param := range callback.Params {
 		r.line("    final a%d = fgbDecode%d(args[%d], %s, 'callback[%d]');", index, param.ID, index, bridge, index)
@@ -898,90 +902,152 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	r.line("%s fgbDecode%d(Object? value, __FGB_BRIDGE_CLASS__ bridge, String path) {", typ.DartType, typ.ID)
 	switch typ.Kind {
 	case kindBool:
-		r.line("  if (value is! bool) throw FormatException('$path: expected bool');")
+		r.line("  if (value is! bool) {")
+		r.line("    throw FormatException('$path: expected bool');")
+		r.line("  }")
 		r.line("  return value;")
 	case kindString:
-		r.line("  if (value is! String) throw FormatException('$path: expected String');")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected String');")
+		r.line("  }")
 		r.line("  return value;")
 	case kindError:
-		r.line("  if (value == null) return null;")
-		r.line("  if (value is! String) throw FormatException('$path: expected error string');")
+		r.line("  if (value == null) {")
+		r.line("    return null;")
+		r.line("  }")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected error string');")
+		r.line("  }")
 		r.line("  return value;")
 	case kindSigned, kindUnsigned:
 		if strings.TrimSuffix(typ.DartType, "?") == "BigInt" {
 			if strings.HasSuffix(typ.DartType, "?") {
-				r.line("  if (value == null) return null;")
+				r.line("  if (value == null) {")
+				r.line("    return null;")
+				r.line("  }")
 			}
-			r.line("  if (value is BigInt) return value;")
-			r.line("  if (value is String) return BigInt.parse(value, radix: 16);")
+			r.line("  if (value is BigInt) {")
+			r.line("    return value;")
+			r.line("  }")
+			r.line("  if (value is String) {")
+			r.line("    return BigInt.parse(value, radix: 16);")
+			r.line("  }")
 			r.line("  throw FormatException('$path: expected BigInt');")
 		} else {
-			r.line("  if (value is! int) throw FormatException('$path: expected int');")
+			r.line("  if (value is! int) {")
+			r.line("    throw FormatException('$path: expected int');")
+			r.line("  }")
 			r.line("  return value;")
 		}
 	case kindFloat:
-		r.line("  if (value is num) return value.toDouble();")
+		r.line("  if (value is num) {")
+		r.line("    return value.toDouble();")
+		r.line("  }")
 		r.line("  throw FormatException('$path: expected double');")
 	case kindBigInt:
 		if strings.HasSuffix(typ.DartType, "?") {
-			r.line("  if (value == null) return null;")
+			r.line("  if (value == null) {")
+			r.line("    return null;")
+			r.line("  }")
 		}
-		r.line("  if (value is BigInt) return value;")
-		r.line("  if (value is String) return BigInt.parse(value, radix: 16);")
+		r.line("  if (value is BigInt) {")
+		r.line("    return value;")
+		r.line("  }")
+		r.line("  if (value is String) {")
+		r.line("    return BigInt.parse(value, radix: 16);")
+		r.line("  }")
 		r.line("  throw FormatException('$path: expected BigInt');")
 	case kindTime:
-		r.line("  if (value is! int) throw FormatException('$path: expected time microseconds');")
+		r.line("  if (value is! int) {")
+		r.line("    throw FormatException('$path: expected time microseconds');")
+		r.line("  }")
 		r.line("  if (value < -8640000000000000000 || value > 8640000000000000000) {")
 		r.line("    throw FormatException('$path: time microseconds outside Dart DateTime range');")
 		r.line("  }")
 		r.line("  return DateTime.fromMicrosecondsSinceEpoch(value, isUtc: true);")
 	case kindInternetIP:
-		r.line("  if (value is! String) throw FormatException('$path: expected InternetAddress string');")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected InternetAddress string');")
+		r.line("  }")
 		r.line("  return InternetAddress(value);")
 	case kindIPPrefix:
-		r.line("  if (value is! String) throw FormatException('$path: expected CIDR prefix string');")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected CIDR prefix string');")
+		r.line("  }")
 		r.line("  return value;")
 	case kindURL:
-		r.line("  if (value is! String) throw FormatException('$path: expected URI string');")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected URI string');")
+		r.line("  }")
 		r.line("  return Uri.parse(value);")
 	case kindUUID:
-		r.line("  if (value is! String) throw FormatException('$path: expected UUID string');")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected UUID string');")
+		r.line("  }")
 		r.line("  return UuidValue.fromString(value);")
 	case kindDecimal:
-		r.line("  if (value is! String) throw FormatException('$path: expected Decimal string');")
+		r.line("  if (value is! String) {")
+		r.line("    throw FormatException('$path: expected Decimal string');")
+		r.line("  }")
 		r.line("  return Decimal.parse(value);")
 	case kindDuration:
-		r.line("  if (value is! int) throw FormatException('$path: expected duration microseconds');")
+		r.line("  if (value is! int) {")
+		r.line("    throw FormatException('$path: expected duration microseconds');")
+		r.line("  }")
 		r.line("  return Duration(microseconds: value);")
 	case kindAny:
 		r.line("  return value;")
 	case kindPointer:
-		r.line("  if (value == null) return null;")
+		r.line("  if (value == null) {")
+		r.line("    return null;")
+		r.line("  }")
 		r.line("  return fgbDecode%d(value, bridge, path);", typ.Elem.ID)
 	case kindBytes:
-		r.line("  if (value is Uint8List) return value;")
-		r.line("  if (value is List) return Uint8List.fromList(value.cast<int>());")
+		r.line("  if (value is Uint8List) {")
+		r.line("    return value;")
+		r.line("  }")
+		r.line("  if (value is List) {")
+		r.line("    return Uint8List.fromList(value.cast<int>());")
+		r.line("  }")
 		r.line("  throw FormatException('$path: expected Uint8List');")
 	case kindInt32List:
-		r.line("  if (value is Int32List) return value;")
-		r.line("  if (value is List) return Int32List.fromList(value.cast<int>());")
+		r.line("  if (value is Int32List) {")
+		r.line("    return value;")
+		r.line("  }")
+		r.line("  if (value is List) {")
+		r.line("    return Int32List.fromList(value.cast<int>());")
+		r.line("  }")
 		r.line("  throw FormatException('$path: expected Int32List');")
 	case kindInt64List:
-		r.line("  if (value is Int64List) return value;")
-		r.line("  if (value is List) return Int64List.fromList(value.cast<int>());")
+		r.line("  if (value is Int64List) {")
+		r.line("    return value;")
+		r.line("  }")
+		r.line("  if (value is List) {")
+		r.line("    return Int64List.fromList(value.cast<int>());")
+		r.line("  }")
 		r.line("  throw FormatException('$path: expected Int64List');")
 	case kindFloat64List:
-		r.line("  if (value is Float64List) return value;")
-		r.line("  if (value is List) return Float64List.fromList(value.cast<num>().map((item) => item.toDouble()).toList());")
+		r.line("  if (value is Float64List) {")
+		r.line("    return value;")
+		r.line("  }")
+		r.line("  if (value is List) {")
+		r.line("    return Float64List.fromList(value.cast<num>().map((item) => item.toDouble()).toList());")
+		r.line("  }")
 		r.line("  throw FormatException('$path: expected Float64List');")
 	case kindSlice, kindArray:
-		r.line("  if (value is! List) throw FormatException('$path: expected List');")
+		r.line("  if (value is! List) {")
+		r.line("    throw FormatException('$path: expected List');")
+		r.line("  }")
 		if typ.Kind == kindArray {
-			r.line("  if (value.length != %d) throw FormatException('$path: expected %d elements');", typ.Length, typ.Length)
+			r.line("  if (value.length != %d) {", typ.Length)
+			r.line("    throw FormatException('$path: expected %d elements');", typ.Length)
+			r.line("  }")
 		}
 		r.line("  return List<%s>.generate(value.length, (index) => fgbDecode%d(value[index], bridge, '$path[$index]'), growable: false);", typ.Elem.DartType, typ.Elem.ID)
 	case kindMap:
-		r.line("  if (value is! Map) throw FormatException('$path: expected Map');")
+		r.line("  if (value is! Map) {")
+		r.line("    throw FormatException('$path: expected Map');")
+		r.line("  }")
 		r.line("  final result = <%s, %s>{};", typ.Key.DartType, typ.Elem.DartType)
 		r.line("  value.forEach((rawKey, rawValue) {")
 		r.line("    final key = fgbDecode%d(rawKey, bridge, '$path.<key>');", typ.Key.ID)
@@ -999,7 +1065,9 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("    );")
 		r.line("  }")
 		r.line("  if (value is List) {")
-		r.line("    if (value.length != %d) throw FormatException('$path: expected %d fields');", len(typ.Struct.allFields()), len(typ.Struct.allFields()))
+		r.line("    if (value.length != %d) {", len(typ.Struct.allFields()))
+		r.line("      throw FormatException('$path: expected %d fields');", len(typ.Struct.allFields()))
+		r.line("    }")
 		r.line("    return %s(", typ.Struct.DartName)
 		for index, field := range typ.Struct.allFields() {
 			source := fmt.Sprintf("value[%d]", index)
@@ -1009,11 +1077,17 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  }")
 		r.line("  throw FormatException('$path: expected Map or List');")
 	case kindOpaque:
-		r.line("  if (value == null) return null;")
-		r.line("  if (value is! int || value <= 0) throw FormatException('$path: expected opaque handle');")
+		r.line("  if (value == null) {")
+		r.line("    return null;")
+		r.line("  }")
+		r.line("  if (value is! int || value <= 0) {")
+		r.line("    throw FormatException('$path: expected opaque handle');")
+		r.line("  }")
 		r.line("  return %s.fgbInternal(fgbBridge: bridge, fgbHandle: value);", typ.Opaque.DartName)
 	case kindDartOpaque:
-		r.line("  if (value is! int) throw FormatException('$path: expected DartOpaque handle');")
+		r.line("  if (value is! int) {")
+		r.line("    throw FormatException('$path: expected DartOpaque handle');")
+		r.line("  }")
 		r.line("  return bridge.fgbInternalResolveDartOpaque(value, path);")
 	case kindCallback:
 		r.line("  throw UnsupportedError('$path: function values cannot travel from Go to Dart');")
@@ -1023,14 +1097,20 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		// A nil Go interface arrives as null; materialize the absent stand-in
 		// so the Dart type stays non-nullable. fgb:"nullable" fields keep the
 		// real null through dartFieldDecode before reaching this decoder.
-		r.line("  if (value == null) return const _%sAbsent();", typ.Interface.DartName)
-		r.line("  if (value is! List || value.length != 2) throw FormatException('$path: expected an interface envelope');")
+		r.line("  if (value == null) {")
+		r.line("    return const _%sAbsent();", typ.Interface.DartName)
+		r.line("  }")
+		r.line("  if (value is! List || value.length != 2) {")
+		r.line("    throw FormatException('$path: expected an interface envelope');")
+		r.line("  }")
 		r.line("  switch (value[0]) {")
 		for index, implementor := range typ.Interface.Implementors {
 			r.line("    case %s:", interfaceWireTagLiteral(typ.Interface, implementor, index))
 			if strings.HasSuffix(implementor.Type.DartType, "?") {
 				r.line("      final decoded = fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
-				r.line("      if (decoded == null) throw FormatException('$path: nil %s implementation payload');", implementor.DartName)
+				r.line("      if (decoded == null) {")
+				r.line("        throw FormatException('$path: nil %s implementation payload');", implementor.DartName)
+				r.line("      }")
 				r.line("      return decoded;")
 			} else {
 				r.line("      return fgbDecode%d(value[1], bridge, path);", implementor.Type.ID)
@@ -1042,7 +1122,9 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		if typ.Named.Enum {
 			r.line("  final decoded = fgbDecode%d(value, bridge, path);", typ.Named.Underlying.ID)
 			r.line("  for (final item in %s.values) {", typ.Named.DartName)
-			r.line("    if (item.value == decoded) return item;")
+			r.line("    if (item.value == decoded) {")
+			r.line("      return item;")
+			r.line("    }")
 			r.line("  }")
 			r.line("  throw FormatException('$path: unknown %s value $decoded');", typ.Named.DartName)
 		} else {
@@ -1065,7 +1147,9 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	// Closures encode their own null case (as handle 0); every other nilable
 	// type maps null straight through to a null wire value.
 	if typ.Kind != kindCallback && typ.nilableWithoutPointer() {
-		r.line("  if (value == null) return null;")
+		r.line("  if (value == null) {")
+		r.line("    return null;")
+		r.line("  }")
 	}
 	switch typ.Kind {
 	case kindBool, kindString, kindError, kindSigned, kindFloat, kindAny, kindIPPrefix:
@@ -1073,7 +1157,9 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	case kindUnsigned, kindBigInt:
 		if strings.TrimSuffix(typ.DartType, "?") == "BigInt" {
 			if strings.HasSuffix(typ.DartType, "?") {
-				r.line("  if (value == null) return null;")
+				r.line("  if (value == null) {")
+				r.line("    return null;")
+				r.line("  }")
 			}
 			r.line("  return value.toRadixString(16);")
 		} else {
@@ -1092,7 +1178,9 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	case kindDuration:
 		r.line("  return value.inMicroseconds;")
 	case kindPointer:
-		r.line("  if (value == null) return null;")
+		r.line("  if (value == null) {")
+		r.line("    return null;")
+		r.line("  }")
 		r.line("  return fgbEncode%d(value, bridge, path, depth + 1);", typ.Elem.ID)
 	case kindBytes, kindInt32List, kindInt64List, kindFloat64List:
 		r.line("  return value;")
@@ -1111,8 +1199,12 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		}
 		r.line("  };")
 	case kindOpaque:
-		r.line("  if (value == null) return null;")
-		r.line("  if (!identical(value.fgbBridge, bridge)) throw StateError('opaque value belongs to a different bridge');")
+		r.line("  if (value == null) {")
+		r.line("    return null;")
+		r.line("  }")
+		r.line("  if (!identical(value.fgbBridge, bridge)) {")
+		r.line("    throw StateError('opaque value belongs to a different bridge');")
+		r.line("  }")
 		r.line("  return value.fgbHandle;")
 	case kindDartOpaque:
 		r.line("  return bridge.fgbInternalRegisterDartOpaque(value);")
@@ -1122,10 +1214,14 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		// An absent value (nil on the Go side) round-trips back to null so Go
 		// decodes nil again. This must precede the implementor checks: the
 		// absent stand-in implements the interface but matches no concrete type.
-		r.line("  if (value is GoAbsent) return null;")
+		r.line("  if (value is GoAbsent) {")
+		r.line("    return null;")
+		r.line("  }")
 		// Most-derived first: a subclass also passes its superclass check.
 		for _, implementor := range sortedImplementors(typ.Interface) {
-			r.line("  if (value is %s) return <Object?>[%s, fgbEncode%d(value, bridge, path, depth + 1)];", implementor.DartName, interfaceWireTagLiteral(typ.Interface, implementor.implementorModel, implementor.Index), implementor.Type.ID)
+			r.line("  if (value is %s) {", implementor.DartName)
+			r.line("    return <Object?>[%s, fgbEncode%d(value, bridge, path, depth + 1)];", interfaceWireTagLiteral(typ.Interface, implementor.implementorModel, implementor.Index), implementor.Type.ID)
+			r.line("  }")
 		}
 		r.line("  throw ArgumentError('$path: ${value.runtimeType} is not a Go implementation of %s');", typ.Interface.DartName)
 	case kindCallback:
