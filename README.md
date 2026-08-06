@@ -361,6 +361,15 @@ Build the CLI locally:
 go build ./cmd/flutter_go_bridge_codegen
 ```
 
+To install the CLI into the same directory `go install` would use, run:
+
+```sh
+make local
+```
+
+`make local` builds for the current OS and architecture, then copies the executable to `GOBIN`, or
+to `$(go env GOPATH)/bin` when `GOBIN` is empty.
+
 Build release archives with the Makefile:
 
 ```sh

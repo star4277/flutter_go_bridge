@@ -351,6 +351,15 @@ go test ./...
 go build ./cmd/flutter_go_bridge_codegen
 ```
 
+要把 CLI 安装到 `go install` 使用的目录，运行：
+
+```sh
+make local
+```
+
+`make local` 会按当前系统和架构构建，然后复制到 `GOBIN`；如果 `GOBIN` 为空，则安装到
+`$(go env GOPATH)/bin`。
+
 使用 Makefile 构建发布产物：
 
 ```sh

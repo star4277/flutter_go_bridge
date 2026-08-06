@@ -11,6 +11,9 @@ go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@l
 ::: tip 从源码构建
 模板通过 `go:embed` 内嵌，并包含 Gokit 子模块。构建前先执行
 `git submodule update --init --recursive`。
+
+从源码检出构建时，`make local` 会按当前系统和架构构建，并安装到 `GOBIN`；如果 `GOBIN` 为空，
+则安装到 `GOPATH/bin`。
 :::
 
 ## 创建或接入项目
