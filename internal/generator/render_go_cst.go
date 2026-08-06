@@ -292,7 +292,10 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 	case kindUnsigned:
 		if isDartBigIntType(typ) {
 			r.line("\treturn fgbDcoString(new(big.Int).SetUint64(uint64(value)).Text(16))")
-		} else if typ.BitSize <= 32 {
+		} else if typ.BitSize <= 16 {
+			// The slot is chosen by range, not by width: uint32 does not fit in
+			// a signed 32-bit slot, and narrowing it there would deliver
+			// 4294967295 to Dart as -1. Matches the standard codec.
 			r.line("\treturn fgbDcoInt32(int32(value))")
 		} else {
 			r.line("\treturn fgbDcoInt64(int64(value))")
