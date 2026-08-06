@@ -61,6 +61,24 @@ func EchoKind(value Kind) Kind { return value }
 	}
 }
 
+func TestBuildEnumWithoutTypePrefixKeepsFullCaseName(t *testing.T) {
+	unit, _, err := buildEnumFixture(t, `package api
+
+//fgb:enum
+type Status int
+
+const ReadyState Status = 2
+
+func EchoStatus(value Status) Status { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unit.Named[0].Constants[0].DartName; got != "readyState" {
+		t.Fatalf("unprefixed Go enum constant got Dart name %q, want readyState", got)
+	}
+}
+
 func TestBuildEnumRejectsInvalidClosedSet(t *testing.T) {
 	cases := []struct {
 		name   string
