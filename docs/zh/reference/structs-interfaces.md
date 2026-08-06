@@ -521,4 +521,8 @@ bridge 调用；`MarshalJSON` 返回的字节只在这条 `toString()` 路径上
 当 `String()` 没有被选为 `toString()` 时，它会生成名为 `asString()` 的 Dart 方法。没有可用 Go
 方法时，值结构体使用字段副本在 Dart 本地生成字符串。带必填参数的方法不能覆盖 Dart 的零参数
 `Object.toString()`，生成器会发出 warning 并回退到下一候选；opaque handle 不生成字段格式化的
-`toString()`。
+`toString()`。空值结构体也会生成稳定的 `Type()` 形式。
+
+接口声明与具体生成类使用同一套选择规则；`String() string` 接口会导出 `toString()`，嵌入值
+结构体提升的方法也会参与优先级判断。普通方法如果占用了保留的 `toString` 或 `asString` 名称，
+生成器会发出 warning 并追加数字后缀。

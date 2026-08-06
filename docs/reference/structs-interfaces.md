@@ -120,7 +120,12 @@ CST/DCO or standard encoding. `String()` is exposed as `asString()` when another
 When no eligible method exists, the generated value class formats its bridged fields locally. A
 method with required parameters cannot override Dart's zero-argument `Object.toString()` and is
 skipped with a warning; selection then falls back to the next method. Opaque handles are not given
-a field-based `toString()`.
+a field-based `toString()`. This fallback is also emitted for an empty value struct as `Type()`.
+
+The same selection is applied to interface declarations and their concrete generated classes. An
+interface `String() string` therefore exposes `toString()`, and promoted methods from an embedded
+value struct participate in the priority decision. Ordinary methods colliding with reserved
+`toString` or `asString` names are suffixed with a warning.
 
 Details worth knowing:
 
