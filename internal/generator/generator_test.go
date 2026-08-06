@@ -141,6 +141,17 @@ func Fallback(value map[string]int) map[string]int { return value }
 	}
 
 	goSource := mustRead(t, goOutput)
+	secondGoOutput := filepath.Join(dir, "bridge_generated_second.go")
+	secondDartOutput := filepath.Join(dir, "dart_second", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: secondGoOutput, DartOutput: secondDartOutput,
+		LibraryName: "external_interface", DartEntrypointClassName: "ExternalInterfaceBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if second := mustRead(t, secondGoOutput); second != goSource {
+		t.Fatal("dependency method generation is not deterministic across runs")
+	}
 	for _, expected := range []string{
 		"int64_t count;", "int64_t* optional;", "fgbDispatchCst", "fgbDcoEncode",
 		`case "Fallback":`, "//export fgb_cst", "//export fgb_dco_free",
@@ -466,10 +477,13 @@ type Circle struct {
 
 func NewCircle(radius int) *Circle { return &Circle{radius: radius} }
 func (*Circle) Area() int { return 0 }
+func (*Circle) String() string { return "circle" }
 
 type Base struct {
 	Value int
 }
+
+func (Base) ToString() string { return "embedded" }
 
 type PointerEmbedded struct {
 	*Base
@@ -488,6 +502,10 @@ type Square struct {
 }
 
 func (value Square) Area() int { return value.Size * value.Size }
+func (value Square) ToString() string { return "square-custom" }
+func (value Square) String() string { return "square-stringer" }
+
+func (value *PointerValue) MarshalJSON() ([]byte, error) { return []byte("pointer"), nil }
 
 type NotShape struct {
 	Value int
@@ -603,10 +621,17 @@ func Shapes() map[string]contracts.Shape { return factory.Shapes() }
 		"final class ShapeOpaque extends GoOpaque implements Shape {",
 		"final class Square implements Shape {",
 		"final int size;",
+		"String toString()",
 	} {
 		if !strings.Contains(externalDart, expected) {
 			t.Fatalf("external interface mapping missing %q:\n%s", expected, externalDart)
 		}
+	}
+	if count := strings.Count(externalDart, "String toString() {"); count != 4 {
+		t.Fatalf("each discovered implementation should receive its selected string representation, got %d:\n%s", count, externalDart)
+	}
+	if !strings.Contains(externalDart, "String asString() {") {
+		t.Fatalf("Square.String should remain callable after ToString takes the override:\n%s", externalDart)
 	}
 	if strings.Contains(externalDart, "int area(") {
 		t.Fatalf("third-party interface methods are outside the input API and must remain marker-only:\n%s", externalDart)
@@ -634,6 +659,18 @@ func Shapes() map[string]contracts.Shape { return factory.Shapes() }
 	}
 
 	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		"receiver.String()",
+		"receiver.ToString()",
+		"receiver.MarshalJSON()",
+		`"dependency:example.com/thirdparty/impl:Circle.String"`,
+		`"dependency:example.com/thirdparty/impl:Square.ToString"`,
+		`"dependency:example.com/thirdparty/impl:PointerValue.MarshalJSON"`,
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated dependency method dispatch missing %q:\n%s", expected, goSource)
+		}
+	}
 	for _, expected := range []string{
 		`"example.com/thirdparty/contracts"`,
 		`"example.com/thirdparty/impl"`,

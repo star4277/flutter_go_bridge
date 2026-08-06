@@ -30,16 +30,17 @@ const (
 )
 
 type builder struct {
-	api              *model.API
-	config           config.Resolved
-	unit             *unit
-	typeCache        map[types.Type]*wireType
-	structClasses    map[*types.Named]structClass
-	namedModels      map[*types.Named]*namedModel
-	structModels     map[*types.Named]*structModel
-	opaqueModels     map[*types.Named]*opaqueModel
-	syntheticOpaques map[string]*opaqueModel
-	interfaceModels  map[*types.Named]*interfaceModel
+	api               *model.API
+	config            config.Resolved
+	unit              *unit
+	typeCache         map[types.Type]*wireType
+	structClasses     map[*types.Named]structClass
+	namedModels       map[*types.Named]*namedModel
+	structModels      map[*types.Named]*structModel
+	opaqueModels      map[*types.Named]*opaqueModel
+	syntheticOpaques  map[string]*opaqueModel
+	interfaceModels   map[*types.Named]*interfaceModel
+	dependencyMethods map[*types.Named]bool
 	// Dart has one library namespace across the mutually importing generated
 	// source files. Reserve input-package names up front, then disambiguate
 	// reachable external declarations without renaming the user's own types.
@@ -92,6 +93,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		opaqueModels:       map[*types.Named]*opaqueModel{},
 		syntheticOpaques:   map[string]*opaqueModel{},
 		interfaceModels:    map[*types.Named]*interfaceModel{},
+		dependencyMethods:  map[*types.Named]bool{},
 		dartTypeNames:      map[string]*types.Named{},
 		dartNames:          map[*types.Named]string{},
 		syntheticDartNames: map[string]bool{},
@@ -147,6 +149,9 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			}
 		}
 	}
+	if err := b.mapDependencyImplementorMethods(); err != nil {
+		return nil, b.warnings, err
+	}
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
 	b.selectInterfaceToStringMethods()
 	if err := b.propagateInterfaceMethodShapes(); err != nil {
@@ -189,6 +194,92 @@ func (b *builder) selectValueToStringMethods() {
 			b.normalizeNamedExtensionMethods(named)
 		}
 	}
+	for _, opaque := range b.unit.Opaques {
+		b.selectToStringForMethods(opaque.GoName, opaque.Methods)
+		b.disambiguateSelectedMethods(opaque.GoName, opaque.Methods, true)
+	}
+}
+
+// mapDependencyImplementorMethods exposes the small set of Go methods that
+// can provide a concrete object's string representation. Dependency packages
+// do not carry parser directives, so their methods use the ordinary sync call
+// mode and the existing eligibility checks decide the final Dart override.
+func (b *builder) mapDependencyImplementorMethods() error {
+	namedTypes := make([]*types.Named, 0, len(b.dependencyMethods))
+	for named := range b.dependencyMethods {
+		namedTypes = append(namedTypes, named)
+	}
+	sort.Slice(namedTypes, func(i, j int) bool {
+		left, right := namedTypes[i].Obj(), namedTypes[j].Obj()
+		if left.Pkg().Path() != right.Pkg().Path() {
+			return left.Pkg().Path() < right.Pkg().Path()
+		}
+		return left.Name() < right.Name()
+	})
+	for _, named := range namedTypes {
+		methodSet := types.NewMethodSet(types.NewPointer(named))
+		for index := 0; index < methodSet.Len(); index++ {
+			method, ok := methodSet.At(index).Obj().(*types.Func)
+			if !ok || method == nil || !method.Exported() || !isStringRepresentationMethod(method.Name()) {
+				continue
+			}
+			signature, ok := method.Type().(*types.Signature)
+			if !ok || signature.TypeParams() != nil && signature.TypeParams().Len() != 0 {
+				continue
+			}
+			source := &model.Callable{
+				Func: method, Signature: signature, Receiver: named,
+				PointerRecv: methodReceiverIsPointer(method),
+				DartName:    names.LowerCamel(method.Name()), Mode: model.CallModeSync,
+			}
+			call, err := b.mapCallable(source)
+			if err != nil {
+				b.warnings = append(b.warnings, fmt.Errorf("dependency method %s.%s was not bridged: %w", named.Obj().Name(), method.Name(), err))
+				continue
+			}
+			call.WireName = dependencyMethodWireName(named, method.Name())
+			call.ID = len(b.unit.Calls)
+			call.Codec = preferredCodecForCall(call, b.unit.codecSupport)
+			b.unit.Calls = append(b.unit.Calls, call)
+			switch call.Receiver.Kind {
+			case kindOpaque:
+				b.disambiguateMethod(call, call.Receiver.Opaque.Methods)
+				call.Receiver.Opaque.Methods = append(call.Receiver.Opaque.Methods, call)
+			case kindStruct:
+				b.disambiguateMethod(call, call.Receiver.Struct.Methods)
+				call.Receiver.Struct.Methods = append(call.Receiver.Struct.Methods, call)
+			case kindNamed:
+				b.disambiguateMethod(call, call.Receiver.Named.Methods)
+				call.Receiver.Named.Methods = append(call.Receiver.Named.Methods, call)
+			}
+		}
+	}
+	return nil
+}
+
+func isStringRepresentationMethod(name string) bool {
+	switch name {
+	case "ToString", "String", "MarshalJSON":
+		return true
+	default:
+		return false
+	}
+}
+
+func methodReceiverIsPointer(method *types.Func) bool {
+	if method == nil {
+		return false
+	}
+	signature, _ := method.Type().(*types.Signature)
+	if signature == nil || signature.Recv() == nil {
+		return false
+	}
+	_, pointer := types.Unalias(signature.Recv().Type()).(*types.Pointer)
+	return pointer
+}
+
+func dependencyMethodWireName(named *types.Named, method string) string {
+	return fmt.Sprintf("dependency:%s:%s.%s", named.Obj().Pkg().Path(), named.Obj().Name(), method)
 }
 
 // Extension types cannot declare members inherited from Object, including
@@ -1685,6 +1776,9 @@ func (b *builder) collectImplementors(iface *types.Named, declaration *interface
 		pointerImplements := types.Implements(types.NewPointer(named), declared)
 		if !valueImplements && !pointerImplements {
 			continue
+		}
+		if iface.Obj().Pkg() != b.api.Package.Types && named.Obj().Pkg() != b.api.Package.Types {
+			b.dependencyMethods[named] = true
 		}
 		class := b.classifyStruct(named)
 		var mapped *wireType
