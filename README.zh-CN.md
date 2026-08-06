@@ -240,6 +240,7 @@ codec 由生成器按调用确定。业务代码只使用公开 Dart API，不�
 | `uint8`、`uint16`、`uint32` | 带范围检查的 `int` |
 | `uint64`、`uint`、`uintptr` | `BigInt` |
 | `float32`、`float64` | `double` |
+| CGo 标量（如 `C.char`、`C.int`、`C.size_t`、typedef 和 enum） | 按底层类型映射为 `int`、`BigInt` 或 `double` |
 | `[]byte`、`[]int32`、`[]int64`、`[]float64` | Dart typed list |
 | `[]T`、`[N]T`、`map[K]V` | `List<T>`、`List<T>`、`Map<K, V>` |
 | `time.Time`、`time.Duration`、`math/big.Int` | `DateTime`、`Duration`、`BigInt` |

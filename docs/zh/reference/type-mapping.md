@@ -14,8 +14,14 @@
 | `uint8`<br>`uint16`<br>`uint32` | `int` | 两个方向都保留完整无符号取值范围；Dart → Go 时拒绝负数和超出目标位宽的值 |
 | `uint64`<br>`uint`<br>`uintptr` | `BigInt` | 使用无符号整数语义，避免 Dart `int` 范围或平台位宽差异 |
 | `float32`<br>`float64` | `double` | `float32` 输入在 Go 端转换为 32 位精度 |
+| CGo 标量（`C.char`、`C.int`、`C.size_t`、C typedef/enum） | 按底层类型映射为 `int`、`BigInt` 或 `double` | 保留 `cmd/cgo` 推导的位宽和符号；生成代码不会泄漏私有 `_Ctype_*` 名称 |
 
 不支持 `complex64`、`complex128` 和 `unsafe.Pointer` 作为普通桥接类型。
+
+CGo 标量可以用于直接参数、返回值和可序列化结构体字段。生成的 bridge 在 wire 上使用普通
+底层标量，并在调用边界通过反射转换为私有 cgo 类型。原始 CGo 指针、C struct/union，以及
+直接包含 CGo 类型的 slice、array、map、callback 或 stream 会被拒绝，因为生成器无法从 Go
+签名可靠推导其所有权和内存布局；请先暴露带有明确数据所有权策略的导出 Go 包装类型。
 
 ### 命名基础类型
 
