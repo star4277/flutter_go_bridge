@@ -176,6 +176,19 @@ continue without re-deriving the design.
 
 Implement the smallest complete change. Preserve user edits and avoid unrelated refactors.
 
+When writing or changing generated Dart code, always emit brace-delimited bodies for control-flow
+statements, even when the body contains only one statement. This applies to `if`, `else`, `for`,
+`for-in`, `while`, and `do`/`while`. Never generate `if (condition) return;`; generate:
+
+```dart
+if (condition) {
+  return;
+}
+```
+
+Add or update a focused generator regression test that asserts the braces for every affected
+control-flow form. Do not rely only on `dart format` or analyzer configuration to enforce this rule.
+
 When adding a feature or changing any code behavior, update the development documentation under
 `docs/` in the same change. This requirement applies even when the implementation already has tests
 or comments. Update both English and Chinese pages when both versions cover the changed area.
@@ -303,6 +316,8 @@ dart analyze
 ```
 
 Prefer `fvm dart` / `fvm flutter` when the project pins Flutter with FVM. For Flutter packages, also run `fvm flutter analyze` or `flutter analyze`. Analyzer errors and warnings are blockers; report pre-existing info-level lints separately.
+For generated Dart, also confirm the focused generator regression tests reject unbraced single-statement
+control-flow bodies; analyzer settings are not a substitute for this source-level guarantee.
 
 ## 5. Unit Test Gate
 
@@ -376,8 +391,10 @@ go build -buildvcs=false -buildmode=c-shared -o <output-library> .
 ```
 
 3. Run `dart analyze` against the generated Dart package.
-4. Regenerate a second time and rebuild to catch stale-output and idempotency problems.
-5. Validate at least one real repository example such as `example/mihomoui` when the change can affect it.
+4. Inspect the generated Dart diff for unbraced control-flow bodies and treat any occurrence as a
+   blocking generator defect, including single-statement bodies accepted by the active analyzer configuration.
+5. Regenerate a second time and rebuild to catch stale-output and idempotency problems.
+6. Validate at least one real repository example such as `example/mihomoui` when the change can affect it.
 
 For Flutter-facing changes, run the relevant `integration_test` flow on an available target. If an integration environment is unavailable, state the exact missing prerequisite; do not relabel a unit test as integration coverage.
 
