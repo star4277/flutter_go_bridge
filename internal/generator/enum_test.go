@@ -172,6 +172,107 @@ func EchoFlag(value Flag) Flag { return value }
 	}
 }
 
+func TestRenderEnumDeclarationAndWireCodecs(t *testing.T) {
+	apiDart, central, goSource, warnings, err := generateFixture(t, `package api
+
+//fgb:enum
+type Status int
+
+const (
+	StatusUnknown Status = 0
+	StatusReady Status = 1
+)
+
+func EchoStatus(value Status) Status { return value }
+func MaybeStatus(value *Status) *Status { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	for _, expected := range []string{
+		"enum Status {",
+		"unknown(0),",
+		"ready(1);",
+		"const Status(this.value);",
+		"final int value;",
+		"Status? maybeStatus({Status? value})",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("generated Dart enum missing %q:\n%s", expected, apiDart)
+		}
+	}
+	for _, expected := range []string{
+		"for (final item in Status.values)",
+		"unknown Status value",
+		"return fgbEncode",
+		"value.value",
+	} {
+		if !strings.Contains(central, expected) {
+			t.Fatalf("generated Dart codec missing %q:\n%s", expected, central)
+		}
+	}
+	if !strings.Contains(goSource, "fgbDcoEncode") || !strings.Contains(goSource, "int(value)") {
+		t.Fatalf("Go named enum codec no longer transports the underlying value:\n%s", goSource)
+	}
+}
+
+func TestRenderStringEnumStoresExactWireValue(t *testing.T) {
+	apiDart, central, _, _, err := generateFixture(t, `package api
+
+//fgb:enum
+type Mode string
+
+const (
+	ModeFast Mode = "fast-mode"
+	ModeSafe Mode = "safe mode"
+)
+
+func EchoMode(value Mode) Mode { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{`fast("fast-mode")`, `safe("safe mode")`, "final String value;"} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("string enum lost exact wire value %q:\n%s", expected, apiDart)
+		}
+	}
+	if !strings.Contains(central, "unknown Mode value") {
+		t.Fatalf("string enum decoder does not reject unknown values:\n%s", central)
+	}
+}
+
+func TestRenderUint64EnumUsesConstWireLiteral(t *testing.T) {
+	apiDart, central, _, _, err := generateFixture(t, `package api
+
+//fgb:enum
+type Code uint64
+
+const CodeMax Code = 18446744073709551615
+
+func EchoCode(value Code) Code { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		`max("18446744073709551615");`,
+		"const Code(this._wireValue);",
+		"final String _wireValue;",
+		"BigInt get value => BigInt.parse(_wireValue);",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("uint64 enum missing const-safe BigInt representation %q:\n%s", expected, apiDart)
+		}
+	}
+	if !strings.Contains(central, "value.value") || !strings.Contains(central, "unknown Code value") {
+		t.Fatalf("uint64 enum codec does not preserve its BigInt value:\n%s", central)
+	}
+}
+
 func buildEnumFixture(t *testing.T, source string) (*unit, []error, error) {
 	t.Helper()
 	dir := t.TempDir()

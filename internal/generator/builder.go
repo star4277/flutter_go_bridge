@@ -995,6 +995,10 @@ func (b *builder) mapNamed(original types.Type, named *types.Named) (*wireType, 
 		if model.Enum {
 			dartCase = enumCaseName(model.GoName, item)
 			dartCase = uniqueEnumCaseName(dartCase, usedCases, model.GoName, item.Object.Name(), &b.warnings)
+			if underlying.DartType == "BigInt" {
+				literal = strconv.Quote(item.Object.Val().ExactString())
+				isConst = true
+			}
 		}
 		model.Constants = append(model.Constants, &constantModel{
 			GoName: item.Object.Name(), DartName: dartCase, Docs: item.Docs,
