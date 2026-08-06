@@ -1761,3 +1761,81 @@ Inspect the generated public API before finalizing a runtime smoke script and us
 - **Notes**: Updated the smoke to `JsonOnly` and `echoJsonOnly`; `dart analyze` and all seven real-DLL assertions pass.
 
 ---
+
+## [ERR-20260806-004] skill-validation-python-command
+
+**Logged**: 2026-08-06T22:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+The Skill validator was initially invoked with `python`, but this Windows environment exposes Python through `py`.
+
+### Error
+
+```text
+python : The term 'python' is not recognized as the name of a cmdlet, function, script file, or operable program.
+```
+
+### Context
+
+- Command: `python .../skill-creator/scripts/quick_validate.py .agents/skills/fgb-develop-feature`
+- The Windows Python Launcher is available as `py.exe`.
+
+### Suggested Fix
+
+Probe `py -3` on Windows when `python` is unavailable and invoke the validator with that launcher.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .agents/skills/fgb-develop-feature/SKILL.md
+- See Also: ERR-20260730-005
+
+### Resolution
+
+- **Resolved**: 2026-08-06T22:00:00+08:00
+- **Notes**: Switched the validation command to `py -3`.
+
+---
+
+## [ERR-20260806-005] skill-validation-default-encoding
+
+**Logged**: 2026-08-06T22:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+
+The Skill validator found Python through `py -3` but decoded the UTF-8 Skill file with the Windows GBK default.
+
+### Error
+
+```text
+UnicodeDecodeError: 'gbk' codec can't decode byte 0x94 in position 6730
+```
+
+### Context
+
+- Command: `py -3 .../skill-creator/scripts/quick_validate.py .agents/skills/fgb-develop-feature`
+- The repository Skill contains UTF-8 text and is valid Markdown.
+
+### Suggested Fix
+
+Set `PYTHONUTF8=1` for this validator invocation, or update the validator to open files explicitly as UTF-8.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: .agents/skills/fgb-develop-feature/SKILL.md
+- See Also: ERR-20260730-005
+
+### Resolution
+
+- **Resolved**: 2026-08-06T22:05:00+08:00
+- **Notes**: Re-ran the validator with `PYTHONUTF8=1`.
+
+---
