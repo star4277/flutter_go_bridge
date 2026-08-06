@@ -510,6 +510,7 @@ final class Remote implements Loader {
 | override signature 不兼容 | Go 遮蔽方法不满足 Dart override，使用 `//fgb:rename` |
 | 接口没有 bridged implementor | 只会发生在输入包接口；声明并暴露至少一个实现。依赖接口会使用 opaque fallback |
 | Dart 传入自定义 `implements Shape` 对象失败 | 只有生成器登记的 Go 实现能跨 bridge，不能传任意 Dart 实现 |
+
 ## `toString()`
 
 对于值结构体和命名值类型，生成器按 `ToString() string`、`String() string`、
