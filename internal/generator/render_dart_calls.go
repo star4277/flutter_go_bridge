@@ -22,7 +22,7 @@ func (r *splitDartRenderer) renderCentralCallMethods() {
 }
 
 func (r *splitDartRenderer) renderCentralCall(call *callModel) {
-	resultType := dartResultType(call)
+	resultType := dartWireResultType(call)
 	params := make([]string, 0, len(call.Params)+1)
 	arguments := make([]string, 0, len(call.Params)+1)
 	if call.Receiver != nil {

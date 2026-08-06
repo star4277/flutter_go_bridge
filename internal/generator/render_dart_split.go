@@ -28,6 +28,13 @@ type dartSourceGroup struct {
 // or - for several non-error Go results - a record. Named Go results produce a
 // named record so callers read `result.total` instead of `result.$2`.
 func dartResultType(call *callModel) string {
+	if call != nil && call.ToString {
+		return "String"
+	}
+	return dartWireResultType(call)
+}
+
+func dartWireResultType(call *callModel) string {
 	if call == nil || len(call.Results) == 0 {
 		return "void"
 	}
@@ -264,17 +271,22 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 
 func unitNeedsJSONToString(unit *unit) bool {
 	for _, structure := range unit.Structs {
-		for _, method := range structure.Methods {
-			if method.ToString && method.ToStringFormat == toStringJSON {
-				return true
-			}
+		if methodsNeedJSONToString(structure.Methods) {
+			return true
 		}
 	}
 	for _, named := range unit.Named {
-		for _, method := range named.Methods {
-			if method.ToString && method.ToStringFormat == toStringJSON {
-				return true
-			}
+		if methodsNeedJSONToString(named.Methods) {
+			return true
+		}
+	}
+	return false
+}
+
+func methodsNeedJSONToString(methods []*callModel) bool {
+	for _, method := range methods {
+		if method.ToString && method.ToStringFormat == toStringJSON {
+			return true
 		}
 	}
 	return false

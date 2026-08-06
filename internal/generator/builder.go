@@ -146,14 +146,12 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			}
 		}
 	}
-	if err := b.selectToStringMethods(); err != nil {
-		return nil, b.warnings, err
-	}
-
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
+	b.selectInterfaceToStringMethods()
 	if err := b.propagateInterfaceMethodShapes(); err != nil {
 		return nil, b.warnings, err
 	}
+	b.selectValueToStringMethods()
 	if err := b.checkMethodOverrides(); err != nil {
 		return nil, b.warnings, err
 	}
@@ -163,27 +161,43 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 	return b.unit, b.warnings, nil
 }
 
-// selectToStringMethods reserves Dart's Object.toString member for the
-// strongest eligible Go representation. Parameters must already be optional
-// in the generated Dart signature so interpolation can call it with no args.
-func (b *builder) selectToStringMethods() error {
+func (b *builder) selectInterfaceToStringMethods() {
+	for _, declaration := range b.unit.Interfaces {
+		b.selectToStringForMethods(declaration.GoName, declaration.Methods)
+		b.disambiguateSelectedMethods(declaration.GoName, declaration.Methods, false)
+	}
+}
+
+// selectValueToStringMethods reserves Dart's Object.toString member for the
+// strongest eligible Go representation after interface directives have shaped
+// the concrete calls. Promoted methods participate in a child's selection.
+func (b *builder) selectValueToStringMethods() {
 	for _, structure := range b.unit.Structs {
-		b.selectToStringForMethods(structure.GoName, structure.Methods)
-		if !hasToStringMethod(structure.Methods) && len(structure.allFields()) != 0 {
-			structure.LocalToString = true
-		}
+		methods := structureAndPromotedMethods(structure)
+		b.selectToStringForMethods(structure.GoName, methods)
+		structure.LocalToString = !hasToStringMethod(methods)
+		b.disambiguateSelectedMethods(structure.GoName, structure.Methods, hasToStringMethod(methods) || structure.LocalToString)
 	}
 	for _, named := range b.unit.Named {
 		b.selectToStringForMethods(named.GoName, named.Methods)
-		if !hasToStringMethod(named.Methods) {
-			named.LocalToString = true
-		}
+		named.LocalToString = !hasToStringMethod(named.Methods)
+		b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
 	}
-	return nil
+}
+
+func structureAndPromotedMethods(structure *structModel) []*callModel {
+	var methods []*callModel
+	for current := structure; current != nil; current = current.Super {
+		methods = append(methods, current.Methods...)
+	}
+	return methods
 }
 
 func hasToStringMethod(methods []*callModel) bool {
 	for _, method := range methods {
+		if method.Operator != "" {
+			continue
+		}
 		if method.ToString {
 			return true
 		}
@@ -206,7 +220,7 @@ func (b *builder) selectToStringForMethods(owner string, methods []*callModel) {
 			}
 		case "String":
 			if stringer == nil {
-				if b.eligibleToString(method) {
+				if b.eligibleStringer(method) {
 					stringer = method
 				} else if method.ErrorCount == 0 && len(method.Results) == 1 && method.Results[0].Type.Kind == kindString {
 					b.warnings = append(b.warnings, fmt.Errorf("%s.%s cannot be Dart toString because it has required parameters; falling back to the next representation", owner, method.GoName))
@@ -240,23 +254,66 @@ func (b *builder) selectToStringForMethods(owner string, methods []*callModel) {
 	selected.DartName = "toString"
 }
 
+// disambiguateSelectedMethods runs after special names have been assigned.
+// Special `toString`/`asString` members keep their specified API names; any
+// ordinary method occupying one of those names receives the numeric suffix.
+func (b *builder) disambiguateSelectedMethods(owner string, methods []*callModel, reserveToString bool) {
+	reserved := map[string]*callModel{}
+	if reserveToString {
+		reserved["toString"] = nil
+	}
+	for _, method := range methods {
+		if method.ToString {
+			reserved["toString"] = method
+		}
+		if method.GoName == "String" && !method.ToString {
+			reserved["asString"] = method
+		}
+	}
+	used := map[string]bool{}
+	for name := range reserved {
+		used[name] = true
+	}
+	for _, method := range methods {
+		if method.Operator != "" {
+			continue
+		}
+		name := method.DartName
+		if holder, special := reserved[name]; special && holder == method {
+			continue
+		}
+		candidate := name
+		for suffix := 2; used[candidate]; suffix++ {
+			candidate = fmt.Sprintf("%s%d", name, suffix)
+		}
+		if candidate != name {
+			b.warnings = append(b.warnings, fmt.Errorf("%s method Dart name %q is reserved by generated toString behavior; renamed %s to %q", owner, name, method.GoName, candidate))
+			method.DartName = candidate
+		}
+		used[candidate] = true
+	}
+}
+
 func (b *builder) eligibleToString(call *callModel) bool {
 	if call == nil || call.Mode != model.CallModeSync || call.ErrorCount != 0 || len(call.Results) != 1 || call.Results[0].Type.Kind != kindString {
 		return false
 	}
-	for _, param := range call.Params {
-		if !param.Nullable && !isPointerType(param.Type.Original) {
-			return false
-		}
-	}
-	return true
+	return paramsOptional(call.Params)
+}
+
+func (b *builder) eligibleStringer(call *callModel) bool {
+	return call != nil && len(call.Params) == 0 && call.Mode == model.CallModeSync && call.ErrorCount == 0 && len(call.Results) == 1 && call.Results[0].Type.Kind == kindString
 }
 
 func (b *builder) eligibleMarshalJSON(call *callModel) bool {
-	if call == nil || call.Mode != model.CallModeSync || call.ErrorCount != 1 || len(call.Results) != 1 || call.Results[0].Type.Kind != kindBytes {
+	if call == nil || call.Mode != model.CallModeSync || len(call.Params) != 0 || call.ErrorCount != 1 || len(call.Results) != 1 || call.Results[0].GoIndex != 0 || call.Results[0].Type.Kind != kindBytes {
 		return false
 	}
-	for _, param := range call.Params {
+	return paramsOptional(call.Params)
+}
+
+func paramsOptional(params []*paramModel) bool {
+	for _, param := range params {
 		if !param.Nullable && !isPointerType(param.Type.Original) {
 			return false
 		}
