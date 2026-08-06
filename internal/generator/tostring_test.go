@@ -132,8 +132,8 @@ func UseEmpty(value Empty) Empty { return value }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(apiDart, "String toString() => value.toString();") {
-		t.Fatalf("named value type should have a local toString:\n%s", apiDart)
+	if strings.Contains(apiDart, "String toString() => value.toString();") || strings.Contains(apiDart, "extension type const ID(String value) {\n  @override") {
+		t.Fatalf("named extension type must not override Object.toString:\n%s", apiDart)
 	}
 	if !strings.Contains(apiDart, "String toString() => 'Empty()';") {
 		t.Fatalf("empty structs should still have a deterministic local toString:\n%s", apiDart)
@@ -251,7 +251,39 @@ func Use(value Code) {}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(apiDart, "import 'dart:convert';") || !strings.Contains(apiDart, "utf8.decode") {
-		t.Fatalf("named MarshalJSON toString should import dart:convert:\n%s", apiDart)
+	if strings.Contains(apiDart, "import 'dart:convert';") || !strings.Contains(apiDart, "marshalJson()") {
+		t.Fatalf("named MarshalJSON must remain an ordinary extension-type method:\n%s", apiDart)
+	}
+}
+
+func TestGenerateToStringNamedStringUsesSafeAlias(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+type Code string
+
+func (value Code) String() string { return string(value) }
+func Use(value Code) Code { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "String asString()") || strings.Contains(apiDart, "String toString()") || len(warnings) == 0 {
+		t.Fatalf("named String method should use a safe alias, warnings=%v:\n%s", warnings, apiDart)
+	}
+}
+
+func TestGenerateToStringNamedExplicitMethodUsesSafeAlias(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+type Code string
+
+func (value Code) ToString() string { return string(value) }
+func Use(value Code) Code { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(apiDart, "String toStringValue()") || strings.Contains(apiDart, "String toString()") || len(warnings) == 0 {
+		t.Fatalf("named ToString method should use a safe alias, warnings=%v:\n%s", warnings, apiDart)
 	}
 }

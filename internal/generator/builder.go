@@ -181,12 +181,40 @@ func (b *builder) selectValueToStringMethods() {
 	}
 	for _, named := range b.unit.Named {
 		b.selectToStringForMethods(named.GoName, named.Methods)
-		named.LocalToString = !named.Enum && !hasToStringMethod(named.Methods)
-		b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
 		if named.Enum {
+			named.LocalToString = false
+			b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
 			b.disambiguateEnumMethods(named)
+		} else {
+			b.normalizeNamedExtensionMethods(named)
 		}
 	}
+}
+
+// Extension types cannot declare members inherited from Object, including
+// toString. Keep Go-backed string representations callable under ordinary
+// names and leave Object.toString to Dart's extension-type implementation.
+func (b *builder) normalizeNamedExtensionMethods(named *namedModel) {
+	named.LocalToString = false
+	for _, method := range named.Methods {
+		if !method.ToString {
+			continue
+		}
+		method.ToString = false
+		method.ToStringFormat = toStringNone
+		switch method.GoName {
+		case "String":
+			method.DartName = "asString"
+		case "ToString":
+			method.DartName = "toStringValue"
+		case "MarshalJSON":
+			method.DartName = names.LowerCamel(method.GoName)
+		default:
+			method.DartName = names.LowerCamel(method.GoName)
+		}
+		b.warnings = append(b.warnings, fmt.Errorf("%s.%s cannot override Dart Object.toString on an extension type; exposed as %s", named.GoName, method.GoName, method.DartName))
+	}
+	b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
 }
 
 func (b *builder) disambiguateEnumMethods(named *namedModel) {
