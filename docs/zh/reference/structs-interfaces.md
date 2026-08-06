@@ -510,3 +510,14 @@ final class Remote implements Loader {
 | override signature 不兼容 | Go 遮蔽方法不满足 Dart override，使用 `//fgb:rename` |
 | 接口没有 bridged implementor | 只会发生在输入包接口；声明并暴露至少一个实现。依赖接口会使用 opaque fallback |
 | Dart 传入自定义 `implements Shape` 对象失败 | 只有生成器登记的 Go 实现能跨 bridge，不能传任意 Dart 实现 |
+## `toString()`
+
+对于值结构体和命名值类型，生成器按 `ToString() string`、`String() string`、
+`MarshalJSON() ([]byte, error)` 的顺序选择 Dart 的 `toString()` 实现。选中的 Go 方法通过同步
+bridge 调用；`MarshalJSON` 返回的字节只在这条 `toString()` 路径上按 UTF-8 解码，普通 `[]byte`
+字段和返回值仍使用原有 CST/DCO 或 standard codec。
+
+当 `String()` 没有被选为 `toString()` 时，它会生成名为 `asString()` 的 Dart 方法。没有可用 Go
+方法时，值结构体使用字段副本在 Dart 本地生成字符串。带必填参数的方法不能覆盖 Dart 的零参数
+`Object.toString()`，生成器会发出 warning 并回退到下一候选；opaque handle 不生成字段格式化的
+`toString()`。

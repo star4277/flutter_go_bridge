@@ -145,7 +145,19 @@ type callModel struct {
 	// "<=", "~", ...), or "" for an ordinary method. A Go method qualifies by
 	// name and signature alone; see dartOperatorFor.
 	Operator string
+	// ToString marks a synchronous receiver method rendered as Dart's
+	// Object.toString override rather than as an ordinary generated member.
+	ToString       bool
+	ToStringFormat toStringFormat
 }
+
+type toStringFormat uint8
+
+const (
+	toStringNone toStringFormat = iota
+	toStringText
+	toStringJSON
+)
 
 // dartMember is what the call occupies in its receiver's Dart member
 // namespace. An operator does not take the ordinary method name, so collision
@@ -278,14 +290,15 @@ func (t *wireType) nilableWithoutPointer() bool {
 }
 
 type namedModel struct {
-	GoName     string
-	DartName   string
-	Docs       string
-	SourceFile string
-	Type       *wireType
-	Underlying *wireType
-	Constants  []*constantModel
-	Methods    []*callModel
+	GoName        string
+	DartName      string
+	Docs          string
+	SourceFile    string
+	Type          *wireType
+	Underlying    *wireType
+	Constants     []*constantModel
+	Methods       []*callModel
+	LocalToString bool
 }
 
 type constantModel struct {
@@ -311,9 +324,10 @@ type structModel struct {
 	Subclassed bool
 	// Interfaces are the bridged interfaces this struct satisfies, rendered
 	// as a Dart `implements` clause.
-	Interfaces []*interfaceModel
-	Fields     []*fieldModel
-	Methods    []*callModel
+	Interfaces    []*interfaceModel
+	Fields        []*fieldModel
+	Methods       []*callModel
+	LocalToString bool
 }
 
 // allFields lists the wire fields of a struct: the promoted ones first (in

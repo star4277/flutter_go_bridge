@@ -146,6 +146,9 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			}
 		}
 	}
+	if err := b.selectToStringMethods(); err != nil {
+		return nil, b.warnings, err
+	}
 
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
 	if err := b.propagateInterfaceMethodShapes(); err != nil {
@@ -158,6 +161,107 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		return nil, b.warnings, err
 	}
 	return b.unit, b.warnings, nil
+}
+
+// selectToStringMethods reserves Dart's Object.toString member for the
+// strongest eligible Go representation. Parameters must already be optional
+// in the generated Dart signature so interpolation can call it with no args.
+func (b *builder) selectToStringMethods() error {
+	for _, structure := range b.unit.Structs {
+		b.selectToStringForMethods(structure.GoName, structure.Methods)
+		if !hasToStringMethod(structure.Methods) && len(structure.allFields()) != 0 {
+			structure.LocalToString = true
+		}
+	}
+	for _, named := range b.unit.Named {
+		b.selectToStringForMethods(named.GoName, named.Methods)
+		if !hasToStringMethod(named.Methods) {
+			named.LocalToString = true
+		}
+	}
+	return nil
+}
+
+func hasToStringMethod(methods []*callModel) bool {
+	for _, method := range methods {
+		if method.ToString {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *builder) selectToStringForMethods(owner string, methods []*callModel) {
+	var explicit, stringer, marshal *callModel
+	for _, method := range methods {
+		switch method.GoName {
+		case "ToString":
+			if explicit == nil {
+				if b.eligibleToString(method) {
+					explicit = method
+				} else {
+					b.warnings = append(b.warnings, fmt.Errorf("%s.%s cannot be Dart toString because it has required parameters; falling back to the next representation", owner, method.GoName))
+					method.DartName = "toStringWithArgs"
+				}
+			}
+		case "String":
+			if stringer == nil {
+				if b.eligibleToString(method) {
+					stringer = method
+				} else if method.ErrorCount == 0 && len(method.Results) == 1 && method.Results[0].Type.Kind == kindString {
+					b.warnings = append(b.warnings, fmt.Errorf("%s.%s cannot be Dart toString because it has required parameters; falling back to the next representation", owner, method.GoName))
+				}
+			}
+			method.DartName = "asString"
+		case "MarshalJSON":
+			if marshal == nil {
+				if b.eligibleMarshalJSON(method) {
+					marshal = method
+				} else if len(method.Results) == 1 && method.Results[0].Type.Kind == kindBytes {
+					b.warnings = append(b.warnings, fmt.Errorf("%s.%s cannot be Dart toString because it has required parameters; falling back to local fields", owner, method.GoName))
+				}
+			}
+		}
+	}
+	selected := explicit
+	format := toStringText
+	if selected == nil {
+		selected = stringer
+	}
+	if selected == nil {
+		selected = marshal
+		format = toStringJSON
+	}
+	if selected == nil {
+		return
+	}
+	selected.ToString = true
+	selected.ToStringFormat = format
+	selected.DartName = "toString"
+}
+
+func (b *builder) eligibleToString(call *callModel) bool {
+	if call == nil || call.Mode != model.CallModeSync || call.ErrorCount != 0 || len(call.Results) != 1 || call.Results[0].Type.Kind != kindString {
+		return false
+	}
+	for _, param := range call.Params {
+		if !param.Nullable && !isPointerType(param.Type.Original) {
+			return false
+		}
+	}
+	return true
+}
+
+func (b *builder) eligibleMarshalJSON(call *callModel) bool {
+	if call == nil || call.Mode != model.CallModeSync || call.ErrorCount != 1 || len(call.Results) != 1 || call.Results[0].Type.Kind != kindBytes {
+		return false
+	}
+	for _, param := range call.Params {
+		if !param.Nullable && !isPointerType(param.Type.Original) {
+			return false
+		}
+	}
+	return true
 }
 
 // propagateInterfaceMethodShapes copies the Dart name and call mode of an

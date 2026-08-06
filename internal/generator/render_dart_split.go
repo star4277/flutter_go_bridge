@@ -224,6 +224,9 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 			renderer.line("import %s;", dartImportPath(sourcePath, filepath.Join(root, filepath.FromSlash(paths[other]))))
 		}
 		renderer.line("import 'dart:async';")
+		if unitNeedsJSONToString(unit) {
+			renderer.line("import 'dart:convert';")
+		}
 		if unit.UsesInternetIP {
 			renderer.line("import 'dart:io';")
 		}
@@ -251,6 +254,24 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		result[sourcePath] = []byte(strings.ReplaceAll(renderer.buffer.String(), "__FGB_BRIDGE_CLASS__", unit.ClassName))
 	}
 	return result, nil
+}
+
+func unitNeedsJSONToString(unit *unit) bool {
+	for _, structure := range unit.Structs {
+		for _, method := range structure.Methods {
+			if method.ToString && method.ToStringFormat == toStringJSON {
+				return true
+			}
+		}
+	}
+	for _, named := range unit.Named {
+		for _, method := range named.Methods {
+			if method.ToString && method.ToStringFormat == toStringJSON {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sortedSourceKeys(paths map[string]string) []string {
@@ -532,6 +553,10 @@ func (r *splitDartRenderer) renderStruct(structure *structModel) {
 		r.line("")
 		r.renderInstanceCall(call, "this", "__FGB_BRIDGE_CLASS__.instance", true, "  ")
 	}
+	if structure.LocalToString {
+		r.line("")
+		r.renderLocalStructToString(structure)
+	}
 	r.renderStructEquality(structure)
 	r.line("}")
 	r.line("")
@@ -631,6 +656,11 @@ func (r *splitDartRenderer) renderNamed(named *namedModel) {
 		r.line("")
 		r.renderInstanceCall(call, "this", "__FGB_BRIDGE_CLASS__.instance", true, "  ")
 	}
+	if named.LocalToString {
+		r.line("")
+		r.line("  @override")
+		r.line("  String toString() => value.toString();")
+	}
 	r.line("}")
 	r.line("")
 }
@@ -649,8 +679,12 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 		bridge = "__FGB_BRIDGE_CLASS__.instance"
 	}
 	r.dartDoc(call.Docs, indent)
-	if call.Overrides {
+	if call.Overrides && !call.ToString {
 		r.line("%s@override", indent)
+	}
+	if call.ToString {
+		r.renderToStringCall(call, invocation, indent)
+		return
 	}
 	if call.StreamParam != nil {
 		r.renderStreamCall(call, bridge, args, params, indent)
@@ -672,6 +706,29 @@ func (r *splitDartRenderer) renderInstanceCall(call *callModel, receiver, bridge
 		}
 	}
 	r.line("%s}", indent)
+}
+
+func (r *splitDartRenderer) renderToStringCall(call *callModel, invocation, indent string) {
+	r.line("%s@override", indent)
+	if call.ToStringFormat == toStringJSON {
+		r.line("%sString toString(%s) {", indent, dartParams(call))
+		r.line("%s  final raw = %s;", indent, invocation)
+		r.line("%s  return utf8.decode(raw);", indent)
+	} else {
+		r.line("%sString toString(%s) {", indent, dartParams(call))
+		r.line("%s  return %s;", indent, invocation)
+	}
+	r.line("%s}", indent)
+}
+
+func (r *splitDartRenderer) renderLocalStructToString(structure *structModel) {
+	fields := structure.allFields()
+	parts := make([]string, 0, len(fields))
+	for _, field := range fields {
+		parts = append(parts, fmt.Sprintf("%s: $%s", field.DartName, field.DartName))
+	}
+	r.line("  @override")
+	r.line("  String toString() => '%s(%s)';", structure.DartName, strings.Join(parts, ", "))
 }
 
 // renderStreamSinkRegistration registers the Dart sink and hands Go the
