@@ -6,6 +6,9 @@ Install the command with:
 go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
+From a source checkout, `make local` builds for the current OS and architecture, then copies the
+executable to `GOBIN`, or to `GOPATH/bin` when `GOBIN` is empty.
+
 ## Version information
 
 Use either version flag:

@@ -6,6 +6,9 @@
 go install github.com/star4277/flutter_go_bridge/cmd/flutter_go_bridge_codegen@latest
 ```
 
+从源码检出构建时，`make local` 会按当前系统和架构构建，并复制到 `GOBIN`；如果 `GOBIN` 为空，
+则安装到 `GOPATH/bin`。
+
 ## 查询版本
 
 以下两种参数等价：

@@ -12,6 +12,9 @@ That installs `flutter_go_bridge_codegen`.
 The project templates are embedded into the binary with `go:embed`, and they include the Gokit
 submodule. Run `git submodule update --init --recursive` before building from a checkout, or
 `integrate` will fail at runtime with a missing-template error.
+
+From a source checkout, `make local` builds for the current OS and architecture, then installs the
+CLI to `GOBIN`, or to `GOPATH/bin` when `GOBIN` is empty.
 :::
 
 ## Start a project
