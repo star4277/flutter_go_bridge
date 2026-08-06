@@ -1661,8 +1661,8 @@ func (b *builder) mapInterfaceMethod(owner *types.Named, method *types.Func, dir
 
 // collectImplementors finds every bridged concrete type that satisfies the
 // interface. Input interfaces preserve source declaration order for wire
-// compatibility. Dependency interfaces use public-API reachability and stable
-// package path plus type name tags.
+// compatibility. Dependency interfaces use public-API reachability plus
+// module-local discovery and stable package path plus type name tags.
 func (b *builder) collectImplementors(iface *types.Named, declaration *interfaceModel) error {
 	declared := iface.Underlying().(*types.Interface)
 	candidates := b.interfaceImplementorCandidates(iface)
@@ -1757,10 +1757,33 @@ func (b *builder) interfaceImplementorCandidates(iface *types.Named) []*types.Ty
 		return candidates
 	}
 
-	// Dependency interfaces are open-world, but only concrete types that are
-	// themselves reachable from the public API can be named safely. Scanning
-	// every loaded package makes tags depend on unrelated imports and can pull
-	// fixed runtime packages into the generated import block.
+	// Dependency interfaces are open-world. Preserve explicitly reachable
+	// implementations, then add declarations from loaded packages in the same
+	// third-party module as the interface. The module boundary keeps unrelated
+	// imports and standard-library implementations out of the union.
+	candidateSet := map[*types.TypeName]bool{}
+	for _, object := range b.reachableInterfaceImplementorCandidates() {
+		candidateSet[object] = true
+	}
+	for _, object := range b.moduleInterfaceImplementorCandidates(iface) {
+		candidateSet[object] = true
+	}
+
+	candidates := make([]*types.TypeName, 0, len(candidateSet))
+	for object := range candidateSet {
+		candidates = append(candidates, object)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if left.Pkg().Path() != right.Pkg().Path() {
+			return left.Pkg().Path() < right.Pkg().Path()
+		}
+		return left.Name() < right.Name()
+	})
+	return candidates
+}
+
+func (b *builder) reachableInterfaceImplementorCandidates() []*types.TypeName {
 	seen := map[*types.Named]bool{}
 	var visit func(types.Type)
 	visit = func(typ types.Type) {
@@ -1822,14 +1845,54 @@ func (b *builder) interfaceImplementorCandidates(iface *types.Named) []*types.Ty
 		}
 		candidates = append(candidates, named.Obj())
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		left, right := candidates[i], candidates[j]
-		if left.Pkg().Path() != right.Pkg().Path() {
-			return left.Pkg().Path() < right.Pkg().Path()
-		}
-		return left.Name() < right.Name()
-	})
 	return candidates
+}
+
+func (b *builder) moduleInterfaceImplementorCandidates(iface *types.Named) []*types.TypeName {
+	if iface == nil || iface.Obj() == nil || iface.Obj().Pkg() == nil {
+		return nil
+	}
+	packagesByPath := b.loadedPackagesByPath()
+	declarationPackage := packagesByPath[iface.Obj().Pkg().Path()]
+	if declarationPackage == nil || declarationPackage.Module == nil || declarationPackage.Module.Path == "" {
+		return nil
+	}
+	inputModule := b.api.Package.Module
+	if inputModule != nil && inputModule.Path == declarationPackage.Module.Path {
+		return nil
+	}
+
+	var candidates []*types.TypeName
+	for _, pkg := range packagesByPath {
+		if pkg.Module == nil || pkg.Module.Path != declarationPackage.Module.Path ||
+			!b.canReferenceImplementationPackage(pkg) {
+			continue
+		}
+		for _, name := range pkg.Types.Scope().Names() {
+			object, ok := pkg.Types.Scope().Lookup(name).(*types.TypeName)
+			if !ok || !object.Exported() {
+				continue
+			}
+			candidates = append(candidates, object)
+		}
+	}
+	return candidates
+}
+
+func (b *builder) loadedPackagesByPath() map[string]*packages.Package {
+	result := map[string]*packages.Package{}
+	var visit func(*packages.Package)
+	visit = func(pkg *packages.Package) {
+		if pkg == nil || result[pkg.PkgPath] != nil {
+			return
+		}
+		result[pkg.PkgPath] = pkg
+		for _, imported := range pkg.Imports {
+			visit(imported)
+		}
+	}
+	visit(b.api.Package)
+	return result
 }
 
 func (b *builder) canReferenceImplementationPackage(pkg *packages.Package) bool {

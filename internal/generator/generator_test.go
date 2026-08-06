@@ -432,15 +432,17 @@ func TestGenerateExternalInterfaceImplementationsAcrossDependencies(t *testing.T
 go 1.24
 
 require example.com/thirdparty v0.0.0
+require example.com/unrelated v0.0.0
 
 replace example.com/thirdparty => ./thirdparty
+replace example.com/unrelated => ./unrelated
 `
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(rootModule), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	externalDir := filepath.Join(dir, "thirdparty")
-	for _, subdir := range []string{"contracts", "factory", "impl"} {
+	for _, subdir := range []string{"contracts", "factory", "impl", "internal/secret"} {
 		if err := os.MkdirAll(filepath.Join(externalDir, subdir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -486,6 +488,26 @@ type Square struct {
 }
 
 func (value Square) Area() int { return value.Size * value.Size }
+
+type NotShape struct {
+	Value int
+}
+
+type GenericShape[T any] struct {
+	Value T
+}
+
+func (GenericShape[T]) Area() int { return 0 }
+
+type SquareAlias = Square
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "internal", "secret", "secret.go"), []byte(`package secret
+
+type Shape struct{}
+
+func (Shape) Area() int { return 0 }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -494,6 +516,7 @@ func (value Square) Area() int { return value.Size * value.Size }
 import (
 	"example.com/thirdparty/contracts"
 	"example.com/thirdparty/impl"
+	"example.com/thirdparty/internal/secret"
 )
 
 type hidden struct{}
@@ -506,14 +529,37 @@ func Shapes() map[string]contracts.Shape {
 		"embedded": impl.PointerEmbedded{},
 		"hidden": hidden{},
 		"pointerValue": &impl.PointerValue{Value: 4},
+		"secret": secret.Shape{},
 		"square": impl.Square{Size: 3},
 	}
 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-func Circle() *impl.Circle { return impl.NewCircle(1) }
-func PointerEmbedded() *impl.PointerEmbedded { return &impl.PointerEmbedded{} }
-func PointerValue() *impl.PointerValue { return &impl.PointerValue{Value: 1} }
-func Square() impl.Square { return impl.Square{Size: 1} }
+	unrelatedDir := filepath.Join(dir, "unrelated")
+	if err := os.MkdirAll(filepath.Join(unrelatedDir, "shape"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unrelatedDir, "go.mod"), []byte(`module example.com/unrelated
+
+go 1.24
+
+require example.com/thirdparty v0.0.0
+
+replace example.com/thirdparty => ../thirdparty
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unrelatedDir, "shape", "shape.go"), []byte(`package shape
+
+import "example.com/thirdparty/contracts"
+
+type Foreign struct{}
+
+func (Foreign) Area() int { return 0 }
+
+var _ contracts.Shape = Foreign{}
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -527,14 +573,10 @@ func Square() impl.Square { return impl.Square{Size: 1} }
 import (
 	"example.com/thirdparty/contracts"
 	"example.com/thirdparty/factory"
-	"example.com/thirdparty/impl"
+	_ "example.com/unrelated/shape"
 )
 
 func Shapes() map[string]contracts.Shape { return factory.Shapes() }
-func Circle() *impl.Circle { return factory.Circle() }
-func PointerEmbedded() *impl.PointerEmbedded { return factory.PointerEmbedded() }
-func PointerValue() *impl.PointerValue { return factory.PointerValue() }
-func Square() impl.Square { return factory.Square() }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -568,6 +610,11 @@ func Square() impl.Square { return factory.Square() }
 	}
 	if strings.Contains(externalDart, "int area(") {
 		t.Fatalf("third-party interface methods are outside the input API and must remain marker-only:\n%s", externalDart)
+	}
+	for _, excluded := range []string{"NotShape", "GenericShape", "SquareAlias", "Foreign", "Secret"} {
+		if strings.Contains(externalDart, excluded) {
+			t.Fatalf("ineligible third-party type %s entered the interface union:\n%s", excluded, externalDart)
+		}
 	}
 	centralDart := mustRead(t, dartOutput)
 	for _, expected := range []string{
