@@ -149,9 +149,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			}
 		}
 	}
-	if err := b.mapDependencyImplementorMethods(); err != nil {
-		return nil, b.warnings, err
-	}
+	b.mapDependencyImplementorMethods()
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
 	b.selectInterfaceToStringMethods()
 	if err := b.propagateInterfaceMethodShapes(); err != nil {
@@ -204,7 +202,7 @@ func (b *builder) selectValueToStringMethods() {
 // can provide a concrete object's string representation. Dependency packages
 // do not carry parser directives, so their methods use the ordinary sync call
 // mode and the existing eligibility checks decide the final Dart override.
-func (b *builder) mapDependencyImplementorMethods() error {
+func (b *builder) mapDependencyImplementorMethods() {
 	namedTypes := make([]*types.Named, 0, len(b.dependencyMethods))
 	for named := range b.dependencyMethods {
 		namedTypes = append(namedTypes, named)
@@ -254,7 +252,6 @@ func (b *builder) mapDependencyImplementorMethods() error {
 			}
 		}
 	}
-	return nil
 }
 
 func isStringRepresentationMethod(name string) bool {
