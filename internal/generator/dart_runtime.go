@@ -36,8 +36,12 @@ final class FgbGoErrors implements Exception {
 /// map type, sends a plain list of messages.
 FgbGoErrors? _fgbGoErrorsFrom(Object? details) {
   Object? errors = details;
-  if (details is Map) errors = details['errors'];
-  if (errors is! List) return null;
+  if (details is Map) {
+    errors = details['errors'];
+  }
+  if (errors is! List) {
+    return null;
+  }
   return FgbGoErrors(
     List<String>.unmodifiable(errors.map((Object? error) => '$error')),
   );
@@ -73,24 +77,38 @@ abstract interface class GoAbsent {}
 /// Dart compares List and Map by identity, which contradicts Go value
 /// semantics: two structs decoded from the same wire bytes must be equal.
 bool fgbInternalDeepEquals(Object? left, Object? right) {
-  if (identical(left, right)) return true;
-  if (left == null || right == null) return false;
+  if (identical(left, right)) {
+    return true;
+  }
+  if (left == null || right == null) {
+    return false;
+  }
   if (left is List && right is List) {
-    if (left.length != right.length) return false;
+    if (left.length != right.length) {
+      return false;
+    }
     for (var index = 0; index < left.length; index++) {
-      if (!fgbInternalDeepEquals(left[index], right[index])) return false;
+      if (!fgbInternalDeepEquals(left[index], right[index])) {
+        return false;
+      }
     }
     return true;
   }
   if (left is Map && right is Map) {
-    if (left.length != right.length) return false;
+    if (left.length != right.length) {
+      return false;
+    }
     // A scalar key can be looked up directly, which keeps this linear. A
     // generated class key also works, because its own == and hashCode are
     // structural. Anything else falls back to pairwise matching.
     if (left.keys.every(_fgbLooksUpByValue)) {
       for (final entry in left.entries) {
-        if (!right.containsKey(entry.key)) return false;
-        if (!fgbInternalDeepEquals(entry.value, right[entry.key])) return false;
+        if (!right.containsKey(entry.key)) {
+          return false;
+        }
+        if (!fgbInternalDeepEquals(entry.value, right[entry.key])) {
+          return false;
+        }
       }
       return true;
     }
@@ -101,7 +119,9 @@ bool fgbInternalDeepEquals(Object? left, Object? right) {
             fgbInternalDeepEquals(leftEntry.key, rightEntry.key) &&
             fgbInternalDeepEquals(leftEntry.value, rightEntry.value),
       );
-      if (index < 0) return false;
+      if (index < 0) {
+        return false;
+      }
       unmatched.removeAt(index);
     }
     return true;
@@ -116,7 +136,9 @@ bool _fgbLooksUpByValue(Object? key) =>
 /// the generated hashCode uses. Map entries are combined commutatively so
 /// insertion order cannot change the result.
 int fgbInternalDeepHash(Object? value) {
-  if (value == null) return 0;
+  if (value == null) {
+    return 0;
+  }
   if (value is List) {
     var result = 1;
     for (final item in value) {
@@ -163,11 +185,15 @@ final class _FgbWriter {
 
   void alignment(int size) {
     final padding = (size - length % size) % size;
-    if (padding != 0) bytes(List<int>.filled(padding, 0));
+    if (padding != 0) {
+      bytes(List<int>.filled(padding, 0));
+    }
   }
 
   void size(int value) {
-    if (value < 0) throw FormatException('negative message size');
+    if (value < 0) {
+      throw FormatException('negative message size');
+    }
     if (value < 254) {
       byte(value);
     } else if (value <= 0xffff) {
@@ -210,12 +236,16 @@ final class _FgbReader {
   int get remaining => _bytes.length - _offset;
 
   int byte() {
-    if (_offset >= _bytes.length) throw const FormatException('unexpected end of message');
+    if (_offset >= _bytes.length) {
+      throw const FormatException('unexpected end of message');
+    }
     return _bytes[_offset++];
   }
 
   Uint8List bytes(int length) {
-    if (length < 0 || remaining < length) throw const FormatException('message is truncated');
+    if (length < 0 || remaining < length) {
+      throw const FormatException('message is truncated');
+    }
     final result = Uint8List.sublistView(_bytes, _offset, _offset + length);
     _offset += length;
     return result;
@@ -223,13 +253,17 @@ final class _FgbReader {
 
   void alignment(int size) {
     final padding = (size - _offset % size) % size;
-    if (remaining < padding) throw const FormatException('message alignment is truncated');
+    if (remaining < padding) {
+      throw const FormatException('message alignment is truncated');
+    }
     _offset += padding;
   }
 
   int size() {
     final marker = byte();
-    if (marker < 254) return marker;
+    if (marker < 254) {
+      return marker;
+    }
     if (marker == 254) {
       final data = ByteData.sublistView(bytes(2));
       return data.getUint16(0, Endian.host);
@@ -339,15 +373,21 @@ final class _FgbCodec {
     final flag = reader.byte();
     if (flag == 0) {
       final result = reader.value();
-      if (reader.hasRemaining) throw const FormatException('result envelope has trailing bytes');
+      if (reader.hasRemaining) {
+        throw const FormatException('result envelope has trailing bytes');
+      }
       return result;
     }
     if (flag == 1) {
       final code = reader.value();
       final message = reader.value();
       final details = reader.value();
-      if (reader.hasRemaining) throw const FormatException('error envelope has trailing bytes');
-      if (code is! String) throw const FormatException('error code is not a String');
+      if (reader.hasRemaining) {
+        throw const FormatException('error envelope has trailing bytes');
+      }
+      if (code is! String) {
+        throw const FormatException('error code is not a String');
+      }
       if (message != null && message is! String) {
         throw const FormatException('error message is not a String or null');
       }
@@ -585,15 +625,21 @@ final class _FgbArena {
 
   ffi.Pointer<T> allocate<T extends ffi.NativeType>(int bytes) {
     final pointer = bridge._bindings.alloc(bytes);
-    if (pointer == ffi.nullptr) throw StateError('fgb_alloc returned null');
-    if (bytes > 0) pointer.cast<ffi.Uint8>().asTypedList(bytes).fillRange(0, bytes, 0);
+    if (pointer == ffi.nullptr) {
+      throw StateError('fgb_alloc returned null');
+    }
+    if (bytes > 0) {
+      pointer.cast<ffi.Uint8>().asTypedList(bytes).fillRange(0, bytes, 0);
+    }
     _allocations.add(pointer);
     return pointer.cast<T>();
   }
 
   ffi.Pointer<ffi.Uint8> bytes(List<int> value) {
     final pointer = allocate<ffi.Uint8>(value.isEmpty ? 1 : value.length);
-    if (value.isNotEmpty) pointer.asTypedList(value.length).setAll(0, value);
+    if (value.isNotEmpty) {
+      pointer.asTypedList(value.length).setAll(0, value);
+    }
     return pointer;
   }
 
@@ -609,13 +655,17 @@ final class __FGB_BRIDGE_CLASS__ {
   __FGB_BRIDGE_CLASS__._(this._bindings, this._libraryPath)
       : _handleFinalizer = ffi.NativeFinalizer(_bindings.dropAddress) {
     final status = _bindings.init(ffi.NativeApi.initializeApiDLData);
-    if (status != 0) throw StateError('Dart API DL initialization failed (status $status)');
+    if (status != 0) {
+      throw StateError('Dart API DL initialization failed (status $status)');
+    }
     // Go notifies this port when the last Go copy of a DartOpaque value was
     // collected; the entry keeping the Dart object alive is then dropped. The
     // port must not keep the isolate alive on its own.
     _dartOpaqueReleases.keepIsolateAlive = false;
     _dartOpaqueReleases.handler = (Object? message) {
-      if (message is int) _dartOpaqueObjects.remove(message);
+      if (message is int) {
+        _dartOpaqueObjects.remove(message);
+      }
     };
     // Go posts callback invocation requests here whenever an //fgb:async call
     // invokes a Dart-supplied closure; the goroutine parks until the reply is
@@ -658,9 +708,13 @@ final class __FGB_BRIDGE_CLASS__ {
   }
 
   static ffi.DynamicLibrary _openDefaultLibrary() {
-    if (Platform.isMacOS || Platform.isIOS) return ffi.DynamicLibrary.process();
+    if (Platform.isMacOS || Platform.isIOS) {
+      return ffi.DynamicLibrary.process();
+    }
     const libraryName = __FGB_LIBRARY_NAME__;
-    if (Platform.isWindows) return ffi.DynamicLibrary.open('$libraryName.dll');
+    if (Platform.isWindows) {
+      return ffi.DynamicLibrary.open('$libraryName.dll');
+    }
     return ffi.DynamicLibrary.open('lib$libraryName.so');
   }
 
@@ -682,7 +736,9 @@ final class __FGB_BRIDGE_CLASS__ {
   /// handle, so a call may pass one sink through several parameters.
   int fgbInternalRegisterStreamSink(StreamSink<dynamic> sink, void Function(Object? raw) add) {
     final existing = _streamHandles[sink];
-    if (existing != null) return existing;
+    if (existing != null) {
+      return existing;
+    }
     final handle = ++_streamNextHandle;
     _streamTargets[handle] = _FgbStreamTarget(sink, add);
     _streamHandles[sink] = handle;
@@ -699,9 +755,13 @@ final class __FGB_BRIDGE_CLASS__ {
   /// reports fgb.ErrStreamClosed to whoever keeps adding values.
   void fgbInternalReleaseStreamSink(int handle, {bool notifyGo = true}) {
     final target = _streamTargets.remove(handle);
-    if (target == null) return;
+    if (target == null) {
+      return;
+    }
     _streamHandles.remove(target.sink);
-    if (notifyGo) _bindings.streamCancel(handle);
+    if (notifyGo) {
+      _bindings.streamCancel(handle);
+    }
   }
 
   /// Internal: wires a call that owns its stream. Cancelling the subscription
@@ -710,18 +770,24 @@ final class __FGB_BRIDGE_CLASS__ {
   void fgbInternalStartStream<T>(StreamController<T> controller, Future<void> call) {
     final handle = _streamHandles[controller.sink];
     controller.onCancel = () {
-      if (handle != null) fgbInternalReleaseStreamSink(handle);
+      if (handle != null) {
+        fgbInternalReleaseStreamSink(handle);
+      }
       // The subscription is gone, so nothing will ever read from this
       // controller again: close it so its "done" future completes instead of
       // leaving an open controller behind. Closing from inside onCancel is
       // deferred to a microtask - returning close()'s future here would wait
       // on the very cancellation that is still in progress.
       scheduleMicrotask(() {
-        if (!controller.isClosed) controller.close();
+        if (!controller.isClosed) {
+          controller.close();
+        }
       });
     };
     call.then((_) {}, onError: (Object error, StackTrace stack) {
-      if (handle != null) fgbInternalReleaseStreamSink(handle);
+      if (handle != null) {
+        fgbInternalReleaseStreamSink(handle);
+      }
       if (!controller.isClosed) {
         controller.addError(error, stack);
         controller.close();
@@ -736,14 +802,22 @@ final class __FGB_BRIDGE_CLASS__ {
     } else if (message is List<int>) {
       raw = Uint8List.fromList(message);
     }
-    if (raw == null) return;
+    if (raw == null) {
+      return;
+    }
     final decoded = _FgbReader(raw).value();
-    if (decoded is! List || decoded.length != 3) return;
+    if (decoded is! List || decoded.length != 3) {
+      return;
+    }
     final handle = decoded[0];
     final kind = decoded[1];
-    if (handle is! int || kind is! int) return;
+    if (handle is! int || kind is! int) {
+      return;
+    }
     final target = _streamTargets[handle];
-    if (target == null) return;
+    if (target == null) {
+      return;
+    }
     switch (kind) {
       case 0:
         target.add(decoded[2]);
@@ -793,13 +867,19 @@ final class __FGB_BRIDGE_CLASS__ {
     } else if (message is List<int>) {
       request = Uint8List.fromList(message);
     }
-    if (request == null) return;
+    if (request == null) {
+      return;
+    }
     final decoded = _FgbReader(request).value();
-    if (decoded is! List || decoded.length != 3) return;
+    if (decoded is! List || decoded.length != 3) {
+      return;
+    }
     final id = decoded[0];
     final handle = decoded[1];
     final arguments = decoded[2];
-    if (id is! int) return;
+    if (id is! int) {
+      return;
+    }
     if (handle is! int || arguments is! List) {
       _deliverCallbackReply(id)(
         _encodeCallbackReply(<Object?>[1, 'callback_error', 'malformed callback request']),
@@ -854,7 +934,9 @@ final class __FGB_BRIDGE_CLASS__ {
 
   Object? fgbInvokeCstSync(int method, ffi.Pointer<ffi.Void> args) {
     final pointer = _bindings.cst(method, args);
-    if (pointer == ffi.nullptr) throw StateError('fgb_cst returned null');
+    if (pointer == ffi.nullptr) {
+      throw StateError('fgb_cst returned null');
+    }
     try {
       return _decodeDcoEnvelope(_decodeDco(pointer.cast<_FgbDcoObject>().ref));
     } finally {
@@ -919,11 +1001,15 @@ final class __FGB_BRIDGE_CLASS__ {
   }
 
   Object? _decodeDcoEnvelope(Object? raw) {
-    if (raw == -1) throw StateError('the native side could not allocate the reply');
+    if (raw == -1) {
+      throw StateError('the native side could not allocate the reply');
+    }
     if (raw is! List || raw.length < 2 || raw.first is! int) {
       throw const FormatException('invalid DCO envelope');
     }
-    if (raw.first == 0) return raw[1];
+    if (raw.first == 0) {
+      return raw[1];
+    }
     if (raw.first == 1 && raw.length >= 4) {
       throw FgbPlatformException(
         raw[1] as String,
@@ -946,7 +1032,9 @@ final class __FGB_BRIDGE_CLASS__ {
 
   Uint8List _syncBytes(Uint8List request) {
     final pointer = _bindings.alloc(request.length);
-    if (pointer == ffi.nullptr) throw StateError('fgb_alloc returned null');
+    if (pointer == ffi.nullptr) {
+      throw StateError('fgb_alloc returned null');
+    }
     try {
       pointer.cast<ffi.Uint8>().asTypedList(request.length).setAll(0, request);
       final result = _bindings.call(pointer, request.length);
@@ -954,10 +1042,14 @@ final class __FGB_BRIDGE_CLASS__ {
         throw StateError('fgb returned an invalid buffer');
       }
       try {
-        if (result.len == 0) return Uint8List(0);
+        if (result.len == 0) {
+          return Uint8List(0);
+        }
         return Uint8List.fromList(result.data.asTypedList(result.len));
       } finally {
-        if (result.data != ffi.nullptr) _bindings.free(result.data.cast());
+        if (result.data != ffi.nullptr) {
+          _bindings.free(result.data.cast());
+        }
       }
     } finally {
       _bindings.free(pointer);
@@ -979,8 +1071,12 @@ final class __FGB_BRIDGE_CLASS__ {
         _bindings.free(pointer);
       }
       final message = await port.first;
-      if (message is Uint8List) return message;
-      if (message is List<int>) return Uint8List.fromList(message);
+      if (message is Uint8List) {
+        return message;
+      }
+      if (message is List<int>) {
+        return Uint8List.fromList(message);
+      }
       throw StateError('fgb_async returned an invalid message');
     } finally {
       port.close();
