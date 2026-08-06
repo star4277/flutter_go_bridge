@@ -5,6 +5,7 @@ ifeq ($(strip $(FLUTTER_GO_BRIDGE_VERSION)),)
 override FLUTTER_GO_BRIDGE_VERSION := v0.0.1-snapshot
 endif
 CGO_ENABLED ?= 0
+DOCS_BUN ?= bun
 
 BUILD_ROOT ?= build
 # Final archives and uncompressed binaries are written directly to build/.
@@ -47,7 +48,7 @@ ARCHIVE_OUTPUT = $(DIST_DIR)/$(OUTPUT_BASENAME).$(ARCHIVE_EXT)
 
 .DEFAULT_GOAL := help
 
-.PHONY: all windows linux macos darwin openharmony clean help list package-one $(ALL_RELEASE_TARGETS)
+.PHONY: all windows linux macos darwin openharmony clean help list package-one docs docs-dev docs-build docs-preview dev build preview $(ALL_RELEASE_TARGETS)
 
 all: $(ALL_RELEASE_TARGETS)
 
@@ -79,6 +80,24 @@ openharmony-%:
 .PHONY: darwin-amd64 darwin-arm64
 darwin-amd64: macos-amd64
 darwin-arm64: macos-arm64
+
+docs:
+	cd docs && $(DOCS_BUN) install
+
+docs-dev: docs
+	cd docs && $(DOCS_BUN) run dev
+
+docs-build: docs
+	cd docs && $(DOCS_BUN) run build
+
+docs-preview: docs-build
+	cd docs && $(DOCS_BUN) run preview
+
+dev: docs-dev
+
+build: docs-build
+
+preview: docs-preview
 
 package-one:
 ifeq ($(OS),Windows_NT)
@@ -137,3 +156,6 @@ help:
 	@echo "FLUTTER_GO_BRIDGE_VERSION=v1.2.3 make all  Override the release version"
 	@echo "make list                       List all release targets"
 	@echo "make clean                      Remove build outputs"
+	@echo "make docs dev                   Install docs deps and start the VitePress dev server"
+	@echo "make docs build                 Install docs deps and build the docs site"
+	@echo "make docs preview               Build docs, then start the production preview"
