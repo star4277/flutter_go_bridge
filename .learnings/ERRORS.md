@@ -38,6 +38,71 @@ When a continuation cannot find a previously running cell, rerun the idempotent 
 
 ---
 
+## [ERR-20260807-001] cgo-cherry-pick-conflict
+
+**Logged**: 2026-08-07T06:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The remote cgo feature commit could not be cherry-picked cleanly because current main has newer generator changes.
+
+### Error
+```
+CONFLICT (content): Merge conflict in internal/generator/builder.go
+```
+
+### Context
+- Attempted `git cherry-pick --no-commit 0e3ec57` on the migration branch.
+- Conflicts also affected model, renderer, tests, README, and ignored learnings.
+
+### Suggested Fix
+Port the behavior in focused patches while preserving current main's newer codec and type mappings.
+
+### Metadata
+- Reproducible: yes
+- Related Files: internal/generator/builder.go, internal/generator/render_go.go
+
+### Resolution
+
+- **Resolved**: 2026-08-07T06:35:00+08:00
+- **Notes**: Abandoned the conflicted attempt and migrated the cgo behavior incrementally.
+
+---
+
+## [ERR-20260807-002] missing-example-directory
+
+**Logged**: 2026-08-07T06:30:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The repository has no top-level `example` directory for the feature workflow's optional example validation.
+
+### Error
+```
+Get-ChildItem : Cannot find path 'D:\Projects\c\flutter_go_bridge\example'
+```
+
+### Context
+- The repository keeps reusable application content under `template/` instead.
+
+### Suggested Fix
+Use the generated cgo integration fixture under ignored `build/` output for generation and compilation validation.
+
+### Metadata
+- Reproducible: yes
+- Related Files: template/
+
+### Resolution
+
+- **Resolved**: 2026-08-07T06:38:00+08:00
+- **Notes**: CLI generation, Go build, idempotency, and Dart analysis were run against `build/cgo-integration`.
+
+---
+
 ## [ERR-20260802-014] generator-test-polluted-worktree
 
 **Logged**: 2026-08-02T00:00:00+08:00
