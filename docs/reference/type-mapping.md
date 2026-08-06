@@ -11,7 +11,7 @@ whether a parameter is nullable or required and whether a function returns `Futu
 | `bool` | `bool` | Direct mapping |
 | `string` | `String` | Direct mapping |
 | `int8`<br>`int16`<br>`int32`<br>`int64`<br>`int` | `int` | Dart-to-Go decoding checks the signed target range |
-| `uint8`<br>`uint16`<br>`uint32` | `int` | Negative and out-of-range values are rejected |
+| `uint8`<br>`uint16`<br>`uint32` | `int` | Full unsigned range in both directions; negative and out-of-range input is rejected |
 | `uint64`<br>`uint`<br>`uintptr` | `BigInt` | Preserves unsigned values and platform-width semantics |
 | `float32`<br>`float64` | `double` | `float32` input is converted to 32-bit precision in Go |
 

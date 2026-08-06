@@ -11,7 +11,7 @@
 | `bool` | `bool` | 直接映射 |
 | `string` | `String` | 直接映射 |
 | `int8`<br>`int16`<br>`int32`<br>`int64`<br>`int` | `int` | Dart → Go 时按目标 Go 类型做有符号范围检查 |
-| `uint8`<br>`uint16`<br>`uint32` | `int` | Dart → Go 时拒绝负数和超出目标位宽的值 |
+| `uint8`<br>`uint16`<br>`uint32` | `int` | 两个方向都保留完整无符号取值范围；Dart → Go 时拒绝负数和超出目标位宽的值 |
 | `uint64`<br>`uint`<br>`uintptr` | `BigInt` | 使用无符号整数语义，避免 Dart `int` 范围或平台位宽差异 |
 | `float32`<br>`float64` | `double` | `float32` 输入在 Go 端转换为 32 位精度 |
 
