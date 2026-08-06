@@ -10,6 +10,15 @@ import (
 	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 )
 
+func containsError(errors []error, want string) bool {
+	for _, err := range errors {
+		if err != nil && strings.Contains(err.Error(), want) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGenerateStableABIAndDartAPIDL(t *testing.T) {
 	input := filepath.Join("..", "parser", "testdata", "sample")
 	api, err := bridgeparser.Parse(bridgeparser.Options{Input: input, BaseDir: "."})
@@ -141,6 +150,17 @@ func Fallback(value map[string]int) map[string]int { return value }
 	}
 
 	goSource := mustRead(t, goOutput)
+	secondGoOutput := filepath.Join(dir, "bridge_generated_second.go")
+	secondDartOutput := filepath.Join(dir, "dart_second", "bridge_generated.dart")
+	if _, err := Generate(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: secondGoOutput, DartOutput: secondDartOutput,
+		LibraryName: "external_interface", DartEntrypointClassName: "ExternalInterfaceBridge", StopOnError: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if second := mustRead(t, secondGoOutput); second != goSource {
+		t.Fatal("dependency method generation is not deterministic across runs")
+	}
 	for _, expected := range []string{
 		"int64_t count;", "int64_t* optional;", "fgbDispatchCst", "fgbDcoEncode",
 		`case "Fallback":`, "//export fgb_cst", "//export fgb_dco_free",
@@ -432,15 +452,17 @@ func TestGenerateExternalInterfaceImplementationsAcrossDependencies(t *testing.T
 go 1.24
 
 require example.com/thirdparty v0.0.0
+require example.com/unrelated v0.0.0
 
 replace example.com/thirdparty => ./thirdparty
+replace example.com/unrelated => ./unrelated
 `
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(rootModule), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	externalDir := filepath.Join(dir, "thirdparty")
-	for _, subdir := range []string{"contracts", "factory", "impl"} {
+	for _, subdir := range []string{"contracts", "factory", "impl", "otherimpl", "internal/secret"} {
 		if err := os.MkdirAll(filepath.Join(externalDir, subdir), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -464,10 +486,14 @@ type Circle struct {
 
 func NewCircle(radius int) *Circle { return &Circle{radius: radius} }
 func (*Circle) Area() int { return 0 }
+func (*Circle) String() string { return "circle" }
+func (*Circle) ToString(prefix ...string) string { return "circle" }
 
 type Base struct {
 	Value int
 }
+
+func (Base) ToString() string { return "embedded" }
 
 type PointerEmbedded struct {
 	*Base
@@ -486,6 +512,41 @@ type Square struct {
 }
 
 func (value Square) Area() int { return value.Size * value.Size }
+func (value Square) ToString() string { return "square-custom" }
+func (value Square) String() string { return "square-stringer" }
+
+func (value *PointerValue) MarshalJSON() ([]byte, error) { return []byte("pointer"), nil }
+
+type NotShape struct {
+	Value int
+}
+
+type GenericShape[T any] struct {
+	Value T
+}
+
+func (GenericShape[T]) Area() int { return 0 }
+
+type SquareAlias = Square
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "internal", "secret", "secret.go"), []byte(`package secret
+
+type Shape struct{}
+
+func (Shape) Area() int { return 0 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(externalDir, "otherimpl", "other.go"), []byte(`package otherimpl
+
+type Triangle struct {
+	Edge int
+}
+
+func (Triangle) Area() int { return 0 }
+func (Triangle) String() string { return "triangle" }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -494,6 +555,8 @@ func (value Square) Area() int { return value.Size * value.Size }
 import (
 	"example.com/thirdparty/contracts"
 	"example.com/thirdparty/impl"
+	"example.com/thirdparty/internal/secret"
+	"example.com/thirdparty/otherimpl"
 )
 
 type hidden struct{}
@@ -506,14 +569,38 @@ func Shapes() map[string]contracts.Shape {
 		"embedded": impl.PointerEmbedded{},
 		"hidden": hidden{},
 		"pointerValue": &impl.PointerValue{Value: 4},
+		"secret": secret.Shape{},
 		"square": impl.Square{Size: 3},
+		"triangle": otherimpl.Triangle{Edge: 5},
 	}
 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-func Circle() *impl.Circle { return impl.NewCircle(1) }
-func PointerEmbedded() *impl.PointerEmbedded { return &impl.PointerEmbedded{} }
-func PointerValue() *impl.PointerValue { return &impl.PointerValue{Value: 1} }
-func Square() impl.Square { return impl.Square{Size: 1} }
+	unrelatedDir := filepath.Join(dir, "unrelated")
+	if err := os.MkdirAll(filepath.Join(unrelatedDir, "shape"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unrelatedDir, "go.mod"), []byte(`module example.com/unrelated
+
+go 1.24
+
+require example.com/thirdparty v0.0.0
+
+replace example.com/thirdparty => ../thirdparty
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(unrelatedDir, "shape", "shape.go"), []byte(`package shape
+
+import "example.com/thirdparty/contracts"
+
+type Foreign struct{}
+
+func (Foreign) Area() int { return 0 }
+
+var _ contracts.Shape = Foreign{}
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -527,14 +614,10 @@ func Square() impl.Square { return impl.Square{Size: 1} }
 import (
 	"example.com/thirdparty/contracts"
 	"example.com/thirdparty/factory"
-	"example.com/thirdparty/impl"
+	_ "example.com/unrelated/shape"
 )
 
 func Shapes() map[string]contracts.Shape { return factory.Shapes() }
-func Circle() *impl.Circle { return factory.Circle() }
-func PointerEmbedded() *impl.PointerEmbedded { return factory.PointerEmbedded() }
-func PointerValue() *impl.PointerValue { return factory.PointerValue() }
-func Square() impl.Square { return factory.Square() }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -545,11 +628,15 @@ func Square() impl.Square { return factory.Square() }
 	}
 	goOutput := filepath.Join(dir, "bridge_generated.go")
 	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
-	if _, err := Generate(api, config.Resolved{
+	result, err := Generate(api, config.Resolved{
 		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
 		LibraryName: "external_interface", DartEntrypointClassName: "ExternalInterfaceBridge", StopOnError: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !containsError(result.Warnings, "dependency method Circle.ToString was not bridged") {
+		t.Fatalf("unsupported dependency ToString should warn and fall back to String: %v", result.Warnings)
 	}
 
 	externalDart := mustRead(t, filepath.Join(dir, "dart", "_generated.dart"))
@@ -560,14 +647,27 @@ func Square() impl.Square { return factory.Square() }
 		"final class PointerValue implements Shape {",
 		"final class ShapeOpaque extends GoOpaque implements Shape {",
 		"final class Square implements Shape {",
+		"final class Triangle implements Shape {",
 		"final int size;",
+		"String toString()",
 	} {
 		if !strings.Contains(externalDart, expected) {
 			t.Fatalf("external interface mapping missing %q:\n%s", expected, externalDart)
 		}
 	}
+	if count := strings.Count(externalDart, "String toString() {"); count != 5 {
+		t.Fatalf("each discovered implementation should receive its selected string representation, got %d:\n%s", count, externalDart)
+	}
+	if !strings.Contains(externalDart, "String asString() {") {
+		t.Fatalf("Square.String should remain callable after ToString takes the override:\n%s", externalDart)
+	}
 	if strings.Contains(externalDart, "int area(") {
 		t.Fatalf("third-party interface methods are outside the input API and must remain marker-only:\n%s", externalDart)
+	}
+	for _, excluded := range []string{"NotShape", "GenericShape", "SquareAlias", "Foreign", "Secret"} {
+		if strings.Contains(externalDart, excluded) {
+			t.Fatalf("ineligible third-party type %s entered the interface union:\n%s", excluded, externalDart)
+		}
 	}
 	centralDart := mustRead(t, dartOutput)
 	for _, expected := range []string{
@@ -587,6 +687,19 @@ func Square() impl.Square { return factory.Square() }
 	}
 
 	goSource := mustRead(t, goOutput)
+	for _, expected := range []string{
+		"receiver.String()",
+		"receiver.ToString()",
+		"receiver.MarshalJSON()",
+		`"dependency:example.com/thirdparty/impl:Circle.String"`,
+		`"dependency:example.com/thirdparty/impl:Square.ToString"`,
+		`"dependency:example.com/thirdparty/impl:PointerValue.MarshalJSON"`,
+		`"dependency:example.com/thirdparty/otherimpl:Triangle.String"`,
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated dependency method dispatch missing %q:\n%s", expected, goSource)
+		}
+	}
 	for _, expected := range []string{
 		`"example.com/thirdparty/contracts"`,
 		`"example.com/thirdparty/impl"`,

@@ -30,16 +30,17 @@ const (
 )
 
 type builder struct {
-	api              *model.API
-	config           config.Resolved
-	unit             *unit
-	typeCache        map[types.Type]*wireType
-	structClasses    map[*types.Named]structClass
-	namedModels      map[*types.Named]*namedModel
-	structModels     map[*types.Named]*structModel
-	opaqueModels     map[*types.Named]*opaqueModel
-	syntheticOpaques map[string]*opaqueModel
-	interfaceModels  map[*types.Named]*interfaceModel
+	api               *model.API
+	config            config.Resolved
+	unit              *unit
+	typeCache         map[types.Type]*wireType
+	structClasses     map[*types.Named]structClass
+	namedModels       map[*types.Named]*namedModel
+	structModels      map[*types.Named]*structModel
+	opaqueModels      map[*types.Named]*opaqueModel
+	syntheticOpaques  map[string]*opaqueModel
+	interfaceModels   map[*types.Named]*interfaceModel
+	dependencyMethods map[*types.Named]bool
 	// Dart has one library namespace across the mutually importing generated
 	// source files. Reserve input-package names up front, then disambiguate
 	// reachable external declarations without renaming the user's own types.
@@ -92,6 +93,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		opaqueModels:       map[*types.Named]*opaqueModel{},
 		syntheticOpaques:   map[string]*opaqueModel{},
 		interfaceModels:    map[*types.Named]*interfaceModel{},
+		dependencyMethods:  map[*types.Named]bool{},
 		dartTypeNames:      map[string]*types.Named{},
 		dartNames:          map[*types.Named]string{},
 		syntheticDartNames: map[string]bool{},
@@ -147,6 +149,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			}
 		}
 	}
+	b.mapDependencyImplementorMethods()
 	sort.SliceStable(b.unit.Types, func(i, j int) bool { return b.unit.Types[i].ID < b.unit.Types[j].ID })
 	b.selectInterfaceToStringMethods()
 	if err := b.propagateInterfaceMethodShapes(); err != nil {
@@ -189,6 +192,85 @@ func (b *builder) selectValueToStringMethods() {
 			b.normalizeNamedExtensionMethods(named)
 		}
 	}
+	for _, opaque := range b.unit.Opaques {
+		b.selectToStringForMethods(opaque.GoName, opaque.Methods)
+		b.disambiguateSelectedMethods(opaque.GoName, opaque.Methods, true)
+	}
+}
+
+// mapDependencyImplementorMethods exposes the small set of Go methods that
+// can provide a concrete object's string representation. Dependency packages
+// do not carry parser directives, so their methods use the ordinary sync call
+// mode and the existing eligibility checks decide the final Dart override.
+func (b *builder) mapDependencyImplementorMethods() {
+	namedTypes := make([]*types.Named, 0, len(b.dependencyMethods))
+	for named := range b.dependencyMethods {
+		namedTypes = append(namedTypes, named)
+	}
+	sort.Slice(namedTypes, func(i, j int) bool {
+		left, right := namedTypes[i].Obj(), namedTypes[j].Obj()
+		if left.Pkg().Path() != right.Pkg().Path() {
+			return left.Pkg().Path() < right.Pkg().Path()
+		}
+		return left.Name() < right.Name()
+	})
+	for _, named := range namedTypes {
+		methodSet := types.NewMethodSet(types.NewPointer(named))
+		for index := 0; index < methodSet.Len(); index++ {
+			method, ok := methodSet.At(index).Obj().(*types.Func)
+			if !ok || method == nil || !method.Exported() || !isStringRepresentationMethod(method.Name()) {
+				continue
+			}
+			signature := method.Type().(*types.Signature)
+			source := &model.Callable{
+				Func: method, Signature: signature, Receiver: named,
+				PointerRecv: methodReceiverIsPointer(method),
+				DartName:    names.LowerCamel(method.Name()), Mode: model.CallModeSync,
+			}
+			call, err := b.mapCallable(source)
+			if err != nil {
+				b.warnings = append(b.warnings, fmt.Errorf("dependency method %s.%s was not bridged: %w", named.Obj().Name(), method.Name(), err))
+				continue
+			}
+			call.WireName = dependencyMethodWireName(named, method.Name())
+			call.ID = len(b.unit.Calls)
+			call.Codec = preferredCodecForCall(call, b.unit.codecSupport)
+			b.unit.Calls = append(b.unit.Calls, call)
+			switch call.Receiver.Kind {
+			case kindOpaque:
+				b.disambiguateMethod(call, call.Receiver.Opaque.Methods)
+				call.Receiver.Opaque.Methods = append(call.Receiver.Opaque.Methods, call)
+			case kindStruct:
+				b.disambiguateMethod(call, call.Receiver.Struct.Methods)
+				call.Receiver.Struct.Methods = append(call.Receiver.Struct.Methods, call)
+			}
+		}
+	}
+}
+
+func isStringRepresentationMethod(name string) bool {
+	switch name {
+	case "ToString", "String", "MarshalJSON":
+		return true
+	default:
+		return false
+	}
+}
+
+func methodReceiverIsPointer(method *types.Func) bool {
+	if method == nil {
+		return false
+	}
+	signature, _ := method.Type().(*types.Signature)
+	if signature == nil || signature.Recv() == nil {
+		return false
+	}
+	_, pointer := types.Unalias(signature.Recv().Type()).(*types.Pointer)
+	return pointer
+}
+
+func dependencyMethodWireName(named *types.Named, method string) string {
+	return fmt.Sprintf("dependency:%s:%s.%s", named.Obj().Pkg().Path(), named.Obj().Name(), method)
 }
 
 // Extension types cannot declare members inherited from Object, including
@@ -1718,8 +1800,8 @@ func (b *builder) mapInterfaceMethod(owner *types.Named, method *types.Func, dir
 
 // collectImplementors finds every bridged concrete type that satisfies the
 // interface. Input interfaces preserve source declaration order for wire
-// compatibility. Dependency interfaces use public-API reachability and stable
-// package path plus type name tags.
+// compatibility. Dependency interfaces use public-API reachability plus
+// module-local discovery and stable package path plus type name tags.
 func (b *builder) collectImplementors(iface *types.Named, declaration *interfaceModel) error {
 	declared := iface.Underlying().(*types.Interface)
 	candidates := b.interfaceImplementorCandidates(iface)
@@ -1742,6 +1824,9 @@ func (b *builder) collectImplementors(iface *types.Named, declaration *interface
 		pointerImplements := types.Implements(types.NewPointer(named), declared)
 		if !valueImplements && !pointerImplements {
 			continue
+		}
+		if iface.Obj().Pkg() != b.api.Package.Types && named.Obj().Pkg() != b.api.Package.Types {
+			b.dependencyMethods[named] = true
 		}
 		class := b.classifyStruct(named)
 		var mapped *wireType
@@ -1814,10 +1899,33 @@ func (b *builder) interfaceImplementorCandidates(iface *types.Named) []*types.Ty
 		return candidates
 	}
 
-	// Dependency interfaces are open-world, but only concrete types that are
-	// themselves reachable from the public API can be named safely. Scanning
-	// every loaded package makes tags depend on unrelated imports and can pull
-	// fixed runtime packages into the generated import block.
+	// Dependency interfaces are open-world. Preserve explicitly reachable
+	// implementations, then add declarations from loaded packages in the same
+	// third-party module as the interface. The module boundary keeps unrelated
+	// imports and standard-library implementations out of the union.
+	candidateSet := map[*types.TypeName]bool{}
+	for _, object := range b.reachableInterfaceImplementorCandidates() {
+		candidateSet[object] = true
+	}
+	for _, object := range b.moduleInterfaceImplementorCandidates(iface) {
+		candidateSet[object] = true
+	}
+
+	candidates := make([]*types.TypeName, 0, len(candidateSet))
+	for object := range candidateSet {
+		candidates = append(candidates, object)
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		left, right := candidates[i], candidates[j]
+		if left.Pkg().Path() != right.Pkg().Path() {
+			return left.Pkg().Path() < right.Pkg().Path()
+		}
+		return left.Name() < right.Name()
+	})
+	return candidates
+}
+
+func (b *builder) reachableInterfaceImplementorCandidates() []*types.TypeName {
 	seen := map[*types.Named]bool{}
 	var visit func(types.Type)
 	visit = func(typ types.Type) {
@@ -1879,14 +1987,54 @@ func (b *builder) interfaceImplementorCandidates(iface *types.Named) []*types.Ty
 		}
 		candidates = append(candidates, named.Obj())
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		left, right := candidates[i], candidates[j]
-		if left.Pkg().Path() != right.Pkg().Path() {
-			return left.Pkg().Path() < right.Pkg().Path()
-		}
-		return left.Name() < right.Name()
-	})
 	return candidates
+}
+
+func (b *builder) moduleInterfaceImplementorCandidates(iface *types.Named) []*types.TypeName {
+	if iface == nil || iface.Obj() == nil || iface.Obj().Pkg() == nil {
+		return nil
+	}
+	packagesByPath := b.loadedPackagesByPath()
+	declarationPackage := packagesByPath[iface.Obj().Pkg().Path()]
+	if declarationPackage == nil || declarationPackage.Module == nil || declarationPackage.Module.Path == "" {
+		return nil
+	}
+	inputModule := b.api.Package.Module
+	if inputModule != nil && inputModule.Path == declarationPackage.Module.Path {
+		return nil
+	}
+
+	var candidates []*types.TypeName
+	for _, pkg := range packagesByPath {
+		if pkg.Module == nil || pkg.Module.Path != declarationPackage.Module.Path ||
+			!b.canReferenceImplementationPackage(pkg) {
+			continue
+		}
+		for _, name := range pkg.Types.Scope().Names() {
+			object, ok := pkg.Types.Scope().Lookup(name).(*types.TypeName)
+			if !ok || !object.Exported() {
+				continue
+			}
+			candidates = append(candidates, object)
+		}
+	}
+	return candidates
+}
+
+func (b *builder) loadedPackagesByPath() map[string]*packages.Package {
+	result := map[string]*packages.Package{}
+	var visit func(*packages.Package)
+	visit = func(pkg *packages.Package) {
+		if pkg == nil || result[pkg.PkgPath] != nil {
+			return
+		}
+		result[pkg.PkgPath] = pkg
+		for _, imported := range pkg.Imports {
+			visit(imported)
+		}
+	}
+	visit(b.api.Package)
+	return result
 }
 
 func (b *builder) canReferenceImplementationPackage(pkg *packages.Package) bool {
