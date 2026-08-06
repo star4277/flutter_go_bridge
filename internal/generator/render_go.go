@@ -53,6 +53,12 @@ func renderGo(unit *unit) ([]byte, error) {
 	if unit.UsesUUID {
 		imports = append(imports, "github.com/gofrs/uuid/v5")
 	}
+	if unit.UsesShopspringDecimal {
+		imports = append(imports, "github.com/shopspring/decimal")
+	}
+	if unit.UsesAPDDecimal {
+		imports = append(imports, "github.com/cockroachdb/apd/v3")
+	}
 	for _, item := range imports {
 		r.line("\t%q", item)
 	}
@@ -195,6 +201,18 @@ func (r *goRenderer) renderDecoder(typ *wireType) error {
 		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"UUID string\", value) }", goType)
 		r.line("\tresult, err := uuid.FromString(raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid UUID: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
+	case kindDecimal:
+		r.line("\traw, ok := value.(string)")
+		r.line("\tif !ok { var zero %s; return zero, fgbTypeError(path, \"Decimal string\", value) }", goType)
+		if isShopspringDecimal(types.Unalias(typ.Original).(*types.Named)) {
+			r.line("\tresult, err := decimal.NewFromString(raw)")
+		} else {
+			r.line("\tparsed, _, err := apd.NewFromString(raw)")
+			r.line("\tvar result %s", goType)
+			r.line("\tif parsed != nil { result = *parsed }")
+		}
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid Decimal: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
 	case kindDuration:
 		r.line("\traw, err := fgbAsInt64(value, path)")
@@ -427,6 +445,11 @@ func (r *goRenderer) renderEncoder(typ *wireType) error {
 		r.line("\tif !value.IsValid() { return \"\", nil }")
 		r.line("\treturn value.String(), nil")
 	case kindUUID:
+		r.line("\treturn value.String(), nil")
+	case kindDecimal:
+		if isAPDDecimal(types.Unalias(typ.Original).(*types.Named)) {
+			r.line("\tif value.Form != apd.Finite { return nil, fmt.Errorf(\"apd Decimal must be finite\") }")
+		}
 		r.line("\treturn value.String(), nil")
 	case kindURL:
 		r.line("\treturn value.String(), nil")

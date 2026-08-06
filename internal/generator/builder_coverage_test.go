@@ -108,6 +108,7 @@ func TestRegisterExternalPackageSkipsFixedImports(t *testing.T) {
 		"bytes", "context", "encoding/binary", "fmt", "io", "math/big",
 		"os", "reflect", "runtime", "runtime/debug", "sync", "sync/atomic", "unsafe",
 		"time", "net/netip", "net/url", "github.com/gofrs/uuid/v5",
+		"github.com/shopspring/decimal", "github.com/cockroachdb/apd/v3",
 		"example.com/fixture/internal/fgb",
 	} {
 		b.registerExternalPackage(types.NewPackage(path, filepath.Base(path)))
@@ -255,7 +256,7 @@ func TestValidMapKeyCoverage(t *testing.T) {
 			t.Fatalf("map key kind %s should be allowed", kind)
 		}
 	}
-	rejected := []typeKind{kindMap, kindArray, kindInterface, kindCallback, kindStreamSink, kindBigInt, kindAny}
+	rejected := []typeKind{kindMap, kindArray, kindInterface, kindCallback, kindStreamSink, kindBigInt, kindDecimal, kindAny}
 	for _, kind := range rejected {
 		if validMapKey(&wireType{Kind: kind}) {
 			t.Fatalf("map key kind %s should be rejected", kind)

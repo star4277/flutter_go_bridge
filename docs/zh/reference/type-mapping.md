@@ -66,7 +66,8 @@ extension type const Status(String value) {}
 - `net/url.URL`；
 - 底层类型同样可作为 map key 的 Go 命名类型。
 
-结构体、slice、map、`BigInt`、`InternetAddress`、`UuidValue`、接口和 opaque handle 不能作为 map key。
+结构体、slice、map、`BigInt`、`Decimal`、`InternetAddress`、`UuidValue`、接口和 opaque handle 不能
+作为 map key。
 生成器会在 codegen 阶段报错，不会等到运行时。
 
 `any` 只支持 standard codec 能表达的动态值图。不要把任意 Go 对象或函数值放入 `any`，否则结果
@@ -113,10 +114,17 @@ Go 指针表示可空，并不表示共享内存。普通 `*User` 返回值解�
 | `net/netip.Prefix` | `String` | wire 使用 CIDR 文本，例如 `192.168.1.0/24`；零值或非法 Prefix 与空字符串互转 |
 | `net/url.URL` | `Uri` | wire 使用 `URL.String()`；Dart 使用 `Uri.parse` |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue` | wire 使用 UUID 字符串；需要 Dart `uuid` package |
+| `github.com/shopspring/decimal.Decimal` | `Decimal` | wire 使用无损十进制文本；需要 Dart `decimal` package |
+| `github.com/cockroachdb/apd/v3.Decimal` | `Decimal` | wire 使用无损十进制文本；只支持 finite 值；需要 Dart `decimal` package |
 
 `time.Time` 旧版本使用 RFC3339Nano 文本。生成的 codec 会拒绝超出 Dart 微秒范围（±8.64e18）的值。
 升级后必须同时重新生成 Go 与 Dart 代码；混用新旧生成文件会因 wire 类型不一致而失败。原始 Go
 时区和不足 1 微秒的精度无法由 Dart 表示；需要本地显示时请对返回值调用 `toLocal()`。
+
+Decimal 不会经过 `float64`。Go 端使用对应包的 `String()` 编码，Dart 端使用 `Decimal.parse` 解码；
+反方向先调用 `Decimal.toString()`，再使用对应 Go 包的 parser。因此任意精度的数值保持不变。
+Dart package 会规范化输出文本，所以尾随零表示的 scale 和指数写法不保证逐字往返（`1.2300` 可能
+返回为 `1.23`）。APD 的 Infinity 和 NaN 在 Dart `Decimal` 中没有对应表示，会在 Go 编码边界报错。
 
 上表中的值类型使用 Go 指针时都会得到对应的 Dart 可空类型，例如：
 
@@ -149,7 +157,7 @@ final class Route {
 Dart → Go 时使用 `netip.ParsePrefix` 校验字符串。空字符串会还原为 `netip.Prefix{}`；Go → Dart 时
 无效 Prefix 也编码为空字符串。非空非法 CIDR 会成为 `invalid_argument`。
 
-### UUID 依赖
+### Dart package 依赖
 
 生成代码首次使用 `uuid.UUID` 时会导入：
 
@@ -159,6 +167,10 @@ import 'package:uuid/uuid.dart';
 
 若项目 `pubspec.yaml` 尚未声明 `uuid`，codegen 会通过 Flutter/FVM 执行 `flutter pub add uuid`。
 文档站使用 Bun，不影响生成目标 Flutter/Dart 项目的依赖管理方式。
+
+生成 Decimal API 时会导入 `package:decimal/decimal.dart`。只要任一受支持的 Go Decimal 类型可达，
+且 `pubspec.yaml` 尚未声明 `decimal`，codegen 就会以同样方式执行 `flutter pub add decimal`。同一 API
+同时使用 UUID 和 Decimal 时，每个缺失依赖只添加一次。
 
 ## 结构体与命名接口
 

@@ -58,8 +58,8 @@ nil Go slice is normalized to an empty Dart list on Go-to-Dart encoding.
 
 Supported map-key categories are booleans, strings, supported integers and floats, `time.Duration`,
 `net/netip.Prefix`, `net/url.URL`, and named Go types whose underlying mapping is also a valid key.
-Structs, collections, `BigInt`, `InternetAddress`, `UuidValue`, interfaces, and opaque handles are not
-valid map keys.
+Structs, collections, `BigInt`, `Decimal`, `InternetAddress`, `UuidValue`, interfaces, and opaque
+handles are not valid map keys.
 
 `any` can only carry value graphs expressible by the standard codec. Arbitrary Go objects and
 function values cannot be hidden inside `any`.
@@ -86,11 +86,20 @@ Only a `GoOpaque` handle continues to resolve to the same Go object across calls
 | `net/netip.Prefix` | `String` | CIDR text such as `192.168.1.0/24`; zero/invalid Prefix maps to an empty string |
 | `net/url.URL` | `Uri` | Uses `URL.String()` and `Uri.parse` |
 | `github.com/gofrs/uuid/v5.UUID` | `UuidValue` | UUID string on the wire; requires the Dart `uuid` package |
+| `github.com/shopspring/decimal.Decimal` | `Decimal` | Exact base-10 text on the wire; requires the Dart `decimal` package |
+| `github.com/cockroachdb/apd/v3.Decimal` | `Decimal` | Exact base-10 text on the wire; finite values only; requires the Dart `decimal` package |
 
 `time.Time` used RFC3339Nano text before the Unix-microseconds mapping. Generated codecs reject values
 outside Dart's supported microsecond range (±8.64e18). Regenerate the Go and Dart outputs together when
 upgrading; mixing old and new generated files fails wire-type validation. The original Go location and
 sub-microsecond precision are not representable; call `toLocal()` in Dart when local display is needed.
+
+Decimal values never pass through `float64`. Go encodes them with the package's `String()` method,
+and Dart decodes with `Decimal.parse`; the reverse direction uses `Decimal.toString()` followed by
+the corresponding Go package parser. This preserves the numerical value at arbitrary precision.
+The Dart package normalizes its string output, so trailing zero scale and exponent spelling are not
+lexical round-trip guarantees (`1.2300` may return as `1.23`). APD Infinity and NaN forms have no
+counterpart in Dart `Decimal` and fail at the Go encoding boundary.
 
 Pointers to these value types produce the nullable Dart equivalent.
 
@@ -116,10 +125,14 @@ Dart-to-Go decoding validates non-empty text with `netip.ParsePrefix`. An empty 
 `netip.Prefix{}`, and an invalid Go Prefix encodes as an empty string. Invalid non-empty CIDR text is
 reported as `invalid_argument`.
 
-### UUID dependency
+### Dart package dependencies
 
 Generated UUID APIs import `package:uuid/uuid.dart`. When `uuid` is missing from the target project's
 `pubspec.yaml`, codegen uses Flutter or FVM to run `flutter pub add uuid`.
+
+Generated Decimal APIs import `package:decimal/decimal.dart`. When either supported Go Decimal type
+is reachable and `decimal` is missing from `pubspec.yaml`, codegen similarly runs
+`flutter pub add decimal`. If an API uses both UUID and Decimal, each missing dependency is added once.
 
 ## Structs and named interfaces
 

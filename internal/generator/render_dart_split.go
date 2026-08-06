@@ -167,6 +167,9 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 	if unit.UsesUUID {
 		centralRenderer.line("import 'package:uuid/uuid.dart';")
 	}
+	if unit.UsesDecimal {
+		centralRenderer.line("import 'package:decimal/decimal.dart';")
+	}
 	for _, key := range orderedKeys {
 		relative := paths[key]
 		centralRenderer.line("import %s;", strconv.Quote(filepath.ToSlash(relative)))
@@ -233,6 +236,9 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		renderer.line("import 'dart:typed_data';")
 		if unit.UsesUUID {
 			renderer.line("import 'package:uuid/uuid.dart';")
+		}
+		if unit.UsesDecimal {
+			renderer.line("import 'package:decimal/decimal.dart';")
 		}
 		renderer.line("")
 		group := groups[key]
@@ -898,6 +904,9 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 	case kindUUID:
 		r.line("  if (value is! String) throw FormatException('$path: expected UUID string');")
 		r.line("  return UuidValue.fromString(value);")
+	case kindDecimal:
+		r.line("  if (value is! String) throw FormatException('$path: expected Decimal string');")
+		r.line("  return Decimal.parse(value);")
 	case kindDuration:
 		r.line("  if (value is! int) throw FormatException('$path: expected duration microseconds');")
 		r.line("  return Duration(microseconds: value);")
@@ -1025,6 +1034,8 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 		r.line("  return value.address;")
 	case kindUUID:
 		r.line("  return value.uuid;")
+	case kindDecimal:
+		r.line("  return value.toString();")
 	case kindURL:
 		r.line("  return value.toString();")
 	case kindDuration:

@@ -95,6 +95,19 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 		r.line("\tresult, err := uuid.FromString(raw)")
 		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid UUID: %%w\", path, err) }", goType)
 		r.line("\treturn result, nil")
+	case kindDecimal:
+		r.line("\tif value == nil { var zero %s; return zero, fmt.Errorf(\"%%s: null Decimal\", path) }", goType)
+		r.line("\traw, err := fgbCstReadString(unsafe.Pointer(value.ptr), value.len, path)")
+		r.line("\tif err != nil { var zero %s; return zero, err }", goType)
+		if isShopspringDecimal(types.Unalias(typ.Original).(*types.Named)) {
+			r.line("\tresult, err := decimal.NewFromString(raw)")
+		} else {
+			r.line("\tparsed, _, err := apd.NewFromString(raw)")
+			r.line("\tvar result %s", goType)
+			r.line("\tif parsed != nil { result = *parsed }")
+		}
+		r.line("\tif err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: invalid Decimal: %%w\", path, err) }", goType)
+		r.line("\treturn result, nil")
 	case kindDuration:
 		r.line("\traw := int64(value)")
 		r.renderDurationFromMicroseconds(goType, "raw")
@@ -320,6 +333,11 @@ func (r *goRenderer) renderDcoEncoder(typ *wireType) {
 		r.line("\tif !value.IsValid() { return fgbDcoString(\"\") }")
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindUUID:
+		r.line("\treturn fgbDcoString(value.String())")
+	case kindDecimal:
+		if isAPDDecimal(types.Unalias(typ.Original).(*types.Named)) {
+			r.line("\tif value.Form != apd.Finite { return nil, fmt.Errorf(\"apd Decimal must be finite\") }")
+		}
 		r.line("\treturn fgbDcoString(value.String())")
 	case kindURL:
 		r.line("\treturn fgbDcoString(value.String())")

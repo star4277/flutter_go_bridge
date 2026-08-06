@@ -1037,9 +1037,9 @@ Run independent scans separately, exclude generated dependency folders explicitl
 ### Metadata
 
 - Reproducible: yes
-- Related Files: docs/
-- Recurrence-Count: 2
-- Last-Seen: 2026-07-30
+- Related Files: docs/, .plans/
+- Recurrence-Count: 3
+- Last-Seen: 2026-08-06
 
 ### Resolution
 
@@ -1594,6 +1594,8 @@ Read the exact section in each language and apply smaller page-specific patches.
 - Reproducible: yes
 - Related Files: docs/reference/type-mapping.md, docs/zh/reference/type-mapping.md
 - See Also: ERR-20260802-PATCH01
+- Recurrence-Count: 2
+- Last-Seen: 2026-08-06
 
 ### Resolution
 
@@ -1641,5 +1643,82 @@ Keep generated Go vet, generated Dart analysis, runtime smoke, and aggregate cov
 
 - **Resolved**: 2026-08-04T00:00:00+08:00
 - **Notes**: Nullability widening is idempotent, literal generated format source uses `raw`, focused branch tests raised aggregate coverage to 95.0%, and the full integration smoke passed.
+
+---
+
+## [ERR-20260806-001] goproxy-cn-unexpected-eof
+
+**Logged**: 2026-08-06T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+
+The configured Go module proxy returned an unexpected EOF while querying the latest shopspring/decimal version.
+
+### Error
+
+```text
+go: module github.com/shopspring/decimal: Get "https://goproxy.cn/github.com/shopspring/decimal/@v/list": unexpected EOF
+```
+
+### Context
+
+- Operation: verify the third-party decimal API before designing generated decoder calls.
+- Command: `go list -m -json github.com/shopspring/decimal@latest`.
+- The parallel `github.com/cockroachdb/apd/v3` query succeeded through the same environment.
+
+### Suggested Fix
+
+Retry the read-only module query with `GOPROXY=https://proxy.golang.org,direct`; keep the repository's module files unchanged.
+
+### Metadata
+
+- Reproducible: unknown
+- Related Files: internal/generator/
+
+### Resolution
+
+- **Resolved**: 2026-08-06T00:00:00+08:00
+- **Notes**: Retried with `GOPROXY=https://proxy.golang.org,direct`; the query succeeded and reported v1.4.0.
+
+---
+
+## [ERR-20260806-002] decimal-cst-regression-red
+
+**Logged**: 2026-08-06T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+
+The new Decimal CST/DCO regression test failed against the standard-codec checkpoint, as intended before implementation.
+
+### Error
+
+```text
+public bridge missing "_fgbCstEncode"
+```
+
+### Context
+
+- Operation: prove the two-way Decimal fixture does not already select CST/DCO.
+- The generated call still used `fgbInvokeSync("RoundTrip", ...)`.
+
+### Suggested Fix
+
+Add Decimal to codec support and implement its CST storage/encoders and Go CST decoder/DCO encoder.
+
+### Metadata
+
+- Reproducible: yes
+- Related Files: internal/generator/generator_test.go
+
+### Resolution
+
+- **Resolved**: 2026-08-06T00:00:00+08:00
+- **Notes**: Added Decimal codec support, byte-string CST storage, Dart CST encoding, and Go CST/DCO branches; the focused test passed.
 
 ---

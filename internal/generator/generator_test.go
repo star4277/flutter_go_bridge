@@ -264,7 +264,20 @@ func LoadProfile() *models.Profile { return &models.Profile{} }
 
 func TestGenerateSpecialExternalValueMappings(t *testing.T) {
 	dir := t.TempDir()
-	module := "module example.com/special\n\ngo 1.24\n\nrequire github.com/gofrs/uuid/v5 v5.0.0\n\nreplace github.com/gofrs/uuid/v5 => ./uuid\n"
+	module := `module example.com/special
+
+go 1.24
+
+require (
+	github.com/cockroachdb/apd/v3 v3.0.0
+	github.com/gofrs/uuid/v5 v5.0.0
+	github.com/shopspring/decimal v1.0.0
+)
+
+replace github.com/cockroachdb/apd/v3 => ./apd
+replace github.com/gofrs/uuid/v5 => ./uuid
+replace github.com/shopspring/decimal => ./shopspring
+`
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -285,6 +298,43 @@ func (UUID) String() string { return "" }
 	if err := os.WriteFile(filepath.Join(uuidDir, "uuid.go"), []byte(uuidSource), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	shopspringDir := filepath.Join(dir, "shopspring")
+	if err := os.MkdirAll(shopspringDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shopspringDir, "go.mod"), []byte("module github.com/shopspring/decimal\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	shopspringSource := `package decimal
+
+type Decimal struct{}
+
+func NewFromString(string) (Decimal, error) { return Decimal{}, nil }
+func (Decimal) String() string { return "" }
+`
+	if err := os.WriteFile(filepath.Join(shopspringDir, "decimal.go"), []byte(shopspringSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	apdDir := filepath.Join(dir, "apd")
+	if err := os.MkdirAll(apdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(apdDir, "go.mod"), []byte("module github.com/cockroachdb/apd/v3\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	apdSource := `package apd
+
+type Form int8
+const Finite Form = 0
+type Condition uint32
+type Decimal struct { Form Form }
+
+func NewFromString(string) (*Decimal, Condition, error) { return &Decimal{}, 0, nil }
+func (*Decimal) String() string { return "" }
+`
+	if err := os.WriteFile(filepath.Join(apdDir, "decimal.go"), []byte(apdSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	inputDir := filepath.Join(dir, "api")
 	if err := os.MkdirAll(inputDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -292,7 +342,9 @@ func (UUID) String() string { return "" }
 	source := `package api
 
 import (
+	"github.com/cockroachdb/apd/v3"
 	"github.com/gofrs/uuid/v5"
+	"github.com/shopspring/decimal"
 	"net/netip"
 )
 
@@ -301,9 +353,17 @@ type Values struct {
 	ID uuid.UUID
 	OptionalIP *netip.Addr
 	OptionalID *uuid.UUID
+	Shop decimal.Decimal
+	OptionalShop *decimal.Decimal
+	APD apd.Decimal
+	OptionalAPD *apd.Decimal
 }
 
 func Load() Values { return Values{} }
+
+func RoundTrip(shop decimal.Decimal, apdValue apd.Decimal, optionalShop *decimal.Decimal, optionalAPD *apd.Decimal) Values {
+	return Values{Shop: shop, OptionalShop: optionalShop, APD: apdValue, OptionalAPD: optionalAPD}
+}
 `
 	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
@@ -320,20 +380,25 @@ func Load() Values { return Values{} }
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.DartDependencies) != 1 || result.DartDependencies[0] != "uuid" {
-		t.Fatalf("got Dart dependencies %#v, want [uuid]", result.DartDependencies)
+	if len(result.DartDependencies) != 2 || result.DartDependencies[0] != "uuid" || result.DartDependencies[1] != "decimal" {
+		t.Fatalf("got Dart dependencies %#v, want [uuid decimal]", result.DartDependencies)
 	}
 	dart := mustRead(t, filepath.Join(dir, "dart", "api", "api.dart"))
 	for _, expected := range []string{
 		"final InternetAddress ip;", "final UuidValue id;", "final InternetAddress? optionalIp;", "final UuidValue? optionalId;",
-		"import 'dart:io';", "import 'package:uuid/uuid.dart';", `import "../bridge_generated.dart";`,
+		"final Decimal shop;", "final Decimal? optionalShop;", "final Decimal apd;", "final Decimal? optionalApd;",
+		"import 'dart:io';", "import 'package:uuid/uuid.dart';", "import 'package:decimal/decimal.dart';", `import "../bridge_generated.dart";`,
 	} {
 		if !strings.Contains(dart, expected) {
 			t.Fatalf("special external mapping missing %q:\n%s", expected, dart)
 		}
 	}
 	central := mustRead(t, filepath.Join(dir, "dart", "bridge_generated.dart"))
-	for _, expected := range []string{"import 'package:uuid/uuid.dart';", "UuidValue.fromString"} {
+	for _, expected := range []string{
+		"import 'package:uuid/uuid.dart';", "UuidValue.fromString",
+		"import 'package:decimal/decimal.dart';", "Decimal.parse(value)", "return value.toString();",
+		"_fgbCstEncode", "fgbInvokeCstSync(1",
+	} {
 		if !strings.Contains(central, expected) {
 			t.Fatalf("public bridge missing %q:\n%s", expected, central)
 		}
@@ -347,6 +412,16 @@ func Load() Values { return Values{} }
 	}
 	if count := strings.Count(goSource, `"github.com/gofrs/uuid/v5"`); count != 1 {
 		t.Fatalf("generated Go bridge should import gofrs/uuid exactly once, got %d:\n%s", count, goSource)
+	}
+	for _, expected := range []string{
+		`"github.com/shopspring/decimal"`, `"github.com/cockroachdb/apd/v3"`,
+		"decimal.NewFromString(raw)", "apd.NewFromString(raw)",
+		"fgbCstReadString", "fgbDcoString(value.String())",
+		"value.Form != apd.Finite", "apd Decimal must be finite",
+	} {
+		if !strings.Contains(goSource, expected) {
+			t.Fatalf("generated Go bridge missing Decimal support %q:\n%s", expected, goSource)
+		}
 	}
 }
 
