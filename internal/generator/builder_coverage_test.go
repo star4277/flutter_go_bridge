@@ -176,6 +176,27 @@ func TestCanReferenceImplementationTypeRejectsIncompleteTypes(t *testing.T) {
 	}
 }
 
+func TestDependencyMethodHelpersHandleReceiverShapes(t *testing.T) {
+	if methodReceiverIsPointer(nil) {
+		t.Fatal("nil method must not have a pointer receiver")
+	}
+	pkg := types.NewPackage("example.com/fixture/impl", "impl")
+	plainSignature := types.NewSignatureType(nil, nil, nil, types.NewTuple(), types.NewTuple(), false)
+	plain := types.NewFunc(0, pkg, "Plain", plainSignature)
+	if methodReceiverIsPointer(plain) {
+		t.Fatal("a function without a receiver must not have a pointer receiver")
+	}
+	receiver := types.NewVar(0, pkg, "value", types.NewPointer(types.Typ[types.Int]))
+	pointerSignature := types.NewSignatureType(receiver, nil, nil, types.NewTuple(), types.NewTuple(), false)
+	pointer := types.NewFunc(0, pkg, "Pointer", pointerSignature)
+	if !methodReceiverIsPointer(pointer) {
+		t.Fatal("a method with a pointer receiver must be recognized")
+	}
+	if isStringRepresentationMethod("Area") || !isStringRepresentationMethod("String") {
+		t.Fatal("string representation method classification is incorrect")
+	}
+}
+
 func TestAtomicStructRecursionAndCycleGuards(t *testing.T) {
 	atomicPackage, err := importer.Default().Import("sync/atomic")
 	if err != nil {

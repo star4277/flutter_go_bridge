@@ -10,6 +10,15 @@ import (
 	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 )
 
+func containsError(errors []error, want string) bool {
+	for _, err := range errors {
+		if err != nil && strings.Contains(err.Error(), want) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGenerateStableABIAndDartAPIDL(t *testing.T) {
 	input := filepath.Join("..", "parser", "testdata", "sample")
 	api, err := bridgeparser.Parse(bridgeparser.Options{Input: input, BaseDir: "."})
@@ -478,6 +487,7 @@ type Circle struct {
 func NewCircle(radius int) *Circle { return &Circle{radius: radius} }
 func (*Circle) Area() int { return 0 }
 func (*Circle) String() string { return "circle" }
+func (*Circle) ToString(prefix ...string) string { return "circle" }
 
 type Base struct {
 	Value int
@@ -605,11 +615,15 @@ func Shapes() map[string]contracts.Shape { return factory.Shapes() }
 	}
 	goOutput := filepath.Join(dir, "bridge_generated.go")
 	dartOutput := filepath.Join(dir, "dart", "bridge_generated.dart")
-	if _, err := Generate(api, config.Resolved{
+	result, err := Generate(api, config.Resolved{
 		BaseDir: dir, GoInput: inputDir, GoOutput: goOutput, DartOutput: dartOutput,
 		LibraryName: "external_interface", DartEntrypointClassName: "ExternalInterfaceBridge", StopOnError: true,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !containsError(result.Warnings, "dependency method Circle.ToString was not bridged") {
+		t.Fatalf("unsupported dependency ToString should warn and fall back to String: %v", result.Warnings)
 	}
 
 	externalDart := mustRead(t, filepath.Join(dir, "dart", "_generated.dart"))
