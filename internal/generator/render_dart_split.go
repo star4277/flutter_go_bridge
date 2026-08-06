@@ -662,6 +662,10 @@ func (r *splitDartRenderer) renderNamed(named *namedModel) {
 	if named.Underlying == nil || named.Underlying.Kind == kindOpaque {
 		return
 	}
+	if named.Enum {
+		r.renderEnum(named)
+		return
+	}
 	r.line("extension type const %s(%s value) {", named.DartName, named.Underlying.DartType)
 	for _, item := range named.Constants {
 		if item.IsConst {
@@ -678,6 +682,33 @@ func (r *splitDartRenderer) renderNamed(named *namedModel) {
 		r.line("")
 		r.line("  @override")
 		r.line("  String toString() => value.toString();")
+	}
+	r.line("}")
+	r.line("")
+}
+
+func (r *splitDartRenderer) renderEnum(named *namedModel) {
+	r.line("enum %s {", named.DartName)
+	for index, item := range named.Constants {
+		r.dartDoc(item.Docs, "  ")
+		terminator := ","
+		if index == len(named.Constants)-1 {
+			terminator = ";"
+		}
+		r.line("  %s(%s)%s", item.DartName, item.DartLiteral, terminator)
+	}
+	r.line("")
+	if named.Underlying.DartType == "BigInt" {
+		r.line("  const %s(this._wireValue);", named.DartName)
+		r.line("  final String _wireValue;")
+		r.line("  BigInt get value => BigInt.parse(_wireValue);")
+	} else {
+		r.line("  const %s(this.value);", named.DartName)
+		r.line("  final %s value;", named.Underlying.DartType)
+	}
+	for _, call := range named.Methods {
+		r.line("")
+		r.renderInstanceCall(call, "this", "__FGB_BRIDGE_CLASS__.instance", true, "  ")
 	}
 	r.line("}")
 	r.line("")
@@ -1008,7 +1039,15 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  }")
 		r.line("  throw FormatException('$path: unknown %s implementation ${value[0]}');", typ.Interface.GoName)
 	case kindNamed:
-		r.line("  return %s(fgbDecode%d(value, bridge, path));", typ.Named.DartName, typ.Named.Underlying.ID)
+		if typ.Named.Enum {
+			r.line("  final decoded = fgbDecode%d(value, bridge, path);", typ.Named.Underlying.ID)
+			r.line("  for (final item in %s.values) {", typ.Named.DartName)
+			r.line("    if (item.value == decoded) return item;")
+			r.line("  }")
+			r.line("  throw FormatException('$path: unknown %s value $decoded');", typ.Named.DartName)
+		} else {
+			r.line("  return %s(fgbDecode%d(value, bridge, path));", typ.Named.DartName, typ.Named.Underlying.ID)
+		}
 	case kindAtomic:
 		r.line("  return fgbDecode%d(value, bridge, path);", typ.Atomic.Value.ID)
 	default:

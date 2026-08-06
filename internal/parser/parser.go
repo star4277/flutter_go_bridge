@@ -186,6 +186,9 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", object.FullName(), err)
 			}
+			if directives.Enum {
+				return fmt.Errorf("%s: fgb enum directive applies to type declarations, not functions", object.FullName())
+			}
 			if directives.Ignore {
 				continue
 			}
@@ -252,7 +255,7 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 					}
 					api.Types[object] = &model.TypeDecl{
 						Object: object, Named: named, Position: typeSpec.Pos(), SourceFile: sourceFile, AST: typeSpec,
-						Docs: cleanDocs(docs), DartName: dartName,
+						Docs: cleanDocs(docs), DartName: dartName, Enum: directives.Enum,
 						Methods: interfaceMethods(typeSpec),
 					}
 				}
@@ -265,6 +268,9 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 					directives, err := mergeSpecDirectives(valueSpec.Doc, declaration.Doc)
 					if err != nil {
 						return fmt.Errorf("const %s: %w", constSpecName(valueSpec), err)
+					}
+					if directives.Enum {
+						return fmt.Errorf("const %s: fgb enum directive applies to type declarations, not constants", constSpecName(valueSpec))
 					}
 					if directives.Ignore {
 						continue
@@ -287,7 +293,7 @@ func collectFile(api *model.API, file *ast.File, sourceFile string) error {
 							dartName = names.LowerCamel(identifier.Name)
 						}
 						api.Constants[named] = append(api.Constants[named], &model.Constant{
-							Object: object, Position: identifier.Pos(), Docs: cleanDocs(docs), DartName: dartName,
+							Object: object, Position: identifier.Pos(), Docs: cleanDocs(docs), DartName: dartName, Renamed: directives.Rename != "",
 						})
 					}
 				}
@@ -450,6 +456,7 @@ type directiveSet struct {
 	HasMode  bool
 	Ignore   bool
 	Opaque   bool
+	Enum     bool
 	Rename   string
 	Nullable []string
 }
@@ -493,7 +500,7 @@ func directiveStringValue(raw string) string {
 }
 
 // parseDirectives understands `//fgb:sync`, `//fgb:async`, `//fgb:ignore`,
-// `//fgb:opaque`, `//fgb:rename = "name"`, and
+// `//fgb:opaque`, `//fgb:enum`, `//fgb:rename = "name"`, and
 // `//fgb:nullable = "param1,param2"` - either as separate lines or
 // comma-combined like `//fgb:async, rename = "name"`. The spelling follows
 // the Go directive convention (`//tool:directive`, no space after `//`), so
@@ -521,6 +528,9 @@ func parseDirectives(group *ast.CommentGroup) (directiveSet, error) {
 		case "opaque":
 			result.Opaque = true
 			return nil
+		case "enum":
+			result.Enum = true
+			return nil
 		}
 		if match := renameDirectivePattern.FindStringSubmatch(token); match != nil {
 			value := directiveStringValue(match[1])
@@ -543,7 +553,7 @@ func parseDirectives(group *ast.CommentGroup) (directiveSet, error) {
 			}
 			return nil
 		}
-		return fmt.Errorf("invalid //fgb: directive %q (want sync, async, ignore, opaque, rename = \"name\", or nullable = \"a,b\")", token)
+		return fmt.Errorf("invalid //fgb: directive %q (want sync, async, ignore, opaque, enum, rename = \"name\", or nullable = \"a,b\")", token)
 	}
 
 	if group == nil {
@@ -589,6 +599,10 @@ func mergeSpecDirectives(specDoc, declDoc *ast.CommentGroup) (directiveSet, erro
 	result := fromSpec
 	result.Ignore = fromSpec.Ignore || fromDecl.Ignore
 	result.Opaque = fromSpec.Opaque || fromDecl.Opaque
+	result.Enum = fromSpec.Enum || fromDecl.Enum
+	if result.Enum && result.Opaque {
+		return result, fmt.Errorf("fgb enum and opaque directives cannot be combined")
+	}
 	if result.Rename == "" {
 		result.Rename = fromDecl.Rename
 	}

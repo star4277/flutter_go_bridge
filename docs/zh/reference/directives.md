@@ -50,6 +50,7 @@ func Watch(tags []string, onEvent func(string)) {}
 | `//fgb:ignore` | 函数、方法、类型、常量、接口方法 | 从生成 API 中排除声明 |
 | `//fgb:rename = "name"` | 函数、方法、类型、常量、接口方法 | 修改生成的 Dart 名称 |
 | `//fgb:opaque` | 结构体类型 | 强制使用 `GoOpaque` 句柄语义 |
+| `//fgb:enum` | 命名整数和字符串类型 | 从导出的 typed constant 生成闭集 Dart enum |
 | `//fgb:nullable = "a,b"` | 函数、方法的参数 | 允许指定的 Go nil-able 参数在 Dart 中为 null 或省略 |
 
 ## `//fgb:sync`
@@ -254,6 +255,31 @@ type Loader interface {
 
 生成器不会替你修复指令中无效的 Dart 语法。重命名造成 Dart 名称冲突时，应调整名称后重新生成。
 它也可用于解决 Go 匿名嵌入方法在 Dart 继承中发生的 override 冲突。
+
+## `//fgb:enum`
+
+`//fgb:enum` 把命名字符串或有符号/无符号整数类型显式映射为 Dart enum。指令必须写在类型声明上，
+不能写在函数或常量上：
+
+```go
+//fgb:enum
+type Status int
+
+const (
+	StatusUnknown Status = iota
+	StatusReady
+)
+```
+
+类型必须至少有一个导出的同类型常量。底层值重复或底层类型不受支持时，生成会失败。该指令不能与
+`//fgb:opaque` 组合使用。
+
+成员名默认去掉 Go 类型名前缀。可以在常量上写 `//fgb:rename = "caseName"` 显式指定成员名。
+与 Dart enum 内建成员冲突或彼此重名时，生成器会添加数字后缀并输出 warning。
+
+enum 保存并传输每个常量精确的底层值。standard 和 CST/DCO 解码器收到声明集合之外的值时会抛出
+`FormatException`。该标记不改变 Go 表示及其 codec；不写标记时始终保留原有的命名 extension-type
+表示。
 
 ## `//fgb:opaque`
 

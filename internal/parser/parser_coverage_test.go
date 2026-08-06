@@ -138,3 +138,42 @@ func TestParseTypeGroupDeclDocInvalidDirective(t *testing.T) {
 		t.Fatalf("invalid decl-group directive should be surfaced with the type name, got %v", err)
 	}
 }
+
+func TestParseEnumTypeDirective(t *testing.T) {
+	dir := writeFixture(t, "example.com/enum-directive", map[string]string{
+		"api.go": "package p\n\n//fgb:enum\ntype Status int\n\nconst (\n\tStatusUnknown Status = 0\n)\n",
+	})
+	api, err := Parse(Options{Input: dir, BaseDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status *model.TypeDecl
+	for _, decl := range api.Types {
+		if decl.Object.Name() == "Status" {
+			status = decl
+		}
+	}
+	if status == nil || !status.Enum {
+		t.Fatalf("enum directive was not recorded: %#v", status)
+	}
+}
+
+func TestParseRejectsEnumOnFunctionAndConstant(t *testing.T) {
+	cases := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{"function", "package p\n\n//fgb:enum\nfunc Work() int { return 1 }\n", "enum"},
+		{"constant", "package p\n\nconst (\n\t//fgb:enum\n\tValue = 1\n)\n", "enum"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			dir := writeFixture(t, "example.com/enum-"+test.name, map[string]string{"api.go": test.source})
+			_, err := Parse(Options{Input: dir, BaseDir: dir})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected enum placement rejection, got %v", err)
+			}
+		})
+	}
+}

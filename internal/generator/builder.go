@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"go/token"
 	"go/types"
 	"reflect"
 	"sort"
@@ -180,8 +181,58 @@ func (b *builder) selectValueToStringMethods() {
 	}
 	for _, named := range b.unit.Named {
 		b.selectToStringForMethods(named.GoName, named.Methods)
-		named.LocalToString = !hasToStringMethod(named.Methods)
-		b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
+		if named.Enum {
+			named.LocalToString = false
+			b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
+			b.disambiguateEnumMethods(named)
+		} else {
+			b.normalizeNamedExtensionMethods(named)
+		}
+	}
+}
+
+// Extension types cannot declare members inherited from Object, including
+// toString. Keep Go-backed string representations callable under ordinary
+// names and leave Object.toString to Dart's extension-type implementation.
+func (b *builder) normalizeNamedExtensionMethods(named *namedModel) {
+	named.LocalToString = false
+	for _, method := range named.Methods {
+		if !method.ToString {
+			continue
+		}
+		method.ToString = false
+		method.ToStringFormat = toStringNone
+		switch method.GoName {
+		case "String":
+			method.DartName = "asString"
+		case "ToString":
+			method.DartName = "toStringValue"
+		case "MarshalJSON":
+			method.DartName = names.LowerCamel(method.GoName)
+		default:
+			method.DartName = names.LowerCamel(method.GoName)
+		}
+		b.warnings = append(b.warnings, fmt.Errorf("%s.%s cannot override Dart Object.toString on an extension type; exposed as %s", named.GoName, method.GoName, method.DartName))
+	}
+	b.disambiguateSelectedMethods(named.GoName, named.Methods, true)
+}
+
+func (b *builder) disambiguateEnumMethods(named *namedModel) {
+	used := map[string]bool{"values": true, "value": true, "name": true, "index": true}
+	for _, method := range named.Methods {
+		if method.Operator != "" || method.ToString {
+			continue
+		}
+		base := method.DartName
+		candidate := base
+		for suffix := 2; used[candidate]; suffix++ {
+			candidate = fmt.Sprintf("%s%d", base, suffix)
+		}
+		if candidate != base {
+			b.warnings = append(b.warnings, fmt.Errorf("enum %s method Dart name %q is reserved by Dart enum behavior; renamed %s to %q", named.GoName, base, method.GoName, candidate))
+			method.DartName = candidate
+		}
+		used[candidate] = true
 	}
 }
 
@@ -954,6 +1005,9 @@ func (b *builder) mapNamed(original types.Type, named *types.Named) (*wireType, 
 		sourceFile = decl.SourceFile
 	}
 	model := &namedModel{GoName: named.Obj().Name(), DartName: dartName, Docs: docs, SourceFile: sourceFile, Type: result}
+	if decl != nil {
+		model.Enum = decl.Enum
+	}
 	result.Named = model
 	b.namedModels[named] = model
 	b.unit.Named = append(b.unit.Named, model)
@@ -962,18 +1016,100 @@ func (b *builder) mapNamed(original types.Type, named *types.Named) (*wireType, 
 		return nil, err
 	}
 	model.Underlying = underlying
-	for _, item := range b.api.Constants[named] {
+	constants := b.api.Constants[named]
+	if model.Enum {
+		if underlying.Kind != kindString && underlying.Kind != kindSigned && underlying.Kind != kindUnsigned {
+			return nil, fmt.Errorf("enum %s requires a string or integer underlying type, got %s", model.GoName, underlying.Kind)
+		}
+		if len(constants) == 0 {
+			return nil, fmt.Errorf("enum %s must declare at least one exported typed constant", model.GoName)
+		}
+		for index := 0; index < len(constants); index++ {
+			for other := index + 1; other < len(constants); other++ {
+				if constant.Compare(constants[index].Object.Val(), token.EQL, constants[other].Object.Val()) {
+					return nil, fmt.Errorf("enum %s has duplicate underlying value %s in %s and %s", model.GoName, constants[index].Object.Val().ExactString(), constants[index].Object.Name(), constants[other].Object.Name())
+				}
+			}
+		}
+	} else if decl != nil && likelyEnum(named, constants, underlying) {
+		b.warnings = append(b.warnings, fmt.Errorf("type %s looks like an enum; add //fgb:enum to opt in", model.GoName))
+	}
+	usedCases := map[string]int{}
+	for _, item := range constants {
 		literal, isConst, err := dartConstantLiteral(item.Object.Val(), underlying)
 		if err != nil {
 			b.warnings = append(b.warnings, fmt.Errorf("constant %s.%s: %w", item.Object.Pkg().Path(), item.Object.Name(), err))
 			continue
 		}
+		dartCase := item.DartName
+		if model.Enum {
+			dartCase = enumCaseName(model.GoName, item)
+			dartCase = uniqueEnumCaseName(dartCase, usedCases, model.GoName, item.Object.Name(), &b.warnings)
+			if underlying.DartType == "BigInt" {
+				literal = strconv.Quote(item.Object.Val().ExactString())
+				isConst = true
+			}
+		}
 		model.Constants = append(model.Constants, &constantModel{
-			GoName: item.Object.Name(), DartName: item.DartName, Docs: item.Docs,
+			GoName: item.Object.Name(), DartName: dartCase, Docs: item.Docs,
 			DartLiteral: literal, IsConst: isConst,
 		})
 	}
 	return result, nil
+}
+
+func likelyEnum(named *types.Named, constants []*model.Constant, underlying *wireType) bool {
+	if named == nil || len(constants) == 0 || underlying == nil {
+		return false
+	}
+	if underlying.Kind != kindString && underlying.Kind != kindSigned && underlying.Kind != kindUnsigned {
+		return false
+	}
+	prefix := named.Obj().Name()
+	for _, item := range constants {
+		if !strings.HasPrefix(item.Object.Name(), prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func enumCaseName(typeName string, item *model.Constant) string {
+	name := item.DartName
+	if item.Renamed {
+		return name
+	}
+	defaultName := names.LowerCamel(item.Object.Name())
+	if name == defaultName {
+		if remainder := strings.TrimPrefix(item.Object.Name(), typeName); remainder != item.Object.Name() && remainder != "" {
+			return names.LowerCamel(remainder)
+		}
+	}
+	return name
+}
+
+func uniqueEnumCaseName(base string, used map[string]int, typeName, goName string, warnings *[]error) string {
+	reserved := map[string]bool{"values": true, "index": true, "name": true, "value": true}
+	candidate := base
+	if reserved[candidate] || used[candidate] != 0 {
+		count := used[base]
+		if count == 0 {
+			count = 1
+		}
+		for {
+			count++
+			candidate = fmt.Sprintf("%s%d", base, count)
+			if !reserved[candidate] && used[candidate] == 0 {
+				break
+			}
+		}
+		*warnings = append(*warnings, fmt.Errorf("enum %s case %s has reserved or duplicate Dart name %q; renamed to %q", typeName, goName, base, candidate))
+	}
+	used[base]++
+	if candidate != base {
+		used[candidate]++
+	}
+	return candidate
 }
 
 // classifyStruct decides how a named struct bridges. FRB semantics: a struct

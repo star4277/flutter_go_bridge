@@ -34,6 +34,49 @@ extension type const Status(String value) {}
 命名类型上导出的 Go 方法会生成在对应 extension type 中；同类型常量也会生成静态常量或静态 final
 值。其 wire 编码仍使用底层类型。
 
+### 显式枚举
+
+当命名字符串或整数类型的导出 typed constant 构成闭集时，使用 `//fgb:enum`：
+
+```go
+//fgb:enum
+type Status int
+
+const (
+	StatusUnknown Status = 0
+	StatusReady   Status = 1
+)
+```
+
+```dart
+enum Status {
+  unknown(0),
+  ready(1);
+
+  const Status(this.value);
+  final int value;
+}
+```
+
+只有该显式指令会改变生成表示。即使未标记的命名类型及其常量看起来像枚举，它仍生成 extension
+type；codegen 最多输出建议添加 `//fgb:enum` 的 warning，不会用启发式规则改变公开 API。
+
+底层类型支持有符号整数、无符号整数和字符串。类型必须至少声明一个导出的同类型常量；底层值重复
+会直接报错，因为别名无法通过闭集 Dart enum 无歧义地往返。对于 `uint64`、`uint` 和 `uintptr`，
+生成成员暴露 `BigInt value`；由于 Dart 不允许把 `BigInt.parse(...)` 用作 enum 常量参数，声明内部
+保存编译期常量的十进制 wire 文本。
+
+Go 枚举遵循导出标识符约定：类型必须导出，每个成员必须是导出的同类型常量。推荐使用 Go 类型名加
+成员名的写法（`StatusUnknown`、`StatusReady`）。只有在常量名确实以该类型名前缀开头时才会去掉前缀
+（`StatusReady` 生成 `ready`）；不带此前缀的常量会把完整 Go 名称转换为 lowerCamelCase（`Ready` 生成
+`ready`）。常量上的 `//fgb:rename` 始终优先。重名成员以及 `values`、`value`、`name`、`index` 等
+Dart enum 内建成员会加数字后缀并输出 warning。
+
+standard 与 CST/DCO codec 在两个方向都传输精确的底层值。Dart 解码时只接受已声明成员，未知值会
+抛出 `FormatException`。指针映射为可空枚举。导出方法和受支持的运算符仍生成在 enum 上；被选中的
+Go `ToString`、`String` 或 `MarshalJSON` 方法可以实现生成的 `toString`。没有 Go 实现时保留 Dart
+enum 自带的正常 `toString`。
+
 ## slice、数组与 typed list
 
 | Go | Dart | 说明 |
