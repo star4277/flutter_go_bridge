@@ -162,6 +162,14 @@ func (r *goRenderer) renderCstDecoder(typ *wireType) {
 			} else {
 				r.line("\tif err != nil { var zero %s; return zero, err }", goType)
 			}
+			if field.Type.CgoScalar {
+				if typ.usesPointerCodec(map[int]bool{}) {
+					r.line("\tif err := fgbSetCgoField(result, %s, decoded%s); err != nil { return nil, fmt.Errorf(\"%%s: %%w\", path, err) }", strconv.Quote(field.GoName), field.GoName)
+				} else {
+					r.line("\tif err := fgbSetCgoField(&result, %s, decoded%s); err != nil { var zero %s; return zero, fmt.Errorf(\"%%s: %%w\", path, err) }", strconv.Quote(field.GoName), field.GoName, goType)
+				}
+				continue
+			}
 			r.line("\tresult.%s = decoded%s", field.GoName, field.GoName)
 		}
 		r.line("\treturn result, nil")
@@ -418,6 +426,7 @@ func (r *goRenderer) renderDcoStructEncoder(typ *wireType) {
 			encodeID = field.Type.Atomic.Value.ID
 			encodeExpr = fmt.Sprintf("value.%s.Load()", field.GoName)
 		}
+		encodeExpr = r.goWireValue(field.Type, encodeExpr)
 		if field.Nullable {
 			// Keep nil distinct from empty for a field marked fgb:"nullable".
 			r.line("\tvar child%d *C.FgbDartCObject", index)
