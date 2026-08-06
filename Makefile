@@ -2,7 +2,7 @@ APP_NAME := flutter_go_bridge_codegen
 COMMAND_PACKAGE := ./cmd/flutter_go_bridge_codegen
 FLUTTER_GO_BRIDGE_VERSION ?=
 ifeq ($(strip $(FLUTTER_GO_BRIDGE_VERSION)),)
-override FLUTTER_GO_BRIDGE_VERSION := v0.0.1-snapshot
+override FLUTTER_GO_BRIDGE_VERSION := development
 endif
 CGO_ENABLED ?= 0
 DOCS_BUN ?= bun
