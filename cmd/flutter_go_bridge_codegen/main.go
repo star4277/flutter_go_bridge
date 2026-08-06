@@ -27,7 +27,7 @@ import (
 
 const (
 	versionEnvironment = "FLUTTER_GO_BRIDGE_VERSION"
-	defaultVersion     = "v0.0.1-snapshot"
+	defaultVersion     = "development"
 )
 
 // version is replaced by the release build's ldflags. Runtime environment

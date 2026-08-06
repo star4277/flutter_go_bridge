@@ -27,13 +27,19 @@ func TestResolvedVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("snapshot is the final fallback", func(t *testing.T) {
+	t.Run("development is the final fallback", func(t *testing.T) {
 		version = ""
 		t.Setenv(versionEnvironment, "   ")
 		if got := resolvedVersion(); got != defaultVersion {
 			t.Fatalf("resolvedVersion() = %q, want %q", got, defaultVersion)
 		}
 	})
+}
+
+func TestDefaultVersionIsDevelopment(t *testing.T) {
+	if defaultVersion != "development" {
+		t.Fatalf("defaultVersion = %q, want %q", defaultVersion, "development")
+	}
 }
 
 func TestVersionFlagsIncludeGoToolchain(t *testing.T) {
