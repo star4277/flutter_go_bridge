@@ -71,7 +71,7 @@ Release workflow 会在上传附件前验证这两行信息。
 参数都没有提供版本，CLI 默认使用：
 
 ```text
-v0.0.1-snapshot
+development
 ```
 
 这个默认值仅为本地开发方便；Release workflow 总会传入明确版本。

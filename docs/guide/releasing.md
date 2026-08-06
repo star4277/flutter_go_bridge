@@ -69,7 +69,7 @@ At runtime, an explicitly set `FLUTTER_GO_BRIDGE_VERSION` overrides the embedded
 the environment nor build flags provide a value, the CLI uses:
 
 ```text
-v0.0.1-snapshot
+development
 ```
 
 This default is for local development only. The release workflow always supplies an explicit version.
