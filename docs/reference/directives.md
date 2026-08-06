@@ -43,6 +43,7 @@ Names are case-sensitive. Unknown or empty directives, empty rename/parameter va
 | `//fgb:ignore` | Functions, methods, types, constants, interface methods | Excludes the declaration |
 | `//fgb:rename = "name"` | Functions, methods, types, constants, interface methods | Changes the generated Dart name |
 | `//fgb:opaque` | Struct types | Forces `GoOpaque` handle semantics |
+| `//fgb:enum` | Named integer and string types | Generates a closed Dart enum from exported typed constants |
 | `//fgb:nullable = "a,b"` | Function and method parameters | Preserves nil for listed nil-capable Go parameters |
 
 ## `//fgb:sync`
@@ -110,6 +111,33 @@ See [Dart name collisions](/reference/type-mapping#dart-name-collisions).
 Renaming an interface method renames it for every generated implementation as well, so the directive
 belongs on the interface only. See
 [Named interfaces](/reference/structs-interfaces#named-interfaces).
+
+## `//fgb:enum`
+
+`//fgb:enum` opts a named string or signed/unsigned integer type into Dart enum generation. It must
+appear on the type declaration, not on a function or constant:
+
+```go
+//fgb:enum
+type Status int
+
+const (
+	StatusUnknown Status = iota
+	StatusReady
+)
+```
+
+At least one exported typed constant is required. Duplicate underlying values and unsupported
+underlyings fail generation. The directive cannot be combined with `//fgb:opaque`.
+
+Case names normally remove the Go type prefix. Put `//fgb:rename = "caseName"` on a constant to
+choose its case name explicitly. Reserved or duplicate Dart enum member names are given a numeric
+suffix and reported as warnings.
+
+The enum stores and transports each constant's exact underlying value. Standard and CST/DCO
+decoders reject values outside the declared set with `FormatException`. The marker does not alter
+the Go representation or its codecs, and omitting the marker always keeps the existing named
+extension-type representation.
 
 ## `//fgb:opaque`
 
@@ -236,4 +264,3 @@ func LoadItem(
 	// ...
 }
 ```
-

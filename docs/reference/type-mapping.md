@@ -34,6 +34,51 @@ extension type const Status(String value) {}
 Exported methods and same-type constants are emitted on the extension type. Its wire representation
 still uses the underlying type.
 
+### Explicit enums
+
+Add `//fgb:enum` to a named string or integer type when its exported typed constants form a closed
+set:
+
+```go
+//fgb:enum
+type Status int
+
+const (
+	StatusUnknown Status = 0
+	StatusReady   Status = 1
+)
+```
+
+```dart
+enum Status {
+  unknown(0),
+  ready(1);
+
+  const Status(this.value);
+  final int value;
+}
+```
+
+The directive is the only behavior switch. An unmarked named type remains an extension type even
+when its constants look enum-like; codegen may emit a warning suggesting `//fgb:enum`, but never
+changes the public representation heuristically.
+
+Signed and unsigned integer underlyings and strings are supported. At least one exported typed
+constant is required, and duplicate underlying values are rejected because aliases cannot
+round-trip through a closed Dart enum. For `uint64`, `uint`, and `uintptr`, generated enum values
+expose a `BigInt value`; the declaration stores constant decimal wire text internally because Dart
+does not allow `BigInt.parse(...)` as an enum constant argument.
+
+The Go type prefix is removed from generated case names (`StatusReady` becomes `ready`). A constant
+`//fgb:rename` wins over prefix removal. Duplicate names and Dart enum members such as `values`,
+`value`, `name`, and `index` receive numeric suffixes with a warning.
+
+Standard and CST/DCO codecs carry the exact underlying value in both directions. Dart decoding
+searches the declared cases and throws `FormatException` for an unknown value. Pointers become the
+nullable enum type. Exported methods and supported operators remain on the enum; a selected Go
+`ToString`, `String`, or `MarshalJSON` method can provide the generated `toString`. Without one, the
+normal Dart enum `toString` is preserved.
+
 ## Slices, arrays, and typed lists
 
 | Go | Dart | Notes |
