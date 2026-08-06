@@ -64,8 +64,8 @@ func ZeroSlot() Slot { return Slot{Label: "zero"} }
 		"const _ShapeAbsent()",
 		"throw StateError(",
 		"Shape(absent)",
-		"if (value == null) return const _ShapeAbsent();",
-		"if (value is GoAbsent) return null;",
+		"if (value == null) {",
+		"if (value is GoAbsent) {",
 	} {
 		if !strings.Contains(central, expected) {
 			t.Fatalf("generated central Dart missing absent-class element %q:\n%s", expected, central)
@@ -87,7 +87,7 @@ func (value Square) Area() int { return value.Side * value.Side }
 
 type NullableSlot struct {
 	Label string
-	Kind  Shape ` + "`fgb:\"nullable\"`" + `
+	Kind  Shape `+"`fgb:\"nullable\"`"+`
 }
 
 func Echo(value NullableSlot) NullableSlot { return value }
@@ -126,8 +126,8 @@ func ZeroReport() Report { return Report{} }
 	for _, expected := range []string{
 		"final class _StringerAbsent implements Stringer, GoAbsent",
 		"Stringer(absent)",
-		"if (value == null) return const _StringerAbsent();",
-		"if (value is GoAbsent) return null;",
+		"if (value == null) {",
+		"if (value is GoAbsent) {",
 	} {
 		if !strings.Contains(central, expected) {
 			t.Fatalf("dependency interface absent class missing %q in central:\n%s", expected, central)

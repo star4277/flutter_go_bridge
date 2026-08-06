@@ -25,7 +25,9 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 	// pointers, so a null value is simply a null pointer. Closures encode
 	// their own null case as handle 0.
 	if typ.Kind != kindCallback && typ.nilableWithoutPointer() {
-		r.line("  if (value == null) return ffi.nullptr;")
+		r.line("  if (value == null) {")
+		r.line("    return ffi.nullptr;")
+		r.line("  }")
 	}
 	switch typ.Kind {
 	case kindBool:
@@ -48,7 +50,9 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		}
 	case kindBigInt:
 		if strings.HasSuffix(typ.DartType, "?") {
-			r.line("  if (value == null) return ffi.nullptr;")
+			r.line("  if (value == null) {")
+			r.line("    return ffi.nullptr;")
+			r.line("  }")
 		}
 		r.renderCstStringBody("value.toRadixString(16)")
 	case kindInternetIP:
@@ -62,7 +66,9 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 	case kindDecimal:
 		r.renderCstStringBody("value.toString()")
 	case kindPointer:
-		r.line("  if (value == null) return ffi.nullptr;")
+		r.line("  if (value == null) {")
+		r.line("    return ffi.nullptr;")
+		r.line("  }")
 		inner := cstStorageFor(typ.Elem)
 		if inner.Scalar {
 			r.line("  final result = arena.allocate<%s>(ffi.sizeOf<%s>());", inner.DartType, inner.DartType)
@@ -88,8 +94,12 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		}
 		r.line("  return result;")
 	case kindOpaque:
-		r.line("  if (value == null) return 0;")
-		r.line("  if (!identical(value.fgbBridge, arena.bridge)) throw StateError('opaque value belongs to a different bridge');")
+		r.line("  if (value == null) {")
+		r.line("    return 0;")
+		r.line("  }")
+		r.line("  if (!identical(value.fgbBridge, arena.bridge)) {")
+		r.line("    throw StateError('opaque value belongs to a different bridge');")
+		r.line("  }")
 		r.line("  return value.fgbHandle;")
 	case kindDartOpaque:
 		r.line("  return arena.bridge.fgbInternalRegisterDartOpaque(value);")
@@ -169,7 +179,9 @@ func (r *splitDartRenderer) renderCstTypedListBody(typ *wireType, nativeElement 
 	r.line("  result.ref.len = value.length;")
 	r.line("  final data = arena.allocate<%s>(ffi.sizeOf<%s>() * (value.isEmpty ? 1 : value.length));", nativeElement, nativeElement)
 	r.line("  result.ref.ptr = data;")
-	r.line("  if (value.isNotEmpty) data.asTypedList(value.length).setAll(0, value);")
+	r.line("  if (value.isNotEmpty) {")
+	r.line("    data.asTypedList(value.length).setAll(0, value);")
+	r.line("  }")
 	r.line("  return result;")
 }
 
