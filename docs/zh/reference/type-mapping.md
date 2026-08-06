@@ -66,8 +66,11 @@ type；codegen 最多输出建议添加 `//fgb:enum` 的 warning，不会用启�
 生成成员暴露 `BigInt value`；由于 Dart 不允许把 `BigInt.parse(...)` 用作 enum 常量参数，声明内部
 保存编译期常量的十进制 wire 文本。
 
-成员名会去掉 Go 类型名前缀（`StatusReady` 生成 `ready`）；常量上的 `//fgb:rename` 优先。重名成员
-以及 `values`、`value`、`name`、`index` 等 Dart enum 内建成员会加数字后缀并输出 warning。
+Go 枚举遵循导出标识符约定：类型必须导出，每个成员必须是导出的同类型常量。推荐使用 Go 类型名加
+成员名的写法（`StatusUnknown`、`StatusReady`）。只有在常量名确实以该类型名前缀开头时才会去掉前缀
+（`StatusReady` 生成 `ready`）；不带此前缀的常量会把完整 Go 名称转换为 lowerCamelCase（`Ready` 生成
+`ready`）。常量上的 `//fgb:rename` 始终优先。重名成员以及 `values`、`value`、`name`、`index` 等
+Dart enum 内建成员会加数字后缀并输出 warning。
 
 standard 与 CST/DCO codec 在两个方向都传输精确的底层值。Dart 解码时只接受已声明成员，未知值会
 抛出 `FormatException`。指针映射为可空枚举。导出方法和受支持的运算符仍生成在 enum 上；被选中的

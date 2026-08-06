@@ -69,9 +69,13 @@ round-trip through a closed Dart enum. For `uint64`, `uint`, and `uintptr`, gene
 expose a `BigInt value`; the declaration stores constant decimal wire text internally because Dart
 does not allow `BigInt.parse(...)` as an enum constant argument.
 
-The Go type prefix is removed from generated case names (`StatusReady` becomes `ready`). A constant
-`//fgb:rename` wins over prefix removal. Duplicate names and Dart enum members such as `values`,
-`value`, `name`, and `index` receive numeric suffixes with a warning.
+Go enum declarations follow the exported-identifier convention: the type is exported and each case
+is an exported, typed constant. The recommended spelling is the Go type name followed by the case
+name (`StatusUnknown`, `StatusReady`). That exact type prefix is removed from generated Dart cases
+(`StatusReady` becomes `ready`). If a constant does not use the type prefix, its complete Go name is
+mapped to lowerCamelCase (`Ready` becomes `ready`). A constant `//fgb:rename` always wins over these
+rules. Duplicate names and Dart enum members such as `values`, `value`, `name`, and `index` receive
+numeric suffixes with a warning.
 
 Standard and CST/DCO codecs carry the exact underlying value in both directions. Dart decoding
 searches the declared cases and throws `FormatException` for an unknown value. Pointers become the
