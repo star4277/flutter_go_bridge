@@ -7,6 +7,18 @@ bun install
 bun run dev
 ```
 
+The same workflows are available from the repository root with Make. These targets run `bun install`
+first:
+
+```sh
+make docs dev
+make docs build
+make docs preview
+```
+
+`make docs preview` runs the VitePress build before starting `vitepress preview`. The canonical target
+names are also available as `make docs-dev`, `make docs-build`, and `make docs-preview`.
+
 Before committing documentation changes, run:
 
 ```sh
