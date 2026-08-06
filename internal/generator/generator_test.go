@@ -360,6 +360,10 @@ type Values struct {
 }
 
 func Load() Values { return Values{} }
+
+func RoundTrip(shop decimal.Decimal, apdValue apd.Decimal, optionalShop *decimal.Decimal, optionalAPD *apd.Decimal) Values {
+	return Values{Shop: shop, OptionalShop: optionalShop, APD: apdValue, OptionalAPD: optionalAPD}
+}
 `
 	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
@@ -393,7 +397,7 @@ func Load() Values { return Values{} }
 	for _, expected := range []string{
 		"import 'package:uuid/uuid.dart';", "UuidValue.fromString",
 		"import 'package:decimal/decimal.dart';", "Decimal.parse(value)", "return value.toString();",
-		`fgbInvokeSync("Load"`,
+		"_fgbCstEncode", "fgbInvokeCstSync(1",
 	} {
 		if !strings.Contains(central, expected) {
 			t.Fatalf("public bridge missing %q:\n%s", expected, central)
@@ -412,6 +416,7 @@ func Load() Values { return Values{} }
 	for _, expected := range []string{
 		`"github.com/shopspring/decimal"`, `"github.com/cockroachdb/apd/v3"`,
 		"decimal.NewFromString(raw)", "apd.NewFromString(raw)",
+		"fgbCstReadString", "fgbDcoString(value.String())",
 		"value.Form != apd.Finite", "apd Decimal must be finite",
 	} {
 		if !strings.Contains(goSource, expected) {

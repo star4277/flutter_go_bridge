@@ -59,6 +59,8 @@ func (r *splitDartRenderer) renderCstEncoder(typ *wireType) {
 		r.renderCstStringBody("value.toString()")
 	case kindUUID:
 		r.renderCstStringBody("value.uuid")
+	case kindDecimal:
+		r.renderCstStringBody("value.toString()")
 	case kindPointer:
 		r.line("  if (value == null) return ffi.nullptr;")
 		inner := cstStorageFor(typ.Elem)
