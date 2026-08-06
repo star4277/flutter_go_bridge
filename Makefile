@@ -6,6 +6,17 @@ override FLUTTER_GO_BRIDGE_VERSION := development
 endif
 CGO_ENABLED ?= 0
 DOCS_BUN ?= bun
+LOCAL_GOOS ?= $(strip $(shell go env GOOS))
+LOCAL_GOARCH ?= $(strip $(shell go env GOARCH))
+LOCAL_GOBIN := $(strip $(shell go env GOBIN))
+ifeq ($(LOCAL_GOBIN),)
+LOCAL_GOBIN := $(strip $(shell go env GOPATH))/bin
+endif
+LOCAL_SYSTEM := $(patsubst darwin,macos,$(LOCAL_GOOS))
+LOCAL_EXECUTABLE = $(APP_NAME)$(if $(filter windows,$(LOCAL_GOOS)),.exe,)
+LOCAL_BUILD_DIR = $(BUILD_ROOT)/local/$(LOCAL_SYSTEM)-$(LOCAL_GOARCH)
+LOCAL_BUILD_EXECUTABLE = $(LOCAL_BUILD_DIR)/$(LOCAL_EXECUTABLE)
+LOCAL_INSTALL_EXECUTABLE = $(LOCAL_GOBIN)/$(LOCAL_EXECUTABLE)
 
 BUILD_ROOT ?= build
 # Final archives and uncompressed binaries are written directly to build/.
@@ -48,7 +59,7 @@ ARCHIVE_OUTPUT = $(DIST_DIR)/$(OUTPUT_BASENAME).$(ARCHIVE_EXT)
 
 .DEFAULT_GOAL := help
 
-.PHONY: all windows linux macos darwin openharmony clean help list package-one docs docs-dev docs-build docs-preview dev build preview $(ALL_RELEASE_TARGETS)
+.PHONY: all windows linux macos darwin openharmony clean help list local package-one docs docs-dev docs-build docs-preview dev build preview $(ALL_RELEASE_TARGETS)
 
 all: $(ALL_RELEASE_TARGETS)
 
@@ -98,6 +109,18 @@ dev: docs-dev
 build: docs-build
 
 preview: docs-preview
+
+local:
+ifeq ($(OS),Windows_NT)
+	powershell.exe -NoProfile -Command "New-Item -ItemType Directory -Force -Path '$(LOCAL_BUILD_DIR)', '$(LOCAL_GOBIN)' | Out-Null"
+	powershell.exe -NoProfile -Command "$$env:GOOS='$(LOCAL_GOOS)'; $$env:GOARCH='$(LOCAL_GOARCH)'; $$env:CGO_ENABLED='$(CGO_ENABLED)'; go build -trimpath -ldflags '$(LDFLAGS)' -o '$(LOCAL_BUILD_EXECUTABLE)' $(COMMAND_PACKAGE)"
+	powershell.exe -NoProfile -Command "Copy-Item -LiteralPath '$(LOCAL_BUILD_EXECUTABLE)' -Destination '$(LOCAL_INSTALL_EXECUTABLE)' -Force"
+else
+	mkdir -p "$(LOCAL_BUILD_DIR)" "$(LOCAL_GOBIN)"
+	GOOS="$(LOCAL_GOOS)" GOARCH="$(LOCAL_GOARCH)" CGO_ENABLED="$(CGO_ENABLED)" go build -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCAL_BUILD_EXECUTABLE)" $(COMMAND_PACKAGE)
+	cp -f "$(LOCAL_BUILD_EXECUTABLE)" "$(LOCAL_INSTALL_EXECUTABLE)"
+endif
+	@echo "Installed $(LOCAL_SYSTEM)/$(LOCAL_GOARCH): $(LOCAL_INSTALL_EXECUTABLE)"
 
 package-one:
 ifeq ($(OS),Windows_NT)
@@ -156,6 +179,7 @@ help:
 	@echo "FLUTTER_GO_BRIDGE_VERSION=v1.2.3 make all  Override the release version"
 	@echo "make list                       List all release targets"
 	@echo "make clean                      Remove build outputs"
+	@echo "make local                      Build for current OS/arch and install to GOBIN or GOPATH/bin"
 	@echo "make docs dev                   Install docs deps and start the VitePress dev server"
 	@echo "make docs build                 Install docs deps and build the docs site"
 	@echo "make docs preview               Build docs, then start the production preview"
