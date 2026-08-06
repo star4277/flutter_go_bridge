@@ -246,6 +246,7 @@ not choose codecs manually.
 | `uint8`, `uint16`, `uint32` | `int` with range checks |
 | `uint64`, `uint`, `uintptr` | `BigInt` |
 | `float32`, `float64` | `double` |
+| CGo scalars such as `C.char`, `C.int`, `C.size_t`, typedefs, and enums | Underlying `int`, `BigInt`, or `double` |
 | `[]byte`, `[]int32`, `[]int64`, `[]float64` | Dart typed lists |
 | `[]T`, `[N]T`, `map[K]V` | `List<T>`, `List<T>`, `Map<K, V>` |
 | `time.Time`, `time.Duration`, `math/big.Int` | `DateTime`, `Duration`, `BigInt` |

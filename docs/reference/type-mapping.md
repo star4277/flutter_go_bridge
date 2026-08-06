@@ -14,8 +14,15 @@ whether a parameter is nullable or required and whether a function returns `Futu
 | `uint8`<br>`uint16`<br>`uint32` | `int` | Full unsigned range in both directions; negative and out-of-range input is rejected |
 | `uint64`<br>`uint`<br>`uintptr` | `BigInt` | Preserves unsigned values and platform-width semantics |
 | `float32`<br>`float64` | `double` | `float32` input is converted to 32-bit precision in Go |
+| CGo scalar (`C.char`, `C.int`, `C.size_t`, C typedefs/enums) | Underlying `int`, `BigInt`, or `double` mapping | `cmd/cgo` width and signedness are preserved; private `_Ctype_*` names never appear in generated code |
 
 `complex64`, `complex128`, and `unsafe.Pointer` are not supported as ordinary bridged types.
+
+CGo scalar values are supported in direct parameters, results, and serializable struct fields. The
+generated bridge uses ordinary underlying scalar values on the wire and converts them to the private
+cgo types through reflection at the call boundary. Raw CGo pointers, C structs/unions, and slices,
+arrays, maps, callbacks, or streams containing cgo types are rejected because their ownership and
+memory layout cannot be inferred safely; expose an exported Go wrapper with an explicit data policy.
 
 ### Named basic types
 
