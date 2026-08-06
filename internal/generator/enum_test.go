@@ -79,6 +79,27 @@ func EchoStatus(value Status) Status { return value }
 	}
 }
 
+func TestBuildEnumExplicitRenameWinsOverPrefixStripping(t *testing.T) {
+	unit, _, err := buildEnumFixture(t, `package api
+
+//fgb:enum
+type Status int
+
+const (
+	//fgb:rename = "statusReady"
+	StatusReady Status = 1
+)
+
+func EchoStatus(value Status) Status { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unit.Named[0].Constants[0].DartName; got != "statusReady" {
+		t.Fatalf("explicit rename was stripped as a type prefix: got %q", got)
+	}
+}
+
 func TestBuildEnumRejectsInvalidClosedSet(t *testing.T) {
 	cases := []struct {
 		name   string

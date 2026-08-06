@@ -1076,6 +1076,9 @@ func likelyEnum(named *types.Named, constants []*model.Constant, underlying *wir
 
 func enumCaseName(typeName string, item *model.Constant) string {
 	name := item.DartName
+	if item.Renamed {
+		return name
+	}
 	defaultName := names.LowerCamel(item.Object.Name())
 	if name == defaultName {
 		if remainder := strings.TrimPrefix(item.Object.Name(), typeName); remainder != item.Object.Name() && remainder != "" {
