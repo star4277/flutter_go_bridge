@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,19 +58,31 @@ typedef int32_t score_t;
 */
 import "C"
 
+import "sync/atomic"
+
 type Stats struct {
 	Count C.int
 	Ratio C.double
 }
+
+type AtomicStats struct {
+	Count C.int
+	Hits atomic.Int64
+}
+
+type Score int
 
 func Add(left C.int, right C.longlong) C.longlong { return C.longlong(left) + right }
 func Scale(value C.float) C.double { return C.double(value) }
 func EchoSize(value C.size_t) C.size_t { return value }
 func EchoScore(value C.score_t) C.score_t { return value }
 func EchoStats(value Stats) Stats { return value }
+func EchoAtomicStats(value *AtomicStats) *AtomicStats { return value }
 func Checked(value C.int) (C.int, error) { return value, nil }
+func CheckedTwice(value C.int) (C.int, error, error) { return value, nil, nil }
 func Pair(value C.int) (C.int, C.double) { return value, C.double(value) }
 func Set(value C.int) {}
+func (score Score) Increase(value C.int) C.int { return C.int(score) + value }
 `
 	if err := os.WriteFile(filepath.Join(inputDir, "api.go"), []byte(source), 0o644); err != nil {
 		t.Fatal(err)
@@ -94,8 +107,10 @@ func Set(value C.int) {}
 		"int echoScore({required int value})",
 		"final int count;", "final double ratio;",
 		"int checked({required int value})",
+		"int checkedTwice({required int value})",
 		"(int, double) pair({required int value})",
 		"void set_({required int value})",
+		"int increase({required int value})",
 	} {
 		if !strings.Contains(apiDart, expected) {
 			t.Fatalf("generated CGo Dart API missing %q:\n%s", expected, apiDart)
@@ -130,6 +145,10 @@ func TestGeneratedCgoDispatch(t *testing.T) {
 	if values[0] != int32(3) || values[1] != float64(3) {
 		t.Fatalf("Pair returned %#v", paired)
 	}
+	checkedTwice, callErr := fgbDispatch(fgbMethodCall{Method: "CheckedTwice", Arguments: []any{int32(5)}}, &fgbOpaqueTransfer{})
+	if callErr != nil || checkedTwice != int32(5) {
+		t.Fatalf("CheckedTwice returned result=%#v error=%#v", checkedTwice, callErr)
+	}
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "bridge_generated_test.go"), []byte(runtimeTest), 0o644); err != nil {
@@ -152,6 +171,99 @@ func Raw(value *C.char) *C.char { return value }
 `)
 	if err == nil || !strings.Contains(err.Error(), "CGo pointer type") {
 		t.Fatalf("raw C pointers need an explicit ownership diagnostic, got %v", err)
+	}
+}
+
+func TestGenerateRejectsCgoCompositeTypes(t *testing.T) {
+	tests := []struct {
+		name   string
+		method string
+		want   string
+	}{
+		{name: "slice", method: "func Bad(value []C.int) {}", want: "slice element"},
+		{name: "array", method: "func Bad(value [2]C.int) {}", want: "array element"},
+		{name: "map key", method: "func Bad(value map[C.int]string) {}", want: "map keys and values"},
+		{name: "map value", method: "func Bad(value map[string]C.int) {}", want: "map keys and values"},
+		{name: "callback parameter", method: "func Bad(callback func(C.int)) {}", want: "callback signatures"},
+		{name: "callback result", method: "func Bad(callback func() C.int) {}", want: "callback signatures"},
+		{name: "stream", method: "//fgb:async\nfunc Bad(values chan<- C.int) {}", want: "stream elements"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, _, _, err := generateFixture(t, `package api
+
+import "C"
+
+`+test.method+"\n")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("CGo %s should be rejected with %q, got %v", test.name, test.want, err)
+			}
+		})
+	}
+}
+
+func TestGenerateCgoCompositeFieldsFallBackToOpaque(t *testing.T) {
+	_, _, _, warnings, err := generateFixture(t, `package api
+
+import "C"
+
+type PointerHolder struct { Value *C.int }
+type SliceHolder struct { Values []C.int }
+type ArrayHolder struct { Values [2]C.int }
+type MapKeyHolder struct { Values map[C.int]string }
+type MapValueHolder struct { Values map[string]C.int }
+
+func TakePointer(value *PointerHolder) {}
+func TakeSlice(value *SliceHolder) {}
+func TakeArray(value *ArrayHolder) {}
+func TakeMapKey(value *MapKeyHolder) {}
+func TakeMapValue(value *MapValueHolder) {}
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"CGo pointer type",
+		"slice element type",
+		"array element type",
+		"map containing package-private CGo types",
+	} {
+		found := false
+		for _, warning := range warnings {
+			if strings.Contains(warning.Error(), want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing CGo field fallback warning %q in %v", want, warnings)
+		}
+	}
+}
+
+func TestMapCgoScalarRejectsUnsupportedSyntheticTypes(t *testing.T) {
+	b := &builder{
+		unit:      &unit{},
+		typeCache: map[types.Type]*wireType{},
+	}
+	pkg := types.NewPackage("example.com/cgo", "cgo")
+	tests := []struct {
+		name       string
+		underlying types.Type
+		want       string
+	}{
+		{name: "non-basic", underlying: types.NewStruct(nil, nil), want: "unsupported underlying type"},
+		{name: "unsupported basic", underlying: types.Typ[types.Complex64], want: "unsupported basic type"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			object := types.NewTypeName(0, pkg, "_Ctype_"+strings.ReplaceAll(test.name, " ", "_"), nil)
+			named := types.NewNamed(object, test.underlying, nil)
+			_, err := b.mapCgoScalar(named, named)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("synthetic CGo %s should fail with %q, got %v", test.name, test.want, err)
+			}
+		})
 	}
 }
 
