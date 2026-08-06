@@ -1,4 +1,4 @@
-﻿package parser
+package parser
 
 import (
 	"go/ast"
@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/star4277/flutter_go_bridge/internal/model"
@@ -92,6 +93,9 @@ func TestParseDirectivesExtraBranches(t *testing.T) {
 	if ds, err := parseDirectives(commentGroup("//fgb:opaque")); err != nil || !ds.Opaque {
 		t.Fatalf("opaque: %#v %v", ds, err)
 	}
+	if ds, err := parseDirectives(commentGroup("//fgb:enum")); err != nil || !ds.Enum {
+		t.Fatalf("enum: %#v %v", ds, err)
+	}
 	if ds, err := parseDirectives(commentGroup("//fgb:ignore")); err != nil || !ds.Ignore {
 		t.Fatalf("ignore: %#v %v", ds, err)
 	}
@@ -150,6 +154,9 @@ func TestMergeSpecDirectivesBranches(t *testing.T) {
 	}
 	if ds2.Rename != "C" {
 		t.Fatalf("decl rename fallback: %#v", ds2)
+	}
+	if ds, err := mergeSpecDirectives(commentGroup("//fgb:enum"), commentGroup("//fgb:opaque")); err == nil || !strings.Contains(err.Error(), "enum") {
+		t.Fatalf("enum and opaque should conflict, got %#v %v", ds, err)
 	}
 }
 
