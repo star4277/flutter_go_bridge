@@ -172,6 +172,32 @@ func EchoFlag(value Flag) Flag { return value }
 	}
 }
 
+func TestBuildEnumDisambiguatesDuplicateRenamedCases(t *testing.T) {
+	unit, warnings, err := buildEnumFixture(t, `package api
+
+//fgb:enum
+type Flag int
+
+const (
+	//fgb:rename = "same"
+	FlagFirst Flag = 1
+	//fgb:rename = "same"
+	FlagSecond Flag = 2
+)
+
+func EchoFlag(value Flag) Flag { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unit.Named[0].Constants; len(got) != 2 || got[0].DartName != "same" || got[1].DartName != "same2" {
+		t.Fatalf("duplicate renamed cases were not disambiguated: %#v", got)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Error(), "duplicate Dart name") {
+		t.Fatalf("expected one duplicate-case warning, got %v", warnings)
+	}
+}
+
 func TestRenderEnumDeclarationAndWireCodecs(t *testing.T) {
 	apiDart, central, goSource, warnings, err := generateFixture(t, `package api
 
@@ -270,6 +296,87 @@ func EchoCode(value Code) Code { return value }
 	}
 	if !strings.Contains(central, "value.value") || !strings.Contains(central, "unknown Code value") {
 		t.Fatalf("uint64 enum codec does not preserve its BigInt value:\n%s", central)
+	}
+}
+
+func TestRenderEnumMethodsOperatorsAndGoToString(t *testing.T) {
+	apiDart, central, _, warnings, err := generateFixture(t, `package api
+
+//fgb:enum
+type Status int
+
+const (
+	StatusUnknown Status = 0
+	StatusReady Status = 1
+)
+
+func (s Status) IsReady() bool { return s == StatusReady }
+func (s Status) Add(other Status) Status { return s + other }
+func (s Status) ToString() string { return "status" }
+func EchoStatus(value Status) Status { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %v", warnings)
+	}
+	for _, expected := range []string{
+		"bool isReady()",
+		"Status operator +(Status other)",
+		"@override\n  String toString()",
+	} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("enum method behavior missing %q:\n%s", expected, apiDart)
+		}
+	}
+	if strings.Contains(apiDart, "String toString() => value.toString();") || !strings.Contains(central, "fgbInternalCall") {
+		t.Fatalf("enum toString must use the Go method instead of a local fallback:\n%s", apiDart)
+	}
+}
+
+func TestRenderEnumWithoutGoToStringKeepsDartDefault(t *testing.T) {
+	apiDart, _, _, _, err := generateFixture(t, `package api
+
+//fgb:enum
+type Status int
+
+const StatusReady Status = 1
+
+func EchoStatus(value Status) Status { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(apiDart, "String toString()") {
+		t.Fatalf("enum without a Go-backed representation must keep Dart's normal toString:\n%s", apiDart)
+	}
+}
+
+func TestRenderEnumDisambiguatesBuiltInMethodNames(t *testing.T) {
+	apiDart, _, _, warnings, err := generateFixture(t, `package api
+
+//fgb:enum
+type Status int
+
+const StatusReady Status = 1
+
+func (s Status) Values() int { return int(s) }
+func (s Status) Value() int { return int(s) }
+func (s Status) Name() string { return "status" }
+func (s Status) Index() int { return int(s) }
+func EchoStatus(value Status) Status { return value }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"int values2()", "int value2()", "String name2()", "int index2()"} {
+		if !strings.Contains(apiDart, expected) {
+			t.Fatalf("enum built-in method was not disambiguated as %q:\n%s", expected, apiDart)
+		}
+	}
+	if len(warnings) < 4 {
+		t.Fatalf("expected enum built-in collision warnings, got %v", warnings)
 	}
 }
 
