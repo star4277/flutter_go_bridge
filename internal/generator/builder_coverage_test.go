@@ -197,6 +197,40 @@ func TestDependencyMethodHelpersHandleReceiverShapes(t *testing.T) {
 	}
 }
 
+func TestModuleInterfaceImplementorCandidatesRespectDiscoveryBoundaries(t *testing.T) {
+	inputTypes := types.NewPackage("example.com/fixture/api", "api")
+	inputPackage := &packages.Package{
+		PkgPath: "example.com/fixture/api",
+		Name:    "api",
+		Types:   inputTypes,
+		Module:  &packages.Module{Path: "example.com/fixture"},
+		Imports: map[string]*packages.Package{},
+	}
+	b := &builder{
+		api:  &bridgemodel.API{Package: inputPackage},
+		unit: &unit{PackagePath: inputPackage.PkgPath},
+	}
+	if candidates := b.moduleInterfaceImplementorCandidates(nil); candidates != nil {
+		t.Fatalf("nil interface should have no module candidates: %v", candidates)
+	}
+
+	contractsTypes := types.NewPackage("example.com/fixture/contracts", "contracts")
+	shape := types.NewNamed(
+		types.NewTypeName(0, contractsTypes, "Shape", nil),
+		types.NewInterfaceType(nil, nil).Complete(),
+		nil,
+	)
+	inputPackage.Imports[contractsTypes.Path()] = &packages.Package{
+		PkgPath: contractsTypes.Path(),
+		Name:    contractsTypes.Name(),
+		Types:   contractsTypes,
+		Module:  &packages.Module{Path: inputPackage.Module.Path},
+	}
+	if candidates := b.moduleInterfaceImplementorCandidates(shape); candidates != nil {
+		t.Fatalf("an interface in the input module must not trigger third-party module discovery: %v", candidates)
+	}
+}
+
 func TestAtomicStructRecursionAndCycleGuards(t *testing.T) {
 	atomicPackage, err := importer.Default().Import("sync/atomic")
 	if err != nil {

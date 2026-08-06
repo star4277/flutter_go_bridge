@@ -221,10 +221,7 @@ func (b *builder) mapDependencyImplementorMethods() {
 			if !ok || method == nil || !method.Exported() || !isStringRepresentationMethod(method.Name()) {
 				continue
 			}
-			signature, ok := method.Type().(*types.Signature)
-			if !ok || signature.TypeParams() != nil && signature.TypeParams().Len() != 0 {
-				continue
-			}
+			signature := method.Type().(*types.Signature)
 			source := &model.Callable{
 				Func: method, Signature: signature, Receiver: named,
 				PointerRecv: methodReceiverIsPointer(method),
@@ -246,9 +243,6 @@ func (b *builder) mapDependencyImplementorMethods() {
 			case kindStruct:
 				b.disambiguateMethod(call, call.Receiver.Struct.Methods)
 				call.Receiver.Struct.Methods = append(call.Receiver.Struct.Methods, call)
-			case kindNamed:
-				b.disambiguateMethod(call, call.Receiver.Named.Methods)
-				call.Receiver.Named.Methods = append(call.Receiver.Named.Methods, call)
 			}
 		}
 	}
