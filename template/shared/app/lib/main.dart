@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/bridge_generated.dart';
 import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/api/lib.dart';
+import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/fgb_wasm_loader.dart';
 
 Future<void> main() async {
+  await FgbWasmLoader.ensureReady();
   FlutterGoBridge.initialize();
   runApp(const MyApp());
 }

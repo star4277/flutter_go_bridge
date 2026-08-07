@@ -61,6 +61,9 @@ func TestGenerateWebPureGoAndCgoFallback(t *testing.T) {
 	if !strings.Contains(dartSource, "dart:js_interop") || !strings.Contains(dartSource, "Go method NativeOnly is unavailable on Web") {
 		t.Fatalf("Web Dart bridge is missing JS transport or cgo fallback:\n%s", dartSource)
 	}
+	if _, statErr := os.Stat(filepath.Join(dir, "fgb_web_build.json")); statErr != nil {
+		t.Fatalf("Web bridge metadata was not generated: %v", statErr)
+	}
 
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, "bridge.wasm"), ".")
 	command.Dir = dir

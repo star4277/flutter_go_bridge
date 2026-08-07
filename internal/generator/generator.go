@@ -1,6 +1,9 @@
 package generator
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"go/format"
 	"os"
@@ -92,6 +95,13 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 	files := map[string][]byte{
 		resolved.GoOutput: formattedGo,
 	}
+	if resolved.Target == config.TargetWeb {
+		metadata, metadataErr := webBridgeMetadata(api, resolved)
+		if metadataErr != nil {
+			return Result{Warnings: warnings}, metadataErr
+		}
+		files[filepath.Join(filepath.Dir(resolved.GoOutput), "fgb_web_build.json")] = metadata
+	}
 	for path, content := range dartFiles {
 		files[path] = content
 	}
@@ -137,6 +147,26 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 		result.Files = append(result.Files, path)
 	}
 	return result, nil
+}
+
+func webBridgeMetadata(api *model.API, resolved config.Resolved) ([]byte, error) {
+	hash := sha256.New()
+	for _, source := range api.SourceFiles {
+		content, err := os.ReadFile(source)
+		if err != nil {
+			return nil, fmt.Errorf("read Web bridge source %s: %w", source, err)
+		}
+		_, _ = hash.Write([]byte(filepath.ToSlash(source)))
+		_, _ = hash.Write(content)
+	}
+	payload := map[string]any{
+		"protocol_version": 1,
+		"generator_version": "flutter_go_bridge_codegen",
+		"target":            string(resolved.Target),
+		"library_name":      resolved.LibraryName,
+		"api_hash":          hex.EncodeToString(hash.Sum(nil)),
+	}
+	return json.MarshalIndent(payload, "", "  ")
 }
 
 func samePath(left, right string) bool {
