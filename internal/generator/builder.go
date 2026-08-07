@@ -6,6 +6,8 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/model"
 	"github.com/star4277/flutter_go_bridge/internal/names"
 	"golang.org/x/tools/go/packages"
+	"gopkg.in/yaml.v3"
 )
 
 // structClass is the FRB-style bridge classification of a named Go struct:
@@ -66,20 +69,21 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		}
 	}
 	result := &unit{
-		PackagePath:      api.Package.PkgPath,
-		PackageName:      api.Package.Name,
-		InputDir:         api.InputDir,
-		MirrorRoot:       api.InputDir,
-		SourceFiles:      append([]string(nil), api.SourceFiles...),
-		Direct:           direct,
-		NeedsMain:        needsMain,
-		LibraryName:      resolved.LibraryName,
-		ClassName:        names.UpperCamel(resolved.DartEntrypointClassName),
-		GoPreamble:       resolved.GoPreamble,
-		DartPreamble:     resolved.DartPreamble,
-		Target:           string(resolved.Target),
-		GoPackageAliases: map[string]string{},
-		codecSupport:     map[codecCacheKey]bool{},
+		PackagePath:         api.Package.PkgPath,
+		PackageName:         api.Package.Name,
+		InputDir:            api.InputDir,
+		MirrorRoot:          api.InputDir,
+		SourceFiles:         append([]string(nil), api.SourceFiles...),
+		Direct:              direct,
+		NeedsMain:           needsMain,
+		LibraryName:         resolved.LibraryName,
+		ClassName:           names.UpperCamel(resolved.DartEntrypointClassName),
+		GoPreamble:          resolved.GoPreamble,
+		DartPreamble:        resolved.DartPreamble,
+		Target:              string(resolved.Target),
+		UseFlutterWebLoader: resolved.Target == config.TargetWeb && isFlutterProject(resolved.BaseDir),
+		GoPackageAliases:    map[string]string{},
+		codecSupport:        map[codecCacheKey]bool{},
 	}
 	// Mirror the Dart tree from the Go module root so a package directory such
 	// as api/ shows up as api/ on the Dart side too.
@@ -173,6 +177,21 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		return nil, b.warnings, err
 	}
 	return b.unit, b.warnings, nil
+}
+
+func isFlutterProject(baseDir string) bool {
+	raw, err := os.ReadFile(filepath.Join(baseDir, "pubspec.yaml"))
+	if err != nil {
+		return false
+	}
+	var pubspec struct {
+		Dependencies map[string]any `yaml:"dependencies"`
+	}
+	if err := yaml.Unmarshal(raw, &pubspec); err != nil {
+		return false
+	}
+	_, found := pubspec.Dependencies["flutter"]
+	return found
 }
 
 func unsupportedWebCallReason(call *callModel) string {

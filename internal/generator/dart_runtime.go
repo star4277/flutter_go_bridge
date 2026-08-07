@@ -699,7 +699,15 @@ final class __FGB_BRIDGE_CLASS__ {
     return _instance = __FGB_BRIDGE_CLASS__._open(libraryPath: libraryPath);
   }
 
-  static void initialize({String? libraryPath}) => open(libraryPath: libraryPath);
+  static Future<void> initialize({
+    String? libraryPath,
+    Future<void> Function()? webInitializer,
+  }) async {
+    if (webInitializer != null) {
+      await webInitializer();
+    }
+    open(libraryPath: libraryPath);
+  }
 
   static __FGB_BRIDGE_CLASS__ _open({String? libraryPath}) {
     final library = libraryPath == null

@@ -138,6 +138,14 @@ func modifyFile(rel, target string, reference, existing []byte, exists bool, rep
 		if slices.Contains(commentOutFiles, filepath.Base(target)) {
 			return commentOutExistingAndAppendTemplate(existing, src), true
 		}
+		// Upgrade the generated bridge when an earlier integration still has
+		// the synchronous initializer signature. The bridge is generated output,
+		// so this narrow signature check does not overwrite user-authored files.
+		if strings.Contains(string(existing), "static void initialize({String? libraryPath})") &&
+			strings.Contains(string(src), "static Future<void> initialize") &&
+			strings.HasSuffix(filepath.ToSlash(rel), "lib/src/bridge_generated.dart") {
+			return src, true
+		}
 		log.Printf("warning: skip writing to %s because the file already exists; remove it and rerun to apply the full template", target)
 		return nil, false
 	}
