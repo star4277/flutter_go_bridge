@@ -164,6 +164,16 @@ flutter_go_bridge_codegen run -d emulator-5554
 Dart 代码变化使用 hot reload；Go 代码变化会重新生成并重启应用进程，让新的平台产物真正被加载。
 目标为 Web 时，`run` 还会在启动前和 Go 变化后调用 Gokit `build-web`。
 
+如果要直接运行 Flutter Web 命令，只准备 Wasm 资源，可以执行：
+
+```sh
+flutter_go_bridge_codegen build-web
+flutter run -d chrome
+# 或：flutter build web
+```
+
+`build-web` 会生成共享 bridge 并调用 Gokit `build-web`，不会启动或构建 Flutter。
+
 一次性生成并构建平台产物：
 
 ```sh
@@ -342,6 +352,7 @@ final value = await transform(
 | `generate --watch` | 监听 Go 源码并自动重新生成 |
 | `run` | 运行 Flutter；Dart 热重载，Go 变化后重启进程 |
 | `build` | 生成一次代码，并通过平台签名边界构建 Flutter 目标 |
+| `build-web` | 生成一次代码，并为直接 Flutter Web 命令准备 Go Wasm 资源 |
 | `create` | 创建带 Go 集成的新 Flutter app 或 FFI plugin |
 | `integrate` | 将 bridge 接入已有 Flutter 工程 |
 

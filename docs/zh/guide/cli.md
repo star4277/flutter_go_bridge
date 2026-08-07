@@ -58,6 +58,18 @@ flutter_go_bridge_codegen run -d emulator-5554 -- --flavor dev
 `--` 后参数原样传给 Flutter；不支持 `-d all`。
 目标为 Web 时，启动前和每次 Go 重新生成后还会调用 Gokit `build-web`。
 
+## `build-web`
+
+```sh
+flutter_go_bridge_codegen build-web [参数]
+```
+
+该命令先生成一次共享 Native/Web bridge，再调用 Gokit `build-web`，把最新的 `.wasm`、
+`wasm_exec.js` 和 `fgb_wasm_manifest.json` 安装到配置的包资源目录。它不会调用 Flutter，
+可以在直接执行 `flutter run -d chrome` 或 `flutter build web` 前运行。它支持与 `run` 相同的
+代码生成和配置参数，包括 `--config-file`、`--go-input`、`--go-output`、`--dart-output`、
+`--library-name` 和 `--no-dart-format`。
+
 ## `build`
 
 ```sh

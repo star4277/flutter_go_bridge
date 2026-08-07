@@ -2427,3 +2427,39 @@ Use real parsed fixtures for interface traversal or keep synthetic traversal fix
 - **Notes**: Removed the recursive anonymous-interface parameter; the focused coverage test now uses acyclic slice/array containers and direct interface validation fixtures.
 
 ---
+
+## [ERR-20260807-007] full Go test validation timeout
+
+**Logged**: 2026-08-07T16:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first full `go test ./... -count=1` attempt exceeded the 120-second command timeout without
+producing a failing test result.
+
+### Error
+```
+command timed out after 124022 milliseconds
+```
+
+### Context
+- Change under test: `flutter_go_bridge_codegen build-web` CLI command.
+- Focused CLI and platform-builder tests had already passed.
+- The repository's generator/integration suite can take longer than the default PowerShell tool
+  timeout on a cold cache.
+
+### Suggested Fix
+Re-run the same suite with a longer timeout and inspect verbose package progress if it remains slow.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: cmd/flutter_go_bridge_codegen/main.go, cmd/flutter_go_bridge_codegen/build_test.go
+
+### Resolution
+- **Resolved**: 2026-08-07T16:24:00+08:00
+- **Notes**: Re-ran with a 300-second timeout; all Go packages passed. The generator package took
+  117.9 seconds on the cold run.
+
+---
