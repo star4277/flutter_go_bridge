@@ -824,3 +824,30 @@ inspect remote logs only when the supplied report is missing actionable detail.
 - **Notes**: Added focused generator/parser coverage and verified a 97.59% local patch statement estimate.
 
 ---
+
+## [LRN-20260807-007] correction
+
+**Logged**: 2026-08-07T15:45:00+08:00
+**Priority**: high
+**Status**: in_progress
+**Area**: tests
+
+### Summary
+Aggregate and locally intersected statement coverage do not prove that Codecov patch coverage has enough margin.
+
+### Details
+The branch reached 95.7% aggregate Go statement coverage and a 97.64% local changed-statement
+estimate, while Codecov still reported exactly 92.13% patch coverage. Codecov evaluates changed
+source lines and partial lines differently from the local statement-range approximation. A result
+equal to the configured target is not a safe passing margin.
+
+### Suggested Action
+Use the user-provided Codecov file/line report as the authoritative patch-gap list. Add focused tests
+for those concrete branches and push enough newly covered patch lines to exceed the target clearly.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/*_test.go, internal/integrate/*_test.go
+- Tags: codecov, patch-coverage, partial-lines, coverage-margin
+
+---
