@@ -35,7 +35,8 @@ understand syntax or type-system behavior introduced by a newer project toolchai
 flutter_go_bridge_codegen generate [flags]
 ```
 
-Generates the Go bridge and Dart API. Important flags are `--go-input`, `--go-output`,
+Generates the Go bridge and Dart API. `--target native|web` selects the Go build constraints and
+transport renderer; Native remains the default. Important flags are `--go-input`, `--go-output`,
 `--dart-output`, `--library-name`, `--config-file`, `--watch`, `--no-dart-format`,
 `--print-ast`, and `--stop-on-error`.
 

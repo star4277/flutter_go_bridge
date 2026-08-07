@@ -44,6 +44,7 @@ func main() {
 
 type generateFlags struct {
 	configFile              string
+	target                  string
 	goInput                 string
 	goOutput                string
 	dartOutput              string
@@ -322,6 +323,7 @@ func registerGenerateFlags(command *cobra.Command, flags *generateFlags, shortha
 		goInput, goOutput, dartOutput = "i", "g", "d"
 	}
 	command.Flags().StringVar(&flags.configFile, "config-file", "", "Path to a flutter_go_bridge YAML/JSON config file")
+	command.Flags().StringVar(&flags.target, "target", "", "Generation target: native (default) or web")
 	command.Flags().StringVarP(&flags.goInput, "go-input", goInput, "", "Go package directory, .go file, or package pattern")
 	command.Flags().StringVarP(&flags.goOutput, "go-output", goOutput, "", "Generated Go bridge file (default bridge_generated.go beside the nearest go.mod)")
 	command.Flags().StringVarP(&flags.dartOutput, "dart-output", dartOutput, "", "Generated Dart bridge file (default lib/src/bridge_generated.dart)")
@@ -402,6 +404,7 @@ func runGenerateFiles(command *cobra.Command, flags *generateFlags) ([]string, e
 	log.Printf("loading Go package %s", resolved.GoInput)
 	api, err := parser.Parse(parser.Options{
 		Input: resolved.GoInput, BaseDir: resolved.BaseDir,
+		Target:   resolved.Target,
 		PrintAST: flags.printAST, ASTOut: os.Stdout,
 	})
 	if err != nil {
@@ -510,6 +513,7 @@ func (flags *generateFlags) toConfig(command *cobra.Command) config.Config {
 		}
 		return &value
 	}
+	result.Target = setString(flags.target)
 	result.GoInput = setString(flags.goInput)
 	result.GoOutput = setString(flags.goOutput)
 	result.DartOutput = setString(flags.dartOutput)
