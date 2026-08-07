@@ -163,7 +163,8 @@ flutter_go_bridge_codegen run -d emulator-5554
 ```
 
 Dart changes use hot reload. Go changes regenerate the bridge and restart the application process so
-the rebuilt native library is loaded.
+the rebuilt platform artifact is loaded. When the device is Web, `run` also invokes Gokit
+`build-web` before startup and after Go changes.
 
 ## Configuration
 
@@ -206,6 +207,7 @@ Code generation produces one Go bridge and a mirrored Dart tree:
 ```text
 go/
 ├── bridge_generated.go
+├── bridge_generated_web.go
 ├── internal/fgb/fgb_generated.go
 └── api/
     ├── api.go
@@ -213,14 +215,17 @@ go/
 
 lib/src/
 ├── bridge_generated.dart
+├── bridge_generated.io.dart
+├── bridge_generated.web.dart
 └── api/
     ├── api.dart
     └── account.dart
 ```
 
-- `bridge_generated.go` contains the cgo exports, dispatchers, and Go codecs.
-- `bridge_generated.dart` contains the FFI runtime, dynamic library bindings, codecs, and handle
-  management.
+- `bridge_generated.go` contains the Native cgo exports, dispatchers, and Go codecs.
+- `bridge_generated_web.go` contains the pure-Go `js/wasm` dispatcher and standard codec.
+- `bridge_generated.dart` contains shared types/codecs and conditionally selects the Native or Web
+  wire.
 - Mirrored Dart files contain the public classes, functions, methods, interfaces, and constants.
 
 ## Serialization model

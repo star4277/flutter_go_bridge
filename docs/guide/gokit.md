@@ -2,8 +2,9 @@
 
 Gokit owns both Native cgo builds and Web Wasm builds. It uses the same configuration parsing,
 source/toolchain fingerprint, artifact cache, file lock, atomic install, and structured build events
-for both targets. IDE tooling may invoke `build-web` after Go changes; the code generator does not
-compile Go itself.
+for both targets. Plain `generate` remains a code-generation command. The long-running
+`flutter_go_bridge_codegen run -d chrome` wrapper invokes `build-web` automatically; a direct
+`flutter run/build web` command requires the documented Gokit build step first.
 
 ## Platform outputs
 
@@ -37,6 +38,11 @@ Methods declared in a source file importing `"C"` remain visible in the generate
 package remain usable when the package still compiles with cgo disabled. Callbacks, streams,
 `DartOpaque`, opaque handles/interfaces, and `dart:io` `InternetAddress` parameters are also explicit
 Web fallbacks in the initial transport; Native support is unchanged.
+
+Flutter does not execute an arbitrary package command during `flutter run` or `flutter build web`.
+Therefore direct Flutter commands package the Wasm files already installed under the package's
+`assets/wasm/` directory. Generate the bridge and run Gokit's `build-web` before invoking Flutter;
+the exact app and plugin commands are shown in the [development server guide](dev-server.md).
 
 ## Requirements
 

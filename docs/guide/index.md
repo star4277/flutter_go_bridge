@@ -23,7 +23,7 @@ func LoadAccount(id int) (Account, error) { /* ... */ }
 import 'bridge_generated.dart';
 import 'api/api.dart';
 
-FlutterGoBridge.initialize(libraryPath: 'path/to/mylib.dll');
+await FlutterGoBridge.initialize(libraryPath: 'path/to/mylib.dll');
 
 final answer = add(a: 20, b: 22);        // unmarked in Go → synchronous in Dart
 final account = await loadAccount(id: 1); // //fgb:async → asynchronous in Dart

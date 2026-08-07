@@ -34,7 +34,8 @@ Build with go1.25.0
 flutter_go_bridge_codegen generate
 ```
 
-`--target native|web` 选择 Go 构建约束和传输层 renderer，默认仍为 Native。常用参数包括
+一次生成会同时输出 Native 和 Web Go bridge 以及一份共享 Dart API。`--target native|web` 仅为
+兼容旧调用保留，不再改变双平台输出。常用参数包括
 `--config-file`、`--go-input`、`--go-output`、`--dart-output`、
 `--library-name`、`--no-dart-format`、`--print-ast` 和 `--stop-on-error`。
 
@@ -55,6 +56,7 @@ flutter_go_bridge_codegen run -d emulator-5554 -- --flavor dev
 
 启动 `flutter run --machine`，Dart 改动 hot reload，Go 改动重新生成并重启进程。
 `--` 后参数原样传给 Flutter；不支持 `-d all`。
+目标为 Web 时，启动前和每次 Go 重新生成后还会调用 Gokit `build-web`。
 
 ## `create`
 

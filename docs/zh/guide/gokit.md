@@ -1,8 +1,9 @@
 # 用 Gokit 构建
 
 Gokit 同时负责 Native cgo 和 Web Wasm 构建。两类目标共用配置解析、源码/工具链 fingerprint、
-产物缓存、文件锁、原子安装和结构化构建事件。IDE 工具可在 Go 修改后调用 `build-web`；代码生成器
-本身不负责 Go 编译。
+产物缓存、文件锁、原子安装和结构化构建事件。普通 `generate` 只负责生成桥接代码；长期运行的
+`flutter_go_bridge_codegen run -d chrome` 会自动调用 `build-web`。直接执行
+`flutter run/build web` 时，需要先按文档运行 Gokit 构建步骤。
 
 | 平台 | 产物 |
 | --- | --- |
@@ -34,3 +35,7 @@ Dart 调用 API 前，Web loader 必须执行 `wasm_exec.js`、实例化 manifes
 原因抛出 `UnsupportedError`。同包其他纯 Go 文件只要能在禁用 cgo 后完整编译，其方法仍可使用。
 初始 Web 传输层还会对 callback、stream、`DartOpaque`、opaque handle/interface 和使用
 `dart:io` `InternetAddress` 的参数生成明确兜底；Native 支持不变。
+
+Flutter 在直接执行 `flutter run` 或 `flutter build web` 时，不会调用包内的任意 Go 编译命令。
+因此直接使用 Flutter 命令时，只会打包已经安装到包内 `assets/wasm/` 的文件。请先生成桥接并执行
+Gokit `build-web`；App 和 Plugin 的完整命令见[开发服务器](dev-server.md)。
