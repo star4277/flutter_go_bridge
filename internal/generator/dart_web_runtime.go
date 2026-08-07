@@ -7,7 +7,11 @@ import (
 )
 
 func dartWebRuntimeSource(unit *unit) (string, error) {
-	common, err := dartCommonRuntimeSource()
+	return dartWebRuntimeSourceFrom(unit, dartRuntimeSource)
+}
+
+func dartWebRuntimeSourceFrom(unit *unit, source string) (string, error) {
+	common, err := dartCommonRuntimeSourceFrom(source)
 	if err != nil {
 		return "", err
 	}
@@ -16,7 +20,11 @@ func dartWebRuntimeSource(unit *unit) (string, error) {
 }
 
 func dartNativeRuntimeSource(unit *unit) (string, error) {
-	common, platform, err := splitDartRuntimeSource()
+	return dartNativeRuntimeSourceFrom(unit, dartRuntimeSource)
+}
+
+func dartNativeRuntimeSourceFrom(unit *unit, source string) (string, error) {
+	common, platform, err := splitDartRuntimeSourceFrom(source)
 	if err != nil {
 		return "", err
 	}
@@ -33,12 +41,20 @@ String fgbInternalEncodeInternetAddress(InternetAddress value) => value.address;
 }
 
 func dartCommonRuntimeSource() (string, error) {
-	common, _, err := splitDartRuntimeSource()
+	return dartCommonRuntimeSourceFrom(dartRuntimeSource)
+}
+
+func dartCommonRuntimeSourceFrom(source string) (string, error) {
+	common, _, err := splitDartRuntimeSourceFrom(source)
 	return common, err
 }
 
 func dartNativePlatformRuntimeSource(unit *unit) (string, error) {
-	_, platform, err := splitDartRuntimeSource()
+	return dartNativePlatformRuntimeSourceFrom(unit, dartRuntimeSource)
+}
+
+func dartNativePlatformRuntimeSourceFrom(unit *unit, source string) (string, error) {
+	_, platform, err := splitDartRuntimeSourceFrom(source)
 	if err != nil {
 		return "", err
 	}
@@ -81,8 +97,8 @@ func dartFlutterWebLoaderSource(unit *unit) string {
 	return strings.TrimSpace(source)
 }
 
-func splitDartRuntimeSource() (common, native string, err error) {
-	beforeOpaque, afterOpaque, found := strings.Cut(dartRuntimeSource, "abstract base class GoOpaque")
+func splitDartRuntimeSourceFrom(source string) (common, native string, err error) {
+	beforeOpaque, afterOpaque, found := strings.Cut(source, "abstract base class GoOpaque")
 	if !found {
 		return "", "", fmt.Errorf("Dart runtime GoOpaque marker is missing")
 	}

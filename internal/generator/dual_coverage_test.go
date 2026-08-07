@@ -8,6 +8,7 @@ import (
 
 	"github.com/star4277/flutter_go_bridge/internal/config"
 	"github.com/star4277/flutter_go_bridge/internal/model"
+	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -134,4 +135,58 @@ func TestUnsupportedWebCallReasonTraversesWireShapes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateAllPropagatesBuildFormatAndMetadataErrors(t *testing.T) {
+	t.Run("build unit", func(t *testing.T) {
+		api, resolved, _ := parseGenerateAllFixture(t, "func Unsupported(value complex64) {}\n")
+		if _, err := GenerateAll(api, resolved); err == nil || !strings.Contains(err.Error(), "complex64") {
+			t.Fatalf("unsupported build error = %v", err)
+		}
+	})
+
+	t.Run("Native format", func(t *testing.T) {
+		api, resolved, _ := parseGenerateAllFixture(t, "func Add(left, right int) int { return left + right }\n")
+		resolved.GoPreamble = "func {"
+		if _, err := GenerateAll(api, resolved); err == nil || !strings.Contains(err.Error(), "format generated Native Go code") {
+			t.Fatalf("Native format error = %v", err)
+		}
+	})
+
+	t.Run("metadata source", func(t *testing.T) {
+		api, resolved, sourcePath := parseGenerateAllFixture(t, "func Add(left, right int) int { return left + right }\n")
+		if err := os.Remove(sourcePath); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := GenerateAll(api, resolved); err == nil || !strings.Contains(err.Error(), "read Web bridge source") {
+			t.Fatalf("metadata error = %v", err)
+		}
+	})
+}
+
+func parseGenerateAllFixture(t *testing.T, declaration string) (*model.API, config.Resolved, string) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/dual-errors\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	inputDir := filepath.Join(root, "api")
+	if err := os.MkdirAll(inputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(inputDir, "api.go")
+	if err := os.WriteFile(sourcePath, []byte("package api\n\n"+declaration), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: inputDir, BaseDir: root, Target: config.TargetWeb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := config.Resolved{
+		BaseDir: root, GoInput: inputDir,
+		GoOutput:    filepath.Join(root, "bridge_generated.go"),
+		DartOutput:  filepath.Join(root, "dart", "bridge_generated.dart"),
+		LibraryName: "go_lib_dual_errors", DartEntrypointClassName: "Bridge", StopOnError: true,
+	}
+	return api, resolved, sourcePath
 }

@@ -762,3 +762,65 @@ Generate `bridge_generated.dart` and `api/**` once. Emit `bridge_generated.io.da
 - Tags: dart-codegen, shared-api, conditional-import, flutter-rust-bridge
 
 ---
+
+## [LRN-20260807-005] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The CLI needs a stable `build` interface in addition to the long-running `run` workflow.
+
+### Details
+`run` is responsible for a live Flutter daemon and restart-on-Go-change behavior. A separate
+`build` command must expose a synchronous build entrypoint with explicit platform implementations,
+so future signing integration can be added without changing the public command contract. Web and
+Native implementations may initially return an explicit not-implemented error, but the interface
+must exist now.
+
+### Suggested Action
+Add a build service interface with Web and Native platform implementations, wire it to a
+`flutter_go_bridge_codegen build` command, and keep signing as an implementation detail behind that
+interface.
+
+### Metadata
+- Source: user_feedback
+- Related Files: cmd/flutter_go_bridge_codegen/main.go
+- Tags: cli, build, signing, platform-interface
+
+### Resolution
+- **Resolved**: 2026-08-07T00:00:00+08:00
+- **Notes**: Added `build <platform>`, Native/Web builders, and explicit Native/Web signer implementations.
+
+---
+
+## [LRN-20260807-006] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Use a user-provided Codecov report directly when it already includes the failing gate, target, and affected files.
+
+### Details
+PR #41 already had enough coverage information to begin focused tests. Re-querying the external
+check added no implementation value and introduced unrelated local launcher/encoding failures.
+
+### Suggested Action
+Start with the reported files and validate the fix with the repository's local coverage command;
+inspect remote logs only when the supplied report is missing actionable detail.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/*_test.go
+- Tags: codecov, coverage, ci, scope
+
+### Resolution
+- **Resolved**: 2026-08-07T00:00:00+08:00
+- **Notes**: Added focused generator/parser coverage and verified a 97.59% local patch statement estimate.
+
+---

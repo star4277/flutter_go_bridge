@@ -2,6 +2,7 @@ package generator
 
 import (
 	"go/importer"
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -13,6 +14,42 @@ import (
 	bridgeparser "github.com/star4277/flutter_go_bridge/internal/parser"
 	"golang.org/x/tools/go/packages"
 )
+
+func TestBuildUnitRejectsNonFunctionMain(t *testing.T) {
+	pkg := types.NewPackage("example.com/direct", "main")
+	pkg.Scope().Insert(types.NewVar(token.NoPos, pkg, "main", types.Typ[types.Int]))
+	api := &bridgemodel.API{Package: &packages.Package{Name: "main", PkgPath: pkg.Path(), Types: pkg}}
+	_, _, err := buildUnit(api, config.Resolved{DartEntrypointClassName: "Bridge", StopOnError: true}, true)
+	if err == nil || !strings.Contains(err.Error(), "non-function identifier main") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestIsFlutterProjectHandlesMissingInvalidAndValidPubspecs(t *testing.T) {
+	root := t.TempDir()
+	if isFlutterProject(root) {
+		t.Fatal("missing pubspec was detected as Flutter")
+	}
+	pubspec := filepath.Join(root, "pubspec.yaml")
+	if err := os.WriteFile(pubspec, []byte("dependencies: ["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if isFlutterProject(root) {
+		t.Fatal("invalid pubspec was detected as Flutter")
+	}
+	if err := os.WriteFile(pubspec, []byte("dependencies:\n  collection: any\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if isFlutterProject(root) {
+		t.Fatal("plain Dart pubspec was detected as Flutter")
+	}
+	if err := os.WriteFile(pubspec, []byte("dependencies:\n  flutter:\n    sdk: flutter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isFlutterProject(root) {
+		t.Fatal("Flutter dependency was not detected")
+	}
+}
 
 func TestAtomicCollectionClassificationAndSyntheticNames(t *testing.T) {
 	atomicPackage, err := importer.Default().Import("sync/atomic")

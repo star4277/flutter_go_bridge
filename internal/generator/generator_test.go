@@ -3,6 +3,7 @@ package generator
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -442,6 +443,17 @@ func RoundTrip(shop decimal.Decimal, apdValue apd.Decimal, optionalShop *decimal
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("generated Go bridge missing Decimal support %q:\n%s", expected, goSource)
 		}
+	}
+	dualResult, err := GenerateAll(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: filepath.Join(dir, "bridge_generated.go"),
+		DartOutput:  filepath.Join(dir, "dart", "bridge_generated.dart"),
+		LibraryName: "special", DartEntrypointClassName: "SpecialBridge", StopOnError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dualResult.DartDependencies, []string{"uuid", "decimal"}) {
+		t.Fatalf("dual Dart dependencies = %#v", dualResult.DartDependencies)
 	}
 }
 
