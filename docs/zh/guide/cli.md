@@ -34,7 +34,8 @@ Build with go1.25.0
 flutter_go_bridge_codegen generate
 ```
 
-常用参数包括 `--config-file`、`--go-input`、`--go-output`、`--dart-output`、
+`--target native|web` 选择 Go 构建约束和传输层 renderer，默认仍为 Native。常用参数包括
+`--config-file`、`--go-input`、`--go-output`、`--dart-output`、
 `--library-name`、`--no-dart-format`、`--print-ast` 和 `--stop-on-error`。
 
 ### `generate --watch`
