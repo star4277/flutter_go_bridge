@@ -6,6 +6,7 @@
 go/
 ├── go.mod
 ├── bridge_generated.go
+├── fgb_web_build.json       # 仅 target: web
 ├── internal/fgb/fgb_generated.go
 └── api/
     ├── api.go
@@ -33,3 +34,6 @@ lib/src/
 导出生成实现。
 生成顺序在多次运行之间保持确定：源文件按规范化路径排序，每个文件内维持声明顺序，因此输入
 不变时输出也不变。
+
+Web 生成还会在 Go bridge 旁写入 `fgb_web_build.json`。Gokit 会把其中的协议、生成器、库名和 API
+hash 写入 `fgb_wasm_manifest.json`；Web loader 在启动 `wasm_exec.js` 前会校验 manifest。

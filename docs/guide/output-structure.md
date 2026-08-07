@@ -6,6 +6,7 @@ The generator writes one Go entrypoint and mirrors the Go source tree into Dart.
 go/
 ├── go.mod
 ├── bridge_generated.go
+├── fgb_web_build.json       # target: web only
 ├── internal/fgb/fgb_generated.go
 └── api/
     ├── api.go
@@ -35,5 +36,9 @@ their `library <plugin_name>;` declaration in the plugin's public entrypoint, wh
 generated implementation.
 Generation order is deterministic across runs: source files are ordered by normalized path and
 declarations retain their order within each file, so unchanged input produces unchanged output.
+
+Web generation also writes `fgb_web_build.json` beside the Go bridge. Gokit includes its protocol,
+generator, library, and API hash in `fgb_wasm_manifest.json`; the Web loader validates the manifest
+before starting `wasm_exec.js`.
 
 Do not edit generated files. Change Go declarations or configuration, then run `generate` again.

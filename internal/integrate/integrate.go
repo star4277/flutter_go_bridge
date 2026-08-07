@@ -100,6 +100,9 @@ func run(cfg Config, templates fs.FS) error {
 	if err := executeOverlayTemplates(templates, replacements, dartRoot, &cfg, includeOhos, dartPackageName); err != nil {
 		return err
 	}
+	if err := ensureWebWasmAssets(dartRoot, cfg.Template); err != nil {
+		return err
+	}
 
 	if runtime.GOOS != "windows" {
 		log.Printf("modify file permissions")
