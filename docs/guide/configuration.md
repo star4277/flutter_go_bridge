@@ -1,6 +1,6 @@
 # Configuration
 
-`generate` and `run` read configuration from the current project directory. The first matching
+`generate`, `run`, and `build` read configuration from the current project directory. The first matching
 file wins:
 
 ```text

@@ -39,6 +39,7 @@ No hand-written binding layer sits between those two files. The generator reads 
 | [`generate`](/guide/cli#generate) | Read the Go input package, write the Go bridge and the Dart tree |
 | [`generate --watch`](/guide/cli#generate-watch) | Regenerate whenever a watched Go file changes |
 | [`run`](/guide/dev-server) | Drive `flutter run`, hot reloading Dart edits and restarting on Go edits |
+| [`build`](/guide/cli#build) | Generate once, build one Flutter platform, and enter the signing boundary |
 | [`create`](/guide/cli#create) | Scaffold a fresh Flutter + Go project from zero |
 | [`integrate`](/guide/cli#integrate) | Add the Go bridge to an existing Flutter project |
 

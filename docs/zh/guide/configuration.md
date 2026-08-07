@@ -1,6 +1,6 @@
 # 配置
 
-`generate` 和 `run` 会在当前项目目录按顺序查找：
+`generate`、`run` 和 `build` 会在当前项目目录按顺序查找：
 
 ```text
 .flutter_go_bridge.yml/.yaml/.json

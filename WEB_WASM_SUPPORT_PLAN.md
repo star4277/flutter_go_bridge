@@ -17,6 +17,8 @@ Web 运行时调用 Gokit 编译 Wasm。
   的 Wasm 资源；文档提供手动的 Gokit 命令。
 - `flutter_go_bridge_codegen run -d chrome` 会生成代码、调用 Gokit `build-web`、启动 Flutter，
   并在 Go 变化后重复生成、编译和重启。Windows、Android 等 Native target 不调用 Web builder。
+- `flutter_go_bridge_codegen build <platform>` 会生成一次代码，再通过 Native/Web 平台 builder
+  构建 Flutter 产物；Web builder 先调用 Gokit `build-web`。两套实现都保留平台签名接口。
 
 ## 2. `import "C"` 的准确规则
 
@@ -112,7 +114,18 @@ CGO_ENABLED=0 GOOS=js GOARCH=wasm
 通过共享 fingerprint/cache 复用产物。Native 仍由同一套 Gokit 配置和缓存抽象处理自己的
 `c-shared`/平台构建。
 
-### 6.1 `codegen run`（推荐）
+### 6.1 `codegen build`
+
+```powershell
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+`build` 是一次性同步流程：先生成共享 Native/Web bridge，再选择平台 builder。Web 依次执行
+Gokit `build-web` 和 `flutter build web`；Native 直接执行对应的 `flutter build <platform>`。
+两者都会进入平台签名接口，当前 Native/Web signer 是空实现，后续签名对接不改变命令契约。
+
+### 6.2 `codegen run`（开发监听）
 
 ```powershell
 flutter_go_bridge_codegen run -d chrome -- --web-renderer canvaskit
@@ -121,7 +134,7 @@ flutter_go_bridge_codegen run -d chrome -- --web-renderer canvaskit
 Web 设备识别支持 `chrome`、`edge`、`web-server`、`web-javascript` 和 `web-wasm`，以及转发的
 `-d/--device-id`。Native device id 不会触发 Wasm 构建。
 
-### 6.2 直接使用 Flutter（无 IDE、无 hook）
+### 6.3 直接使用 Flutter（无 IDE、无 hook）
 
 App 项目：
 
@@ -167,7 +180,8 @@ Plugin 项目把路径换成 `gokit/build_tool/bin/build_tool.dart`、`<project>
 
 - 不新增 plugin；Web 资源和 loader 归属现有 `go_builder`。
 - 不使用 build hook；手动 Flutter 流程和 `codegen run` 都调用同一个 Gokit `build-web`。
-- 不给生成器增加独立的 `build web` 命令；生成器负责双平台源码，构建工具负责 Go artifact。
+- 增加统一的 `build <platform>` 命令作为一次性生成/构建入口；具体 Go artifact 仍由 Gokit
+  负责，平台 builder 和 signer 接口负责后续构建与签名扩展。
 - 不生成重复的 Native/Web Dart API 树；只拆平台 wire。
 - 不把 `import "C"` 解释为“整个包必然不可用”，而是按文件、可达符号和依赖的实际 Web
   编译结果判断，并为每个不可用 Dart callable 提供运行时兜底。
