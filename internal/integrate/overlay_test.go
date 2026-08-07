@@ -112,6 +112,23 @@ func TestCommentOutExistingAndAppendTemplate(t *testing.T) {
 	}
 }
 
+func TestModifyFileUpgradesLegacyGeneratedBridge(t *testing.T) {
+	existing := []byte("static void initialize({String? libraryPath}) { }\n")
+	reference := []byte("static Future<void> initialize({String? libraryPath}) async { }\n")
+	got, write := modifyFile(
+		"lib/src/bridge_generated.dart",
+		"bridge_generated.dart",
+		reference,
+		existing,
+		true,
+		map[string]string{},
+		nil,
+	)
+	if !write || string(got) != string(reference) {
+		t.Fatalf("legacy bridge should be upgraded, write=%v content=%q", write, got)
+	}
+}
+
 func TestAddAnalyzerExcludePrependsAnalyzerBlock(t *testing.T) {
 	got := addAnalyzerExclude("include: package:flutter_lints/flutter.yaml\n", "gokit/**")
 	want := "analyzer:\n  exclude:\n    - gokit/**\n\ninclude: package:flutter_lints/flutter.yaml\n"

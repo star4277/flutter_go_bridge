@@ -2394,3 +2394,36 @@ Build a PowerShell array and splat it into `go test`, while passing Go flags as 
 - **Notes**: Re-ran with an explicit package array; all packages passed and aggregate coverage was 95.7%.
 
 ---
+
+## [ERR-20260807-005] generator coverage interface fixture stack overflow
+
+**Logged**: 2026-08-07T15:50:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+An artificial anonymous Go interface used to exercise reachable-type traversal recursively revisited its method receiver and overflowed the test goroutine stack.
+
+### Error
+```
+runtime: goroutine stack exceeds 1000000000-byte limit
+fatal error: stack overflow
+```
+
+### Context
+- Focused `internal/generator` patch-coverage test.
+- The fixture passed an unnamed completed interface as a function parameter; Go's type checker attached the interface as the method receiver, while the traversal intentionally has no general cycle guard for unnamed interface method signatures.
+
+### Suggested Fix
+Use real parsed fixtures for interface traversal or keep synthetic traversal fixtures to acyclic slice/array shapes. Do not use a manually constructed anonymous interface with recursive method signatures.
+
+### Metadata
+- Reproducible: yes
+- Related Files: internal/generator/patch_coverage_test.go
+
+### Resolution
+- **Resolved**: 2026-08-07T15:52:00+08:00
+- **Notes**: Removed the recursive anonymous-interface parameter; the focused coverage test now uses acyclic slice/array containers and direct interface validation fixtures.
+
+---
