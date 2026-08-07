@@ -63,11 +63,17 @@ import 'src/bridge_generated.dart';
 import 'src/api/api.dart';
 
 void main() async {
-  FlutterGoBridge.initialize(libraryPath: 'path/to/library');
+  await FlutterGoBridge.initialize(libraryPath: 'path/to/library');
   final result = add(a: 20, b: 22);
   final greeting = await greet(name: 'world');
 }
 ```
+
+编译 Web 时，`FlutterGoBridge.initialize()` 自带默认的 Web 初始化流程：先调用
+`WidgetsFlutterBinding.ensureInitialized()`，再调用内嵌在 `bridge_generated.web.dart` 中的
+`FgbWasmLoader`，最后打开 bridge。如果项目需要自定义 loader，可以传入 `webInitializer` 覆盖默认流程。
+Native 和纯 Dart 构建不会导入 Flutter widgets；纯 Dart Web 调用方应自行提供 `webInitializer`，不能使用
+Flutter 资源 loader。生成器不再生成独立的 `fgb_wasm_loader*.dart` 文件。
 
 继续阅读[配置](/zh/guide/configuration)、[输出结构](/zh/guide/output-structure)和
 [类型映射](/zh/reference/type-mapping)。

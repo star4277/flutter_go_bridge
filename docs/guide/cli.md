@@ -35,8 +35,8 @@ understand syntax or type-system behavior introduced by a newer project toolchai
 flutter_go_bridge_codegen generate [flags]
 ```
 
-Generates the Go bridge and Dart API. `--target native|web` selects the Go build constraints and
-transport renderer; Native remains the default. Important flags are `--go-input`, `--go-output`,
+Generates both the Native and Web Go bridges plus one shared Dart API. `--target native|web` is a
+deprecated compatibility option and does not change the dual output. Important flags are `--go-input`, `--go-output`,
 `--dart-output`, `--library-name`, `--config-file`, `--watch`, `--no-dart-format`,
 `--print-ast`, and `--stop-on-error`.
 
@@ -51,6 +51,7 @@ flutter_go_bridge_codegen run -d <device> -- [flutter run args]
 
 Starts `flutter run --machine`, hot reloads Dart changes, and regenerates/restarts for Go changes.
 `-d all` is not supported because one daemon session targets one device.
+For Web devices, it also runs Gokit `build-web` before startup and after each Go regeneration.
 
 ## `create`
 

@@ -161,7 +161,8 @@ flutter_go_bridge_codegen generate --watch
 flutter_go_bridge_codegen run -d emulator-5554
 ```
 
-Dart 代码变化使用 hot reload；Go 代码变化会重新生成并重启应用进程，让新的动态库真正被加载。
+Dart 代码变化使用 hot reload；Go 代码变化会重新生成并重启应用进程，让新的平台产物真正被加载。
+目标为 Web 时，`run` 还会在启动前和 Go 变化后调用 Gokit `build-web`。
 
 ## 配置
 
@@ -203,6 +204,7 @@ go/
 ```text
 go/
 ├── bridge_generated.go
+├── bridge_generated_web.go
 ├── internal/fgb/fgb_generated.go
 └── api/
     ├── api.go
@@ -210,13 +212,16 @@ go/
 
 lib/src/
 ├── bridge_generated.dart
+├── bridge_generated.io.dart
+├── bridge_generated.web.dart
 └── api/
     ├── api.dart
     └── account.dart
 ```
 
-- `bridge_generated.go` 包含 cgo 导出、dispatcher 和 Go codec。
-- `bridge_generated.dart` 包含 FFI runtime、动态库绑定、codec 和 handle 管理。
+- `bridge_generated.go` 包含 Native cgo 导出、dispatcher 和 Go codec。
+- `bridge_generated_web.go` 包含纯 Go `js/wasm` dispatcher 和 standard codec。
+- `bridge_generated.dart` 包含共享类型与 codec，并通过条件导入选择 Native 或 Web wire。
 - 镜像 Dart 文件只放公开的 class、函数、方法、接口和常量。
 
 ## 序列化模型
