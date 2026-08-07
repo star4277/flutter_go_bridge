@@ -53,6 +53,26 @@ Starts `flutter run --machine`, hot reloads Dart changes, and regenerates/restar
 `-d all` is not supported because one daemon session targets one device.
 For Web devices, it also runs Gokit `build-web` before startup and after each Go regeneration.
 
+## `build`
+
+```sh
+flutter_go_bridge_codegen build <platform> -- [flutter build args]
+```
+
+Runs one shared Native/Web generation, then builds the requested Flutter platform. The platform is
+the same positional target accepted by `flutter build`, for example:
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+`build web` invokes Gokit `build-web` first so the current `.wasm`, `wasm_exec.js`, and manifest are
+installed before `flutter build web`. Other targets use the Native platform builder. Both builders
+pass their results through a platform-specific signing interface; the initial Native and Web
+signers are no-ops reserved for future signing integration. Use `--project-dir` to select a Flutter
+project explicitly. Plugin projects default to their runnable `example/` app.
+
 ## `create`
 
 ```sh

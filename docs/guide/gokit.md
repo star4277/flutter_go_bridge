@@ -6,6 +6,11 @@ for both targets. Plain `generate` remains a code-generation command. The long-r
 `flutter_go_bridge_codegen run -d chrome` wrapper invokes `build-web` automatically; a direct
 `flutter run/build web` command requires the documented Gokit build step first.
 
+For a one-shot application build, `flutter_go_bridge_codegen build web -- --release` runs shared
+generation, Gokit `build-web`, and `flutter build web --release` in order. Native build targets use
+the matching Native builder. Both paths expose a platform-specific signing boundary; its initial
+implementations are no-ops so signing can be added later without changing the CLI.
+
 ## Platform outputs
 
 | Platform | Output |

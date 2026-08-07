@@ -22,6 +22,7 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/generator"
 	"github.com/star4277/flutter_go_bridge/internal/integrate"
 	"github.com/star4277/flutter_go_bridge/internal/parser"
+	"github.com/star4277/flutter_go_bridge/internal/platformbuild"
 	"github.com/star4277/flutter_go_bridge/internal/watcher"
 )
 
@@ -69,6 +70,7 @@ func newRootCommand() *cobra.Command {
 	root.SetVersionTemplate("{{.DisplayName}} version {{.Version}}\nBuild with " + runtime.Version() + "\n")
 	root.AddCommand(newGenerateCommand(flags))
 	root.AddCommand(newRunCommand(&generateFlags{}))
+	root.AddCommand(newBuildCommand(&generateFlags{}))
 	root.AddCommand(newCreateCommand())
 	root.AddCommand(newIntegrateCommand())
 	return root
@@ -89,6 +91,102 @@ type runFlags struct {
 	projectDir string
 	dartInput  []string
 	interval   time.Duration
+}
+
+type buildFlags struct {
+	projectDir string
+}
+
+var (
+	newWebPlatformBuilder = func() *platformbuild.WebBuilder {
+		return platformbuild.NewWebBuilder()
+	}
+	newPlatformBuilder = func(platform platformbuild.Platform) platformbuild.PlatformBuilder {
+		if platform == platformbuild.PlatformWeb {
+			return newWebPlatformBuilder()
+		}
+		return platformbuild.NewNativeBuilder()
+	}
+)
+
+func newBuildCommand(flags *generateFlags) *cobra.Command {
+	options := &buildFlags{}
+	command := &cobra.Command{
+		Use:   "build <platform> [flags] [-- flutter build args]",
+		Short: "Generate the bridge and build a Flutter platform",
+		Long: `Generate the shared Native/Web bridge, build the selected platform artifact,
+and pass the result through the platform signing boundary.
+
+Web builds run Gokit build-web before flutter build web. Other targets use the
+Native implementation. Arguments after -- are forwarded to flutter build:
+
+  flutter_go_bridge_codegen build web -- --release
+  flutter_go_bridge_codegen build windows -- --release`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(command *cobra.Command, args []string) error {
+			flutterArgs, err := flutterBuildArgs(command, args)
+			if err != nil {
+				return err
+			}
+			return buildFlutter(command, flags, options, flutterArgs)
+		},
+	}
+	registerGenerateFlags(command, flags, false)
+	command.Flags().StringVar(&options.projectDir, "project-dir", "", "Flutter project to build (default the config base dir, or its example/ for plugin projects)")
+	return command
+}
+
+func flutterBuildArgs(command *cobra.Command, args []string) ([]string, error) {
+	beforeDash := args
+	var forwarded []string
+	if index := command.ArgsLenAtDash(); index >= 0 {
+		beforeDash = args[:index]
+		forwarded = args[index:]
+	}
+	if len(beforeDash) != 1 || strings.TrimSpace(beforeDash[0]) == "" {
+		return nil, errors.New("build requires exactly one Flutter platform before --")
+	}
+	return append([]string{beforeDash[0]}, forwarded...), nil
+}
+
+func buildFlutter(command *cobra.Command, flags *generateFlags, options *buildFlags, flutterArgs []string) error {
+	resolved, err := resolveGenerateConfig(command, flags)
+	if err != nil {
+		return err
+	}
+	projectDir, err := resolveProjectDir(resolved.BaseDir, options.projectDir)
+	if err != nil {
+		return err
+	}
+	if _, err := runGenerateFiles(command, flags); err != nil {
+		return err
+	}
+
+	request := platformbuild.Request{
+		BaseDir:     resolved.BaseDir,
+		ProjectDir:  projectDir,
+		ManifestDir: filepath.Dir(resolved.GoOutput),
+		FlutterArgs: flutterArgs,
+		Target:      flutterArgs[0],
+	}
+	platform := platformbuild.PlatformNative
+	if isWebFlutterBuild(flutterArgs) {
+		platform = platformbuild.PlatformWeb
+	}
+	request.Platform = platform
+	builder := newPlatformBuilder(platform)
+	result, err := builder.Build(command.Context(), request)
+	if err != nil {
+		return err
+	}
+	for _, artifact := range result.Artifacts {
+		log.Printf("built %s", artifact)
+	}
+	return nil
+}
+
+func isWebFlutterBuild(flutterArgs []string) bool {
+	return len(flutterArgs) > 0 && strings.EqualFold(strings.TrimSpace(flutterArgs[0]), "web")
 }
 
 func newRunCommand(flags *generateFlags) *cobra.Command {
@@ -203,75 +301,20 @@ func isWebDeviceID(deviceID string) bool {
 	}
 }
 
-// buildWebWasm delegates the actual Go build to the Gokit copy integrated in
-// the Flutter project. The app and plugin templates use different package
-// roots, but both expose the same run_build_tool entrypoint and assets/wasm
-// contract.
+// buildWebWasm reuses the same Web platform implementation as the synchronous
+// build command, but intentionally stops before `flutter build`: `run` owns a
+// live Flutter daemon instead.
 func buildWebWasm(ctx context.Context, resolved config.Resolved) ([]string, error) {
-	baseDir := resolved.BaseDir
-	type layout struct {
-		gokitDir string
-		output   string
-	}
-	layouts := []layout{
-		{gokitDir: filepath.Join(baseDir, "gokit"), output: filepath.Join(baseDir, "assets", "wasm")},
-		{gokitDir: filepath.Join(baseDir, "go_builder", "gokit"), output: filepath.Join(baseDir, "go_builder", "assets", "wasm")},
-	}
-	var selected layout
-	var found bool
-	for _, candidate := range layouts {
-		if _, err := os.Stat(filepath.Join(candidate.gokitDir, "build_tool")); err == nil {
-			selected, found = candidate, true
-			break
-		}
-	}
-	if !found {
-		return nil, fmt.Errorf("Web Wasm build requires an integrated Gokit build_tool under %s or %s", layouts[0].gokitDir, layouts[1].gokitDir)
-	}
-
-	tool := "run_build_tool.sh"
-	if runtime.GOOS == "windows" {
-		tool = "run_build_tool.cmd"
-	}
-	scriptPath := filepath.Join(selected.gokitDir, tool)
-	buildArgs := []string{"build-web",
-		"--manifest-dir", filepath.Dir(resolved.GoOutput),
-		"--output-dir", selected.output,
-		"--root-project-dir", baseDir,
-	}
-	commandName := scriptPath
-	commandArgs := buildArgs
-	if runtime.GOOS == "windows" {
-		commandName = "cmd"
-		commandArgs = append([]string{"/c", scriptPath}, buildArgs...)
-	}
-	command := exec.CommandContext(ctx, commandName, commandArgs...)
-	command.Dir = baseDir
-	command.Stdout = os.Stdout
-	command.Stderr = os.Stderr
-	command.Env = append(os.Environ(),
-		"GOKIT_TOOL_TEMP_DIR="+filepath.Join(baseDir, "build", ".gokit_tool"),
-		"GOKIT_ROOT_PROJECT_DIR="+baseDir,
-	)
-	if flutter, err := exec.LookPath("flutter"); err == nil {
-		flutterRoot := filepath.Dir(filepath.Dir(flutter))
-		command.Env = append(command.Env, "FLUTTER_ROOT="+flutterRoot)
-	}
 	log.Printf("building Web Wasm with Gokit")
-	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("Gokit Web Wasm build failed: %w", err)
-	}
-	entries, err := os.ReadDir(selected.output)
+	result, err := newWebPlatformBuilder().BuildWasm(ctx, platformbuild.Request{
+		Platform:    platformbuild.PlatformWeb,
+		BaseDir:     resolved.BaseDir,
+		ManifestDir: filepath.Dir(resolved.GoOutput),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("read Web Wasm output directory: %w", err)
+		return nil, err
 	}
-	files := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			files = append(files, filepath.Join(selected.output, entry.Name()))
-		}
-	}
-	return files, nil
+	return result.Artifacts, nil
 }
 
 // resolveProjectDir picks the Flutter project to launch. Plugin projects keep

@@ -25,6 +25,18 @@ hot reload/hot restart 只重建 Dart isolate，无法卸载已打开的动态�
 | `d` | detach |
 | `h` | 显示帮助 |
 
+## 一次性构建
+
+如果需要一次性构建产物，而不是启动监听 daemon，请使用 `build`：
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+该命令会生成一次代码，选择 Web 或 Native 平台 builder，执行 Flutter 构建，并把产物集合传入
+平台签名接口。
+
 ## 直接运行 Flutter
 
 `flutter run -d chrome` 和 `flutter build web` 不会调用

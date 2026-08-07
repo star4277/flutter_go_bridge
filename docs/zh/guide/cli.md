@@ -58,6 +58,25 @@ flutter_go_bridge_codegen run -d emulator-5554 -- --flavor dev
 `--` 后参数原样传给 Flutter；不支持 `-d all`。
 目标为 Web 时，启动前和每次 Go 重新生成后还会调用 Gokit `build-web`。
 
+## `build`
+
+```sh
+flutter_go_bridge_codegen build <platform> -- [flutter build 参数]
+```
+
+先统一生成 Native/Web bridge，再构建指定的 Flutter 平台。`platform` 与 `flutter build`
+接受的位置参数一致，例如：
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+`build web` 会先调用 Gokit `build-web`，安装最新的 `.wasm`、`wasm_exec.js` 和 manifest，
+然后执行 `flutter build web`。其他目标使用 Native 平台 builder。两套 builder 都会把结果
+传入各自的平台签名接口；当前 Native/Web signer 是明确的空实现，后续接入签名时不需要修改
+CLI 命令契约。可用 `--project-dir` 指定 Flutter 工程；plugin 工程默认构建可运行的 `example/`。
+
 ## `create`
 
 ```sh

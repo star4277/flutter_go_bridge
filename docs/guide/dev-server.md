@@ -29,6 +29,16 @@ required for Go edits.
 Arguments after `--` are passed unchanged to `flutter run`, for example
 `run -d windows -- --flavor dev`.
 
+For a synchronous release/debug artifact instead of a watched daemon, use `build`:
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+This command generates once, selects the Web or Native platform builder, runs the Flutter build,
+and passes the resulting artifact set through the platform signing interface.
+
 ## Running Flutter Directly
 
 `flutter run -d chrome` and `flutter build web` do not invoke

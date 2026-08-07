@@ -166,6 +166,13 @@ Dart changes use hot reload. Go changes regenerate the bridge and restart the ap
 the rebuilt platform artifact is loaded. When the device is Web, `run` also invokes Gokit
 `build-web` before startup and after Go changes.
 
+For a one-shot platform artifact, generate and build together:
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
 ## Configuration
 
 The CLI discovers these files automatically:
@@ -342,6 +349,7 @@ accepted.
 | `generate` | Generate the Go bridge and mirrored Dart API |
 | `generate --watch` | Regenerate when Go source changes |
 | `run` | Run Flutter, hot reload Dart, and restart after Go changes |
+| `build` | Generate once and build a Flutter platform through the signing boundary |
 | `create` | Create a new Flutter app or FFI plugin with Go integration |
 | `integrate` | Add the bridge to an existing Flutter project |
 
