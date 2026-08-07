@@ -38,6 +38,20 @@ func TestRunAppWithEmbeddedTemplates(t *testing.T) {
 	if !strings.Contains(bridgeDart, `const libraryName = "go_lib_my_app";`) {
 		t.Fatal("bridge_generated.dart should embed the library name")
 	}
+	webLoader := readFile(t, filepath.Join(dir, "lib", "src", "fgb_wasm_loader_web.dart"))
+	for _, want := range []string{
+		"const _assetPackage = 'go_lib_my_app';",
+		"const _assetKeyRoot = 'packages/$_assetPackage/assets/wasm';",
+		"const _assetUrlRoot = 'assets/$_assetKeyRoot';",
+		"value['target'] != 'web-wasm'",
+		"assets.loadString('$_assetKeyRoot/fgb_wasm_manifest.json')",
+		"result.isA<JSObject>()",
+		"script.isA<JSObject>()",
+	} {
+		if !strings.Contains(webLoader, want) {
+			t.Fatalf("Web loader missing %q: %s", want, webLoader)
+		}
+	}
 	bridgeConfig := readFile(t, filepath.Join(dir, "flutter_go_bridge.yaml"))
 	for _, want := range []string{"go_input: go/api", "go_output: go/bridge_generated.go", "library_name: go_lib_my_app"} {
 		if !strings.Contains(bridgeConfig, want) {

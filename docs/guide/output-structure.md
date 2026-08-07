@@ -39,6 +39,9 @@ declarations retain their order within each file, so unchanged input produces un
 
 Web generation also writes `fgb_web_build.json` beside the Go bridge. Gokit includes its protocol,
 generator, library, and API hash in `fgb_wasm_manifest.json`; the Web loader validates the manifest
-before starting `wasm_exec.js`.
+before starting `wasm_exec.js`. The manifest target is `web-wasm`. Flutter's asset bundle reads the
+manifest through the logical `packages/<plugin>/assets/wasm/...` key, while browser requests for
+`wasm_exec.js` and the `.wasm` artifact use the packaged
+`assets/packages/<plugin>/assets/wasm/...` URL.
 
 Do not edit generated files. Change Go declarations or configuration, then run `generate` again.
