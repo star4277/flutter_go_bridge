@@ -31,12 +31,39 @@ func TestRunAppWithEmbeddedTemplates(t *testing.T) {
 	if !strings.Contains(bridgeGo, "\"com.flutter_go_bridge/go_lib_my_app/api\"") {
 		t.Fatal("bridge_generated.go should import the templated api package")
 	}
+	if !strings.Contains(bridgeGo, "func fgb_isolate_attach(") {
+		t.Fatal("bridge_generated.go should use the current isolate attachment ABI")
+	}
+	for _, legacy := range []string{
+		"func fgb_dart_opaque_port(",
+		"func fgb_callback_port(",
+		"func fgb_stream_port(",
+	} {
+		if strings.Contains(bridgeGo, legacy) {
+			t.Fatalf("bridge_generated.go contains obsolete ABI export %q", legacy)
+		}
+	}
+	webBridgeGo := readFile(t, filepath.Join(dir, "go", "bridge_generated_web.go"))
+	if !strings.Contains(webBridgeGo, "//go:build js && wasm") || !strings.Contains(webBridgeGo, "syscall/js") {
+		t.Fatal("bridge_generated_web.go should be the current Web transport template")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "go", "fgb_web_build.json")); err != nil {
+		t.Fatalf("fgb_web_build.json missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "go", "internal", "fgb", "fgb_generated.go")); err != nil {
+		t.Fatalf("generated Go support package missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "go", "api", "lib.go")); err != nil {
 		t.Fatalf("go/api/lib.go missing: %v", err)
 	}
-	bridgeDart := readFile(t, filepath.Join(dir, "lib", "src", "bridge_generated.dart"))
-	if !strings.Contains(bridgeDart, `const libraryName = "go_lib_my_app";`) {
-		t.Fatal("bridge_generated.dart should embed the library name")
+	bridgeDartIO := readFile(t, filepath.Join(dir, "lib", "src", "bridge_generated.io.dart"))
+	if !strings.Contains(bridgeDartIO, `const libraryName = "go_lib_my_app";`) {
+		t.Fatal("bridge_generated.io.dart should embed the library name")
+	}
+	for _, dartFile := range []string{"bridge_generated.io.dart", "bridge_generated.web.dart"} {
+		if _, err := os.Stat(filepath.Join(dir, "lib", "src", dartFile)); err != nil {
+			t.Fatalf("generated Dart platform wire missing: %s: %v", dartFile, err)
+		}
 	}
 	for _, loader := range []string{
 		"fgb_wasm_loader.dart",
