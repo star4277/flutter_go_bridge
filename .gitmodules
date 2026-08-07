@@ -1,6 +1,8 @@
 [submodule "template/plugin/gokit"]
 	path = template/plugin/gokit
 	url = https://github.com/star4277/gokit.git
+	branch = feature/web-wasm-build
 [submodule "template/app/go_builder/gokit"]
 	path = template/app/go_builder/gokit
 	url = https://github.com/star4277/gokit.git
+	branch = feature/web-wasm-build
