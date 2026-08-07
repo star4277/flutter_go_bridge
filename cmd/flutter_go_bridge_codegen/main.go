@@ -143,6 +143,7 @@ func runFlutter(command *cobra.Command, flags *generateFlags, options *runFlags,
 	if options.deviceID != "" {
 		flutterArgs = append([]string{"-d", options.deviceID}, flutterArgs...)
 	}
+	webRun := isWebFlutterRun(options.deviceID, flutterArgs)
 
 	// Ctrl+C must reach the loop rather than the process, so the app can be
 	// stopped in order instead of leaving gradle and adb behind.
@@ -157,9 +158,120 @@ func runFlutter(command *cobra.Command, flags *generateFlags, options *runFlags,
 		Exclude:     []string{resolved.GoOutput, resolved.DartOutput},
 		Interval:    options.interval,
 		Generate: func() ([]string, error) {
-			return runGenerateFiles(command, flags)
+			files, err := runGenerateFiles(command, flags)
+			if err != nil || !webRun {
+				return files, err
+			}
+			current, err := resolveGenerateConfig(command, flags)
+			if err != nil {
+				return files, err
+			}
+			wasmFiles, err := buildWebWasm(ctx, current)
+			return append(files, wasmFiles...), err
 		},
 	})
+}
+
+// isWebFlutterRun recognizes the explicit Flutter Web device forms accepted by
+// `flutter run`. Native runs deliberately do not build Wasm: a pure-Go Web
+// build can be a stricter target than the native cgo package and must not make
+// Windows or Android startup depend on it.
+func isWebFlutterRun(deviceID string, flutterArgs []string) bool {
+	if isWebDeviceID(deviceID) {
+		return true
+	}
+	for index, arg := range flutterArgs {
+		if arg != "-d" && arg != "--device-id" {
+			if arg == "--wasm" || arg == "--web-renderer" {
+				return true
+			}
+			continue
+		}
+		if index+1 < len(flutterArgs) && isWebDeviceID(flutterArgs[index+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWebDeviceID(deviceID string) bool {
+	switch strings.ToLower(strings.TrimSpace(deviceID)) {
+	case "chrome", "edge", "web-server", "web-javascript", "web-wasm":
+		return true
+	default:
+		return false
+	}
+}
+
+// buildWebWasm delegates the actual Go build to the Gokit copy integrated in
+// the Flutter project. The app and plugin templates use different package
+// roots, but both expose the same run_build_tool entrypoint and assets/wasm
+// contract.
+func buildWebWasm(ctx context.Context, resolved config.Resolved) ([]string, error) {
+	baseDir := resolved.BaseDir
+	type layout struct {
+		gokitDir string
+		output   string
+	}
+	layouts := []layout{
+		{gokitDir: filepath.Join(baseDir, "gokit"), output: filepath.Join(baseDir, "assets", "wasm")},
+		{gokitDir: filepath.Join(baseDir, "go_builder", "gokit"), output: filepath.Join(baseDir, "go_builder", "assets", "wasm")},
+	}
+	var selected layout
+	var found bool
+	for _, candidate := range layouts {
+		if _, err := os.Stat(filepath.Join(candidate.gokitDir, "build_tool")); err == nil {
+			selected, found = candidate, true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("Web Wasm build requires an integrated Gokit build_tool under %s or %s", layouts[0].gokitDir, layouts[1].gokitDir)
+	}
+
+	tool := "run_build_tool.sh"
+	if runtime.GOOS == "windows" {
+		tool = "run_build_tool.cmd"
+	}
+	scriptPath := filepath.Join(selected.gokitDir, tool)
+	buildArgs := []string{"build-web",
+		"--manifest-dir", filepath.Dir(resolved.GoOutput),
+		"--output-dir", selected.output,
+		"--root-project-dir", baseDir,
+	}
+	commandName := scriptPath
+	commandArgs := buildArgs
+	if runtime.GOOS == "windows" {
+		commandName = "cmd"
+		commandArgs = append([]string{"/c", scriptPath}, buildArgs...)
+	}
+	command := exec.CommandContext(ctx, commandName, commandArgs...)
+	command.Dir = baseDir
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	command.Env = append(os.Environ(),
+		"GOKIT_TOOL_TEMP_DIR="+filepath.Join(baseDir, "build", ".gokit_tool"),
+		"GOKIT_ROOT_PROJECT_DIR="+baseDir,
+	)
+	if flutter, err := exec.LookPath("flutter"); err == nil {
+		flutterRoot := filepath.Dir(filepath.Dir(flutter))
+		command.Env = append(command.Env, "FLUTTER_ROOT="+flutterRoot)
+	}
+	log.Printf("building Web Wasm with Gokit")
+	if err := command.Run(); err != nil {
+		return nil, fmt.Errorf("Gokit Web Wasm build failed: %w", err)
+	}
+	entries, err := os.ReadDir(selected.output)
+	if err != nil {
+		return nil, fmt.Errorf("read Web Wasm output directory: %w", err)
+	}
+	files := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			files = append(files, filepath.Join(selected.output, entry.Name()))
+		}
+	}
+	return files, nil
 }
 
 // resolveProjectDir picks the Flutter project to launch. Plugin projects keep
@@ -323,7 +435,7 @@ func registerGenerateFlags(command *cobra.Command, flags *generateFlags, shortha
 		goInput, goOutput, dartOutput = "i", "g", "d"
 	}
 	command.Flags().StringVar(&flags.configFile, "config-file", "", "Path to a flutter_go_bridge YAML/JSON config file")
-	command.Flags().StringVar(&flags.target, "target", "", "Generation target: native (default) or web")
+	command.Flags().StringVar(&flags.target, "target", "", "Deprecated compatibility option; generate now emits Native and Web together")
 	command.Flags().StringVarP(&flags.goInput, "go-input", goInput, "", "Go package directory, .go file, or package pattern")
 	command.Flags().StringVarP(&flags.goOutput, "go-output", goOutput, "", "Generated Go bridge file (default bridge_generated.go beside the nearest go.mod)")
 	command.Flags().StringVarP(&flags.dartOutput, "dart-output", dartOutput, "", "Generated Dart bridge file (default lib/src/bridge_generated.dart)")
@@ -404,13 +516,13 @@ func runGenerateFiles(command *cobra.Command, flags *generateFlags) ([]string, e
 	log.Printf("loading Go package %s", resolved.GoInput)
 	api, err := parser.Parse(parser.Options{
 		Input: resolved.GoInput, BaseDir: resolved.BaseDir,
-		Target:   resolved.Target,
+		Target:   config.TargetWeb,
 		PrintAST: flags.printAST, ASTOut: os.Stdout,
 	})
 	if err != nil {
 		return nil, err
 	}
-	result, err := generator.Generate(api, resolved)
+	result, err := generator.GenerateAll(api, resolved)
 	for _, warning := range result.Warnings {
 		log.Printf("warning: %v", warning)
 	}
