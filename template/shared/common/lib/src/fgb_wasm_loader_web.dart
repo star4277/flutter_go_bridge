@@ -6,7 +6,8 @@ import 'dart:js_interop_unsafe';
 import 'package:flutter/services.dart';
 
 const _assetPackage = 'REPLACE_ME_GO_MOD_NAME';
-const _assetRoot = 'packages/$_assetPackage/assets/wasm';
+const _assetKeyRoot = 'packages/$_assetPackage/assets/wasm';
+const _assetUrlRoot = 'assets/$_assetKeyRoot';
 
 final class FgbWasmManifest {
   FgbWasmManifest._(this.libraryName, this.wasmAsset, this.wasmExecAsset);
@@ -20,7 +21,7 @@ final class FgbWasmManifest {
     if (value is! Map) {
       throw const FormatException('fgb_wasm_manifest.json must contain an object');
     }
-    if (value['target'] != 'web' || value['schema_version'] != 1) {
+    if (value['target'] != 'web-wasm' || value['schema_version'] != 1) {
       throw const FormatException('unsupported Gokit Web Wasm manifest');
     }
     final libraryName = value['library_name'];
@@ -37,8 +38,8 @@ final class FgbWasmManifest {
     }
     return FgbWasmManifest._(
       libraryName,
-      '$_assetRoot/$wasm',
-      '$_assetRoot/wasm_exec.js',
+      '$_assetUrlRoot/$wasm',
+      '$_assetUrlRoot/wasm_exec.js',
     );
   }
 }
@@ -47,7 +48,7 @@ final class FgbWasmLoader {
   static Future<void> ensureReady({AssetBundle? bundle}) async {
     final assets = bundle ?? rootBundle;
     final manifest = FgbWasmManifest.parse(
-      await assets.loadString('$_assetRoot/fgb_wasm_manifest.json'),
+      await assets.loadString('$_assetKeyRoot/fgb_wasm_manifest.json'),
     );
     await _loadScript(manifest.wasmExecAsset);
     final goConstructor = globalContext.getProperty<JSFunction?>('Go'.toJS);
@@ -65,10 +66,10 @@ final class FgbWasmLoader {
     final result = await (instantiate.callAsFunction(null, response, importObject)
             as JSPromise<JSAny?>)
         .toDart;
-    if (result is! JSObject) {
+    if (result == null || !result.isA<JSObject>()) {
       throw StateError('WebAssembly.instantiateStreaming returned no instance');
     }
-    final instance = result.getProperty<JSObject>('instance'.toJS);
+    final instance = (result as JSObject).getProperty<JSObject>('instance'.toJS);
     final run = go.getProperty<JSFunction>('run'.toJS);
     run.callAsFunction(go, instance);
     await _waitForBridge(manifest.libraryName);
@@ -78,23 +79,26 @@ final class FgbWasmLoader {
     final document = globalContext.getProperty<JSObject>('document'.toJS);
     final createElement = document.getProperty<JSFunction>('createElement'.toJS);
     final script = createElement.callAsFunction(document, 'script'.toJS);
-    if (script is! JSObject) {
+    if (script == null || !script.isA<JSObject>()) {
       throw StateError('could not create wasm_exec.js script element');
     }
     final completed = Completer<void>();
-    script.setProperty('src'.toJS, asset.toJS);
-    script.setProperty('onload'.toJS, (() {
+    final scriptElement = script as JSObject;
+    scriptElement.setProperty('src'.toJS, asset.toJS);
+    scriptElement.setProperty('onload'.toJS, (() {
       if (!completed.isCompleted) {
         completed.complete();
       }
     }).toJS);
-    script.setProperty('onerror'.toJS, (() {
+    scriptElement.setProperty('onerror'.toJS, (() {
       if (!completed.isCompleted) {
         completed.completeError(StateError('failed to load $asset'));
       }
     }).toJS);
     final head = document.getProperty<JSObject>('head'.toJS);
-    head.getProperty<JSFunction>('appendChild'.toJS).callAsFunction(head, script);
+    head
+        .getProperty<JSFunction>('appendChild'.toJS)
+        .callAsFunction(head, scriptElement);
     await completed.future;
   }
 

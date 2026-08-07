@@ -36,4 +36,7 @@ lib/src/
 不变时输出也不变。
 
 Web 生成还会在 Go bridge 旁写入 `fgb_web_build.json`。Gokit 会把其中的协议、生成器、库名和 API
-hash 写入 `fgb_wasm_manifest.json`；Web loader 在启动 `wasm_exec.js` 前会校验 manifest。
+hash 写入 `fgb_wasm_manifest.json`；Web loader 在启动 `wasm_exec.js` 前会校验 manifest。manifest
+的 target 是 `web-wasm`。Flutter asset bundle 通过逻辑 key
+`packages/<plugin>/assets/wasm/...` 读取 manifest；浏览器加载 `wasm_exec.js` 和 `.wasm` 时则使用
+打包后的 `assets/packages/<plugin>/assets/wasm/...` URL。

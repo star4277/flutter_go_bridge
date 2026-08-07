@@ -409,6 +409,7 @@ final class _FgbCodec {
     } else if (value is double) {
       writer.byte(6);
       writer.float64(value);
+      // ignore: avoid_double_and_int_checks, JS uses the double branch above
     } else if (value is int) {
       if (value >= -0x80000000 && value <= 0x7fffffff) {
         writer.byte(3);

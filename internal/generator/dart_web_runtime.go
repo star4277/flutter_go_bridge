@@ -71,10 +71,10 @@ final class __FGB_BRIDGE_CLASS__ {
     }
     final request = _codec.encodeMethodCall(method, arguments);
     final rawResponse = invoke.callAsFunction(null, request.toJS);
-    if (rawResponse is! JSUint8Array) {
+    if (rawResponse == null || !rawResponse.isA<JSUint8Array>()) {
       throw StateError('Go Wasm bridge returned a non-Uint8Array response');
     }
-    return _codec.decodeEnvelope(rawResponse.toDart);
+    return _codec.decodeEnvelope((rawResponse as JSUint8Array).toDart);
   }
 
   Future<Object?> fgbInvokeAsync(String method, List<Object?> arguments) async {
