@@ -77,6 +77,7 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		ClassName:        names.UpperCamel(resolved.DartEntrypointClassName),
 		GoPreamble:       resolved.GoPreamble,
 		DartPreamble:     resolved.DartPreamble,
+		Target:           string(resolved.Target),
 		GoPackageAliases: map[string]string{},
 		codecSupport:     map[codecCacheKey]bool{},
 	}
@@ -123,6 +124,15 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			b.warnings = append(b.warnings, wrapped)
 			continue
 		}
+		call.Source = callable
+		call.TargetAvailable = resolved.Target != config.TargetWeb || callable.TargetAvailable
+		call.TargetReason = callable.TargetReason
+		if resolved.Target == config.TargetWeb && call.TargetAvailable {
+			if reason := unsupportedWebCallReason(call); reason != "" {
+				call.TargetAvailable = false
+				call.TargetReason = reason
+			}
+		}
 		b.unit.Calls = append(b.unit.Calls, call)
 		call.ID = len(b.unit.Calls) - 1
 		call.Codec = preferredCodecForCall(call, b.unit.codecSupport)
@@ -163,6 +173,62 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		return nil, b.warnings, err
 	}
 	return b.unit, b.warnings, nil
+}
+
+func unsupportedWebCallReason(call *callModel) string {
+	seen := map[int]bool{}
+	var unsupported func(*wireType) string
+	unsupported = func(typ *wireType) string {
+		if typ == nil || seen[typ.ID] {
+			return ""
+		}
+		seen[typ.ID] = true
+		if typ.CgoScalar {
+			return "cgo scalar types are unavailable on Web"
+		}
+		switch typ.Kind {
+		case kindCallback:
+			return "Dart callbacks are not supported by the Web transport"
+		case kindStreamSink:
+			return "streams are not supported by the Web transport"
+		case kindOpaque, kindDartOpaque, kindInterface:
+			return "opaque handles and interfaces are not supported by the Web transport"
+		case kindInternetIP:
+			return "dart:io InternetAddress is unavailable on Web"
+		case kindPointer, kindSlice, kindArray, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
+			return unsupported(typ.Elem)
+		case kindMap:
+			if reason := unsupported(typ.Key); reason != "" {
+				return reason
+			}
+			return unsupported(typ.Elem)
+		case kindStruct:
+			for _, field := range typ.Struct.allFields() {
+				if reason := unsupported(field.Type); reason != "" {
+					return reason
+				}
+			}
+		case kindNamed:
+			return unsupported(typ.Named.Underlying)
+		case kindAtomic:
+			return unsupported(typ.Atomic.Value)
+		}
+		return ""
+	}
+	if reason := unsupported(call.Receiver); reason != "" {
+		return reason
+	}
+	for _, param := range call.Params {
+		if reason := unsupported(param.Type); reason != "" {
+			return reason
+		}
+	}
+	for _, result := range call.Results {
+		if reason := unsupported(result.Type); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 func (b *builder) selectInterfaceToStringMethods() {
