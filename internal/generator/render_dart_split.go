@@ -171,6 +171,10 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 	if isWeb {
 		centralRenderer.line("import 'dart:js_interop';")
 		centralRenderer.line("import 'dart:js_interop_unsafe';")
+		if unit.UseFlutterWebLoader {
+			centralRenderer.line("import 'package:flutter/services.dart';")
+			centralRenderer.line("import 'package:flutter/widgets.dart';")
+		}
 	} else {
 		centralRenderer.line("import 'dart:ffi' as ffi;")
 		centralRenderer.line("import 'dart:io';")
@@ -196,15 +200,14 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		centralRenderer.raw(cstDartDefinitions(unit))
 		centralRenderer.line("")
 	}
-	runtime := dartRuntimeSource
+	runtime, err := dartNativeRuntimeSource(unit)
 	if isWeb {
-		var err error
 		runtime, err = dartWebRuntimeSource(unit)
 		if err != nil {
 			return nil, err
 		}
-	} else {
-		runtime = strings.ReplaceAll(runtime, "__FGB_LIBRARY_NAME__", strconv.Quote(unit.LibraryName))
+	} else if err != nil {
+		return nil, err
 	}
 	runtime = strings.ReplaceAll(runtime, "__FGB_BRIDGE_CLASS__", unit.ClassName)
 	centralRenderer.raw(runtime)
@@ -984,11 +987,7 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  if (value is! String) {")
 		r.line("    throw FormatException('$path: expected InternetAddress string');")
 		r.line("  }")
-		if r.unit.Target == "web" {
-			r.line("  return value;")
-		} else {
-			r.line("  return InternetAddress(value);")
-		}
+		r.line("  return fgbInternalDecodeInternetAddress(value);")
 	case kindIPPrefix:
 		r.line("  if (value is! String) {")
 		r.line("    throw FormatException('$path: expected CIDR prefix string');")
@@ -1187,11 +1186,7 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	case kindTime:
 		r.line("  return value.microsecondsSinceEpoch;")
 	case kindInternetIP:
-		if r.unit.Target == "web" {
-			r.line("  return value;")
-		} else {
-			r.line("  return value.address;")
-		}
+		r.line("  return fgbInternalEncodeInternetAddress(value);")
 	case kindUUID:
 		r.line("  return value.uuid;")
 	case kindDecimal:

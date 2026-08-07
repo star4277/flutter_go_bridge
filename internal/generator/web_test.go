@@ -64,8 +64,21 @@ func TestGenerateWebPureGoAndCgoFallback(t *testing.T) {
 	if !strings.Contains(dartSource, "rawResponse.isA<JSUint8Array>()") || strings.Contains(dartSource, "rawResponse is! JSUint8Array") {
 		t.Fatalf("Web Dart bridge must use Wasm-compatible JS interop type checks:\n%s", dartSource)
 	}
+	if !strings.Contains(dartSource, "Future<void> initialize") || !strings.Contains(dartSource, "webInitializer") ||
+		!strings.Contains(dartSource, "custom webInitializer in a pure-Dart package") {
+		t.Fatalf("pure-Dart Web initialize must preserve the optional override and explain the default:\n%s", dartSource)
+	}
+	if strings.Contains(dartSource, "package:flutter/widgets.dart") || strings.Contains(dartSource, "FgbWasmLoader.ensureReady()") {
+		t.Fatalf("standalone Web generation must not import the Flutter loader:\n%s", dartSource)
+	}
 	if _, statErr := os.Stat(filepath.Join(dir, "fgb_web_build.json")); statErr != nil {
 		t.Fatalf("Web bridge metadata was not generated: %v", statErr)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(dartOutput), "fgb_wasm_loader.dart"), []byte(`final class FgbWasmLoader {
+  static Future<void> ensureReady() async {}
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	command := exec.Command("go", "build", "-buildvcs=false", "-o", filepath.Join(dir, "bridge.wasm"), ".")
@@ -81,5 +94,34 @@ func TestGenerateWebPureGoAndCgoFallback(t *testing.T) {
 		if output, analyzeErr := analyze.CombinedOutput(); analyzeErr != nil {
 			t.Fatalf("generated Web Dart bridge failed analysis: %v\n%s", analyzeErr, output)
 		}
+	}
+}
+
+func TestGeneratedFlutterWebInitializerBindsBeforeWasm(t *testing.T) {
+	source, err := dartWebRuntimeSource(&unit{
+		ClassName:           "FlutterGoBridge",
+		LibraryName:         "go_lib_fixture",
+		UseFlutterWebLoader: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := strings.Index(source, "WidgetsFlutterBinding.ensureInitialized()")
+	loader := strings.Index(source, "FgbWasmLoader.ensureReady()")
+	if binding < 0 || loader < 0 || binding > loader {
+		t.Fatalf("Flutter Web initializer must bind before loading Wasm:\n%s", source)
+	}
+}
+
+func TestGeneratedNativeInitializeAcceptsWebInitializer(t *testing.T) {
+	_, central, _, _, err := generateFixture(t, `package api
+
+func Add(a, b int) int { return a + b }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(central, "Future<void> initialize") || !strings.Contains(central, "webInitializer") {
+		t.Fatalf("Native initialize must keep the same async API:\n%s", central)
 	}
 }

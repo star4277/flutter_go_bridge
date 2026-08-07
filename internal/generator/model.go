@@ -57,6 +57,10 @@ type unit struct {
 	GoPreamble   string
 	DartPreamble string
 	Target       string
+	// UseFlutterWebLoader is true when the generated Web bridge belongs to a
+	// Flutter package. Standalone Dart Web callers can provide their own
+	// initializer without importing package:flutter.
+	UseFlutterWebLoader bool
 
 	Calls                 []*callModel
 	TopCalls              []*callModel

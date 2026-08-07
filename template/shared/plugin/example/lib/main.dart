@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:REPLACE_ME_DART_PACKAGE_NAME/REPLACE_ME_DART_PACKAGE_NAME.dart';
 
 Future<void> main() async {
-  FlutterGoBridge.initialize();
+  await FlutterGoBridge.initialize();
   runApp(const MyApp());
 }
 
