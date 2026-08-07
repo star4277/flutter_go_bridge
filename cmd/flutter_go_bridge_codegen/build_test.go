@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,31 @@ type recordingPlatformBuilder struct {
 	request platformbuild.Request
 	result  platformbuild.Result
 	err     error
+}
+
+type webBuildCall struct {
+	name string
+	args []string
+	dir  string
+	env  []string
+}
+
+type recordingWebBuilderRunner struct {
+	calls []webBuildCall
+	check func() error
+}
+
+func (runner *recordingWebBuilderRunner) Run(_ context.Context, name string, args []string, dir string, env []string) error {
+	runner.calls = append(runner.calls, webBuildCall{
+		name: name,
+		args: append([]string{}, args...),
+		dir:  dir,
+		env:  append([]string{}, env...),
+	})
+	if runner.check != nil {
+		return runner.check()
+	}
+	return nil
 }
 
 func (builder *recordingPlatformBuilder) Build(_ context.Context, request platformbuild.Request) (platformbuild.Result, error) {
@@ -117,12 +143,112 @@ func TestIsWebFlutterBuild(t *testing.T) {
 }
 
 func TestRootCommandIncludesBuild(t *testing.T) {
+	seenBuild := false
+	seenBuildWeb := false
 	for _, command := range newRootCommand().Commands() {
 		if command.Name() == "build" {
-			return
+			seenBuild = true
+			continue
+		}
+		if command.Name() == "build-web" {
+			seenBuildWeb = true
 		}
 	}
-	t.Fatal("root command does not include build")
+	if !seenBuild {
+		t.Fatal("root command does not include build")
+	}
+	if !seenBuildWeb {
+		t.Fatal("root command does not include build-web")
+	}
+}
+
+func TestBuildWebCommandGeneratesBeforeBuildingWasm(t *testing.T) {
+	baseDir, configPath := writeBuildFixture(t)
+	outputDir := filepath.Join(baseDir, "assets", "wasm")
+	if err := os.MkdirAll(filepath.Join(baseDir, "gokit", "build_tool", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bridge.wasm", "wasm_exec.js", "fgb_wasm_manifest.json"} {
+		if err := os.WriteFile(filepath.Join(outputDir, name), []byte("artifact"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bridgeGo := filepath.Join(baseDir, "go", "bridge_generated.go")
+	bridgeWebGo := filepath.Join(baseDir, "go", "bridge_generated_web.go")
+	bridgeDart := filepath.Join(baseDir, "lib", "src", "bridge_generated.dart")
+	runner := &recordingWebBuilderRunner{
+		check: func() error {
+			for _, path := range []string{bridgeGo, bridgeWebGo, bridgeDart} {
+				if _, err := os.Stat(path); err != nil {
+					return fmt.Errorf("generated file %s is not ready: %w", path, err)
+				}
+			}
+			return nil
+		},
+	}
+	original := newWebPlatformBuilder
+	newWebPlatformBuilder = func() *platformbuild.WebBuilder {
+		return &platformbuild.WebBuilder{Runner: runner, HostOS: "linux"}
+	}
+	t.Cleanup(func() { newWebPlatformBuilder = original })
+
+	command := newRootCommand()
+	command.SetArgs([]string{
+		"build-web",
+		"--config-file", configPath,
+		"--no-dart-format",
+	})
+	if err := command.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("build-web command calls = %#v, want exactly one Gokit call", runner.calls)
+	}
+	call := runner.calls[0]
+	if call.name != filepath.Join(baseDir, "gokit", "run_build_tool.sh") {
+		t.Fatalf("Gokit command = %q", call.name)
+	}
+	if !reflect.DeepEqual(call.args, []string{
+		"build-web",
+		"--manifest-dir", filepath.Join(baseDir, "go"),
+		"--output-dir", outputDir,
+		"--root-project-dir", baseDir,
+	}) {
+		t.Fatalf("Gokit args = %#v", call.args)
+	}
+}
+
+func TestBuildWebCommandReportsConfigurationAndGokitErrors(t *testing.T) {
+	t.Run("missing config", func(t *testing.T) {
+		command := newRootCommand()
+		command.SetArgs([]string{"build-web", "--config-file", filepath.Join(t.TempDir(), "missing.yaml")})
+		err := command.Execute()
+		if err == nil {
+			t.Fatal("build-web succeeded with a missing config")
+		}
+	})
+
+	t.Run("missing Gokit", func(t *testing.T) {
+		_, configPath := writeBuildFixture(t)
+		command := newRootCommand()
+		command.SetArgs([]string{"build-web", "--config-file", configPath, "--no-dart-format"})
+		err := command.Execute()
+		if err == nil || !strings.Contains(err.Error(), "integrated Gokit build_tool") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+func TestBuildWebCommandRejectsPositionalArguments(t *testing.T) {
+	command := newRootCommand()
+	command.SetArgs([]string{"build-web", "extra"})
+	err := command.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %v", err)
+	}
 }
 
 func writeBuildFixture(t *testing.T) (string, string) {

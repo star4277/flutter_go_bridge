@@ -43,22 +43,20 @@ and passes the resulting artifact set through the platform signing interface.
 
 `flutter run -d chrome` and `flutter build web` do not invoke
 `flutter_go_bridge_codegen` or an arbitrary Go compiler. Without a Flutter build hook, run the
-same Gokit build step first so the package's `assets/wasm/` directory contains the current
+Wasm preparation command first so the package's `assets/wasm/` directory contains the current
 `.wasm`, `wasm_exec.js`, and `fgb_wasm_manifest.json`:
 
 ```powershell
-go run ./cmd/flutter_go_bridge_codegen generate --config-file flutter_go_bridge.yaml
-dart run go_builder/gokit/build_tool/bin/build_tool.dart build-web `
-  --manifest-dir "$PWD/go" `
-  --output-dir "$PWD/go_builder/assets/wasm" `
-  --root-project-dir "$PWD"
+flutter_go_bridge_codegen build-web --config-file flutter_go_bridge.yaml
 flutter run -d chrome
 # or: flutter build web
 ```
 
-For a plugin project, use `gokit/build_tool/bin/build_tool.dart` and `assets/wasm/` instead. The
-command is platform-independent. The generated Web bridge reads the manifest through the package
-asset bundle; Flutter only packages the files that are already present.
+The command is platform-independent and does not start Flutter. For a plugin project, it selects the
+plugin's integrated `gokit/` and `assets/wasm/` layout automatically. If a different build system
+already generated the bridge, the lower-level Gokit `build_tool.dart build-web` command can still be
+used with the same manifest and output directories. The generated Web bridge reads the manifest
+through the package asset bundle; Flutter only packages files that are already present.
 
 The default polling interval is 400ms. Generated files are excluded dynamically and content
 hashes prevent identical rewrites from causing a rebuild. A failed regeneration keeps the current

@@ -53,6 +53,19 @@ Starts `flutter run --machine`, hot reloads Dart changes, and regenerates/restar
 `-d all` is not supported because one daemon session targets one device.
 For Web devices, it also runs Gokit `build-web` before startup and after each Go regeneration.
 
+## `build-web`
+
+```sh
+flutter_go_bridge_codegen build-web [flags]
+```
+
+Generates the shared Native/Web bridge once, then runs Gokit `build-web` to install the current
+`.wasm`, `wasm_exec.js`, and `fgb_wasm_manifest.json` under the configured package assets directory.
+It does not invoke Flutter. Use it before running `flutter run -d chrome` or `flutter build web`
+directly. It accepts the same generation and configuration flags as `run`, including
+`--config-file`, `--go-input`, `--go-output`, `--dart-output`, `--library-name`, and
+`--no-dart-format`.
+
 ## `build`
 
 ```sh

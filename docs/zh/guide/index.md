@@ -17,6 +17,7 @@ Go 源码 -> go/packages 类型分析 -> codec/ABI 代码生成 -> Dart API -> G
 | [`generate --watch`](/zh/guide/cli#generate-watch) | 监听 Go 代码并重新生成 |
 | [`run`](/zh/guide/dev-server) | Dart 改动热重载，Go 改动重启应用 |
 | [`build`](/zh/guide/cli#build) | 生成一次代码、构建指定 Flutter 平台并进入签名边界 |
+| [`build-web`](/zh/guide/cli#build-web) | 生成一次代码，并为直接 Flutter Web 命令准备 Go Wasm 资源 |
 | [`create`](/zh/guide/cli#create) | 新建 Flutter + Go 工程 |
 | [`integrate`](/zh/guide/cli#integrate) | 接入已有 Flutter 工程 |
 

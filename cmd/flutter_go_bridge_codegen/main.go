@@ -71,6 +71,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newGenerateCommand(flags))
 	root.AddCommand(newRunCommand(&generateFlags{}))
 	root.AddCommand(newBuildCommand(&generateFlags{}))
+	root.AddCommand(newBuildWebCommand(&generateFlags{}))
 	root.AddCommand(newCreateCommand())
 	root.AddCommand(newIntegrateCommand())
 	return root
@@ -136,6 +137,41 @@ Native implementation. Arguments after -- are forwarded to flutter build:
 	return command
 }
 
+func newBuildWebCommand(flags *generateFlags) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "build-web [flags]",
+		Short: "Generate the bridge and build the Go WebAssembly assets",
+		Long: `Generate the shared Native/Web bridge, then run Gokit build-web to
+install the current WebAssembly assets. This command does not invoke Flutter;
+run flutter run or flutter build web after it completes:
+
+  flutter_go_bridge_codegen build-web
+  flutter run -d chrome`,
+		Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return buildWeb(command, flags)
+		},
+	}
+	registerGenerateFlags(command, flags, false)
+	return command
+}
+
+func buildWeb(command *cobra.Command, flags *generateFlags) error {
+	if _, err := runGenerateFiles(command, flags); err != nil {
+		return err
+	}
+	resolved, err := resolveGenerateConfig(command, flags)
+	if err != nil {
+		return err
+	}
+	artifacts, err := buildWebWasm(command.Context(), resolved)
+	if err != nil {
+		return err
+	}
+	logBuiltArtifacts(artifacts)
+	return nil
+}
+
 func flutterBuildArgs(command *cobra.Command, args []string) ([]string, error) {
 	beforeDash := args
 	var forwarded []string
@@ -179,10 +215,14 @@ func buildFlutter(command *cobra.Command, flags *generateFlags, options *buildFl
 	if err != nil {
 		return err
 	}
-	for _, artifact := range result.Artifacts {
+	logBuiltArtifacts(result.Artifacts)
+	return nil
+}
+
+func logBuiltArtifacts(artifacts []string) {
+	for _, artifact := range artifacts {
 		log.Printf("built %s", artifact)
 	}
-	return nil
 }
 
 func isWebFlutterBuild(flutterArgs []string) bool {

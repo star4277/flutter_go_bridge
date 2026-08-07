@@ -5,6 +5,16 @@ Gokit 同时负责 Native cgo 和 Web Wasm 构建。两类目标共用配置解�
 `flutter_go_bridge_codegen run -d chrome` 会自动调用 `build-web`。直接执行
 `flutter run/build web` 时，需要先按文档运行 Gokit 构建步骤。
 
+这个准备步骤也可以通过 codegen 的独立命令执行：
+
+```sh
+flutter_go_bridge_codegen build-web
+```
+
+它会重新生成共享 bridge，调用 Gokit `build-web`，然后在 Flutter 构建前退出。直接执行
+`flutter run -d chrome` 或 `flutter build web` 前推荐使用这个命令。如果代码已经生成，或者要把
+Gokit 接入其他构建系统，仍然可以使用下方更底层的 Gokit 命令。
+
 一次性构建应用时，可执行 `flutter_go_bridge_codegen build web -- --release`。该命令会依次
 完成统一代码生成、Gokit `build-web` 和 `flutter build web --release`。Native 目标使用对应的
 Native builder。两条路径都保留平台签名边界；当前实现为空操作，后续接入签名不需要修改 CLI。

@@ -41,21 +41,19 @@ flutter_go_bridge_codegen build windows -- --release
 
 `flutter run -d chrome` 和 `flutter build web` 不会调用
 `flutter_go_bridge_codegen`，也不会执行任意 Go 编译器。不使用 Flutter build hook 时，需要
-先执行同一个 Gokit 构建步骤，确保包的 `assets/wasm/` 中包含最新的 `.wasm`、
+先执行 Wasm 准备命令，确保包的 `assets/wasm/` 中包含最新的 `.wasm`、
 `wasm_exec.js` 和 `fgb_wasm_manifest.json`：
 
 ```powershell
-go run ./cmd/flutter_go_bridge_codegen generate --config-file flutter_go_bridge.yaml
-dart run go_builder/gokit/build_tool/bin/build_tool.dart build-web `
-  --manifest-dir "$PWD/go" `
-  --output-dir "$PWD/go_builder/assets/wasm" `
-  --root-project-dir "$PWD"
+flutter_go_bridge_codegen build-web --config-file flutter_go_bridge.yaml
 flutter run -d chrome
 # 或：flutter build web
 ```
 
-Plugin 项目改用 `gokit/build_tool/bin/build_tool.dart` 和 `assets/wasm/`。该命令跨平台一致。
-生成的 Web bridge 通过包资源读取 manifest，Flutter 只负责打包已经存在的文件。
+该命令跨平台一致，也不会启动 Flutter。Plugin 项目会自动选择集成的 `gokit/` 和
+`assets/wasm/` 布局。如果其他构建系统已经生成 bridge，仍可使用底层的
+`gokit/build_tool.dart build-web`，传入相同的 manifest 和输出目录。生成的 Web bridge 通过包资源
+读取 manifest，Flutter 只负责打包已经存在的文件。
 
 默认轮询间隔为 400ms。生成文件会动态加入排除集，并用内容哈希避免“内容相同但 mtime 变化”
 造成完整重构建。首次启动成功后，后续生成失败不会停止当前 app。
