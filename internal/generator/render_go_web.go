@@ -58,11 +58,11 @@ func renderGoWeb(unit *unit) ([]byte, error) {
 	}
 	r.line(")")
 	r.line("")
-	base, _, found := strings.Cut(goRuntimeSource, "// CST/DCO helpers")
-	if !found {
-		return nil, fmt.Errorf("Web runtime split marker is missing")
+	base, err := webGoRuntimeBase(goRuntimeSource)
+	if err != nil {
+		return nil, err
 	}
-	r.raw(strings.TrimSpace(base))
+	r.raw(base)
 	r.line("")
 	if unit.UsesTime {
 		r.renderTimeHelpers()
@@ -86,6 +86,14 @@ func renderGoWeb(unit *unit) ([]byte, error) {
 		r.line("func main() { select {} }")
 	}
 	return r.buffer.Bytes(), nil
+}
+
+func webGoRuntimeBase(source string) (string, error) {
+	base, _, found := strings.Cut(source, "// CST/DCO helpers")
+	if !found {
+		return "", fmt.Errorf("Web runtime split marker is missing")
+	}
+	return strings.TrimSpace(base), nil
 }
 
 const goWebTransportSource = `

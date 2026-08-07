@@ -22,6 +22,73 @@ func TestSourcePositionLessOrdersFilesBeforeTokenBases(t *testing.T) {
 	}
 }
 
+func TestWebTargetHelpersCoverInvalidAndExcludedFiles(t *testing.T) {
+	root := t.TempDir()
+	invalid := filepath.Join(root, "invalid.go")
+	if err := os.WriteFile(invalid, []byte("package"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if importsC(invalid) {
+		t.Fatal("invalid Go source was detected as cgo")
+	}
+	pure := filepath.Join(root, "pure.go")
+	if err := os.WriteFile(pure, []byte("package fixture\n\nimport \"fmt\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if importsC(pure) {
+		t.Fatal("pure Go source was detected as cgo")
+	}
+	cgo := filepath.Join(root, "cgo.go")
+	if err := os.WriteFile(cgo, []byte("package fixture\n\nimport \"C\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !importsC(cgo) {
+		t.Fatal("cgo source was not detected")
+	}
+
+	if available, reason := targetAvailability(pure, map[string]bool{filepath.Clean(pure): true}, ""); !available || reason != "" {
+		t.Fatalf("available file = %v, %q", available, reason)
+	}
+	if available, reason := targetAvailability(pure, nil, "load failed"); available || !strings.Contains(reason, "load failed") {
+		t.Fatalf("target error = %v, %q", available, reason)
+	}
+	if available, reason := targetAvailability(cgo, nil, ""); available || !strings.Contains(reason, `imports "C"`) {
+		t.Fatalf("cgo availability = %v, %q", available, reason)
+	}
+	if available, reason := targetAvailability(pure, nil, ""); available || !strings.Contains(reason, "build constraints") {
+		t.Fatalf("excluded availability = %v, %q", available, reason)
+	}
+}
+
+func TestLoadWebTargetFilesReportsMultipleAndBrokenPackages(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/web-load\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first", "second"} {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".go"), []byte("package "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, reason := loadWebTargetFiles(root, "./..."); !strings.Contains(reason, "exactly one package") {
+		t.Fatalf("multiple package reason = %q", reason)
+	}
+	broken := filepath.Join(root, "broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "broken.go"), []byte("package broken\n\nvar Value = missing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, reason := loadWebTargetFiles(root, "./broken"); reason == "" {
+		t.Fatal("broken Web package did not report a load error")
+	}
+}
+
 func TestParseInterfaceMethodDirectives(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/interfaces\n\ngo 1.24\n"), 0o644); err != nil {
