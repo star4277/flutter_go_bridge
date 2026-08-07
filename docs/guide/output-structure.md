@@ -18,9 +18,11 @@ lib/src/
     └── account.dart
 ```
 
-`bridge_generated.go` contains the cgo exports, dispatcher and codec implementations. The
-support package under `internal/fgb` is generated only when the API needs `DartOpaque` or
-`StreamSink`.
+For `target: native`, `bridge_generated.go` contains cgo exports, the dispatcher, and codec
+implementations. For `target: web`, the same path instead contains a pure-Go `syscall/js` registry,
+dispatcher, and codec with no C ABI. `bridge_generated.dart` similarly selects FFI or JS interop
+imports for the configured target. The support package under `internal/fgb` is generated only when
+the API needs `DartOpaque` or `StreamSink`.
 
 Each Go source file produces a same-named Dart file. The mirror is anchored at the Go module root:
 `go/api/api.go` becomes `lib/src/api/api.dart`. Generated files are implementation details; keep

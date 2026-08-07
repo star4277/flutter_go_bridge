@@ -54,7 +54,29 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 		dartDependencies = append(dartDependencies, "decimal")
 	}
 
-	goSource, err := renderGo(unit)
+	goUnit := unit
+	if resolved.Target == config.TargetWeb {
+		available := *api
+		available.Callables = nil
+		for _, call := range unit.Calls {
+			if call.TargetAvailable {
+				available.Callables = append(available.Callables, call.Source)
+			} else {
+				warnings = append(warnings, fmt.Errorf("%s is unavailable on Web: %s", call.GoName, call.TargetReason))
+			}
+		}
+		goUnit, _, err = buildUnit(&available, resolved, direct)
+		if err != nil {
+			return Result{Warnings: warnings}, err
+		}
+	}
+
+	var goSource []byte
+	if resolved.Target == config.TargetWeb {
+		goSource, err = renderGoWeb(goUnit)
+	} else {
+		goSource, err = renderGo(goUnit)
+	}
 	if err != nil {
 		return Result{Warnings: warnings}, err
 	}

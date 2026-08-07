@@ -18,9 +18,10 @@ lib/src/
     └── account.dart
 ```
 
-- `bridge_generated.go`：`package main`、cgo 导出、dispatcher 和 codec。
+- `target: native` 时，`bridge_generated.go` 包含 `package main`、cgo 导出、dispatcher 和 codec。
+- `target: web` 时，同一路径改为纯 Go `syscall/js` registry、dispatcher 和 codec，不含 C ABI。
 - `internal/fgb/fgb_generated.go`：`StreamSink`、`DartOpaque` 等签名支持类型。
-- `bridge_generated.dart`：动态库加载、FFI、内存、Dart API DL 和 codec runtime。
+- `bridge_generated.dart`：按 target 生成 Native FFI 或 Web JS interop runtime。
 - 每个 Go 源文件生成一个同名 Dart API 文件。
 
 镜像锚点是 Go 模块根，例如 `go/api/api.go` → `lib/src/api/api.dart`。生成文件不要手改；

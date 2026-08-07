@@ -1,7 +1,9 @@
 # Building with Gokit
 
-Gokit compiles the generated Go cgo bridge during the normal Flutter build. Users run
-`flutter run` or `flutter build`; they do not need to precompile a library manually.
+Gokit owns both Native cgo builds and Web Wasm builds. It uses the same configuration parsing,
+source/toolchain fingerprint, artifact cache, file lock, atomic install, and structured build events
+for both targets. IDE tooling may invoke `build-web` after Go changes; the code generator does not
+compile Go itself.
 
 ## Platform outputs
 
@@ -11,6 +13,7 @@ Gokit compiles the generated Go cgo bridge during the normal Flutter build. User
 | Windows | `<name>.dll` |
 | Linux | `lib<name>.so` |
 | iOS / macOS | `lib<name>.a`, linked into the Framework |
+| Web | `go_lib_<name>.wasm`, `wasm_exec.js`, and `fgb_wasm_manifest.json` |
 
 The generated bridge must be in the Go module root (`package main`), and `gokit.yaml` normally
 uses:
@@ -24,6 +27,17 @@ The templates include platform glue under `android/`, `ios/`, `macos/`, `windows
 `ohos/`. The detailed Gokit usage guide is embedded in the generated project at
 `gokit/docs/usage_zh.md`.
 
+`build-web` always sets `CGO_ENABLED=0 GOOS=js GOARCH=wasm`. The generated Web bridge uses
+`syscall/js` and StandardMessageCodec-compatible bytes; it contains no C ABI, `import "C"`, or Dart
+FFI. Before Dart invokes an API, the Web loader must run `wasm_exec.js`, instantiate the manifest's
+Wasm artifact, and wait until the library appears in the global bridge registry.
+
+Methods declared in a source file importing `"C"` remain visible in the generated Dart API but throw
+`UnsupportedError` on Web with the recorded cgo reason. Pure-Go methods in other files of the same
+package remain usable when the package still compiles with cgo disabled. Callbacks, streams,
+`DartOpaque`, opaque handles/interfaces, and `dart:io` `InternetAddress` parameters are also explicit
+Web fallbacks in the initial transport; Native support is unchanged.
+
 ## Requirements
 
 Install Go and the platform C toolchain: MinGW-w64 on Windows, GCC/Clang on Linux, Xcode on
@@ -35,4 +49,3 @@ For source checkouts, initialize the embedded submodule before building the CLI:
 ```sh
 git submodule update --init --recursive
 ```
-

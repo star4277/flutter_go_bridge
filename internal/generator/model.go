@@ -56,6 +56,7 @@ type unit struct {
 	ClassName    string
 	GoPreamble   string
 	DartPreamble string
+	Target       string
 
 	Calls                 []*callModel
 	TopCalls              []*callModel
@@ -121,6 +122,7 @@ type codecModePack struct {
 }
 
 type callModel struct {
+	Source      *bridgemodel.Callable
 	ID          int
 	GoName      string
 	DartName    string
@@ -166,6 +168,11 @@ type callModel struct {
 	// package-private scalar. Reflection converts the public transport scalar
 	// to/from the unnameable `_Ctype_*` type at the call boundary.
 	Reflective bool
+	// TargetAvailable controls whether the selected transport emits this call.
+	// Web keeps unavailable calls in Dart so the public API remains stable, but
+	// omits them from the Wasm dispatcher and throws TargetReason on invocation.
+	TargetAvailable bool
+	TargetReason    string
 }
 
 type toStringFormat uint8
