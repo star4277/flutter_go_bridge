@@ -2463,3 +2463,33 @@ Re-run the same suite with a longer timeout and inspect verbose package progress
   117.9 seconds on the cold run.
 
 ---
+
+## [ERR-20260807-008] GitHub PR status query timeout
+
+**Logged**: 2026-08-07T16:26:00+08:00
+**Priority**: low
+**Status**: unresolved
+**Area**: infra
+
+### Summary
+The post-push `gh pr view 41` status query could not complete because the GitHub GraphQL API TLS
+handshake timed out.
+
+### Error
+```
+Post "https://api.github.com/graphql": net/http: TLS handshake timeout
+```
+
+### Context
+- The branch push itself succeeded.
+- The remote Codecov/CI state must be checked by the existing pull request after GitHub refreshes.
+
+### Suggested Fix
+Retry the PR status query when the GitHub API is reachable; do not infer CI or Codecov state from
+the failed request.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: .plans/completed/web-wasm-support.md
+
+---
