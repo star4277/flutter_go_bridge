@@ -2,49 +2,10 @@
 // ignore_for_file: unused_element, unused_import, unnecessary_import
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi' as ffi;
-import 'dart:io';
-import 'dart:isolate';
 import 'dart:typed_data';
+import "bridge_generated.io.dart" if (dart.library.js_interop) "bridge_generated.web.dart";
+export "bridge_generated.io.dart" if (dart.library.js_interop) "bridge_generated.web.dart";
 import "api/lib.dart";
-
-final class _FgbCstBytes extends ffi.Struct {
-  external ffi.Pointer<ffi.Uint8> ptr;
-  @ffi.Int64()
-  external int len;
-}
-
-final class _FgbCstType1 extends ffi.Struct {
-  @ffi.Int64()
-  external int x;
-  @ffi.Int64()
-  external int y;
-  external ffi.Pointer<_FgbCstBytes> label;
-}
-
-final class _FgbCstArgs0 extends ffi.Struct {
-  external ffi.Pointer<_FgbCstBytes> name;
-}
-
-final class _FgbCstArgs1 extends ffi.Struct {
-  external ffi.Pointer<_FgbCstType1> receiver;
-  @ffi.Int64()
-  external int dx;
-  @ffi.Int64()
-  external int dy;
-}
-
-final class _FgbCstArgs2 extends ffi.Struct {
-  @ffi.Uint8()
-  external int fgbPad;
-}
-
-final class _FgbCstArgs3 extends ffi.Struct {
-  @ffi.UintPtr()
-  external int receiver;
-  @ffi.Int64()
-  external int delta;
-}
 
 final class FgbPlatformException implements Exception {
   FgbPlatformException(this.code, this.message, this.details, {this.goErrors});
@@ -79,7 +40,7 @@ final class FgbGoErrors implements Exception {
 /// Reads the individual error messages out of an error envelope's details.
 /// The standard codec sends the whole details map; the DCO path, which has no
 /// map type, sends a plain list of messages.
-FgbGoErrors? _fgbGoErrorsFrom(Object? details) {
+FgbGoErrors? fgbInternalGoErrorsFrom(Object? details) {
   Object? errors = details;
   if (details is Map) {
     errors = details['errors'];
@@ -87,9 +48,7 @@ FgbGoErrors? _fgbGoErrorsFrom(Object? details) {
   if (errors is! List) {
     return null;
   }
-  return FgbGoErrors(
-    List<String>.unmodifiable(errors.map((Object? error) => '$error')),
-  );
+  return FgbGoErrors(List<String>.unmodifiable(errors.map((Object? error) => '$error')));
 }
 
 /// Internal: unwraps the list carrying a call's several results.
@@ -103,18 +62,7 @@ List<Object?> fgbAsResultList(Object? value, int count) {
 /// Base class for generated opaque Go handles. The generated source files do
 /// not need to expose dart:ffi; finalizer plumbing stays in this integration
 /// library.
-abstract base class GoOpaque implements ffi.Finalizable {
-  GoOpaque({required this.fgbBridge, required this.fgbHandle}) {
-    fgbBridge.fgbAttachOpaqueFinalizer(this, fgbHandle);
-  }
 
-  final FlutterGoBridge fgbBridge;
-  final int fgbHandle;
-}
-
-/// Marks a value that was nil on the Go side. Its members are not usable.
-/// Check with an 'is GoAbsent' test when you need to tell an absent
-/// interface value apart from a real one.
 abstract interface class GoAbsent {}
 
 /// Structural equality for the fields of a generated value class.
@@ -194,9 +142,7 @@ int fgbInternalDeepHash(Object? value) {
   if (value is Map) {
     var result = 0;
     for (final entry in value.entries) {
-      result ^=
-          fgbInternalDeepHash(entry.key) * 31 +
-          fgbInternalDeepHash(entry.value);
+      result ^= fgbInternalDeepHash(entry.key) * 31 + fgbInternalDeepHash(entry.value);
     }
     return result;
   }
@@ -205,16 +151,16 @@ int fgbInternalDeepHash(Object? value) {
 
 /// Wraps a registered Dart closure so the callback dispatcher can tell it
 /// apart from plain DartOpaque objects sharing the same registry.
-final class _FgbCallbackInvoker {
-  _FgbCallbackInvoker(this.invoke);
+final class FgbInternalCallbackInvoker {
+  FgbInternalCallbackInvoker(this.invoke);
 
   final Future<Object?> Function(List<Object?> args) invoke;
 }
 
 /// A Dart sink Go pushes values into, together with the typed add closure the
 /// generated encoder built for it.
-final class _FgbStreamTarget {
-  _FgbStreamTarget(this.sink, this.add);
+final class FgbInternalStreamTarget {
+  FgbInternalStreamTarget(this.sink, this.add);
 
   final StreamSink<dynamic> sink;
   final void Function(Object? raw) add;
@@ -442,7 +388,7 @@ final class _FgbCodec {
         code,
         message as String?,
         details,
-        goErrors: _fgbGoErrorsFrom(details),
+        goErrors: fgbInternalGoErrorsFrom(details),
       );
     }
     throw const FormatException('unknown method envelope flag');
@@ -524,685 +470,24 @@ final class _FgbCodec {
         _writeValue(writer, item);
       });
     } else {
-      throw FormatException(
-        'type ${value.runtimeType} is not supported by StandardMessageCodec',
-      );
+      throw FormatException('type ${value.runtimeType} is not supported by StandardMessageCodec');
     }
   }
 }
 
-final class _FgbData extends ffi.Struct {
-  external ffi.Pointer<ffi.Uint8> data;
+final _fgbInternalCodec = _FgbCodec();
 
-  @ffi.Int64()
-  external int len;
-}
+Uint8List fgbInternalEncodeMethodCall(String method, List<Object?> arguments) =>
+    _fgbInternalCodec.encodeMethodCall(method, arguments);
 
-typedef _FgbInitNative = ffi.Int32 Function(ffi.Pointer<ffi.Void>);
-typedef _FgbInitDart = int Function(ffi.Pointer<ffi.Void>);
-typedef _FgbAllocNative = ffi.Pointer<ffi.Void> Function(ffi.Int64);
-typedef _FgbAllocDart = ffi.Pointer<ffi.Void> Function(int);
-typedef _FgbFreeNative = ffi.Void Function(ffi.Pointer<ffi.Void>);
-typedef _FgbFreeDart = void Function(ffi.Pointer<ffi.Void>);
-typedef _FgbSyncNative = _FgbData Function(ffi.Pointer<ffi.Void>, ffi.Int64);
-typedef _FgbSyncDart = _FgbData Function(ffi.Pointer<ffi.Void>, int);
-typedef _FgbAsyncNative =
-    ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Int64, ffi.Int64);
-typedef _FgbAsyncDart = void Function(ffi.Pointer<ffi.Void>, int, int);
-typedef _FgbDropNative = ffi.Void Function(ffi.Pointer<ffi.Void>);
-typedef _FgbDropDart = void Function(ffi.Pointer<ffi.Void>);
-typedef _FgbCstNative =
-    ffi.Pointer<ffi.Void> Function(ffi.Int32, ffi.Pointer<ffi.Void>);
-typedef _FgbCstDart =
-    ffi.Pointer<ffi.Void> Function(int, ffi.Pointer<ffi.Void>);
-typedef _FgbCstAsyncNative =
-    ffi.Void Function(ffi.Int32, ffi.Pointer<ffi.Void>, ffi.Int64);
-typedef _FgbCstAsyncDart = void Function(int, ffi.Pointer<ffi.Void>, int);
-typedef _FgbDcoFreeNative = ffi.Void Function(ffi.Pointer<ffi.Void>);
-typedef _FgbDcoFreeDart = void Function(ffi.Pointer<ffi.Void>);
-typedef _FgbIsolateAttachNative =
-    ffi.Void Function(ffi.Int64, ffi.Int64, ffi.Int64);
-typedef _FgbIsolateAttachDart = void Function(int, int, int);
-typedef _FgbCallbackResultNative =
-    ffi.Void Function(ffi.Int64, ffi.Pointer<ffi.Void>, ffi.Int64);
-typedef _FgbCallbackResultDart = void Function(int, ffi.Pointer<ffi.Void>, int);
-typedef _FgbStreamCancelNative = ffi.Void Function(ffi.Int64);
-typedef _FgbStreamCancelDart = void Function(int);
+Object? fgbInternalDecodeEnvelope(Uint8List bytes) => _fgbInternalCodec.decodeEnvelope(bytes);
 
-final class _FgbBindings {
-  _FgbBindings(this.library)
-    : init = library.lookupFunction<_FgbInitNative, _FgbInitDart>('fgb_init'),
-      alloc = library.lookupFunction<_FgbAllocNative, _FgbAllocDart>(
-        'fgb_alloc',
-      ),
-      free = library.lookupFunction<_FgbFreeNative, _FgbFreeDart>('fgb_free'),
-      call = library.lookupFunction<_FgbSyncNative, _FgbSyncDart>('fgb'),
-      callAsync = library.lookupFunction<_FgbAsyncNative, _FgbAsyncDart>(
-        'fgb_async',
-      ),
-      drop = library.lookupFunction<_FgbDropNative, _FgbDropDart>('fgb_drop'),
-      cst = library.lookupFunction<_FgbCstNative, _FgbCstDart>('fgb_cst'),
-      cstAsync = library.lookupFunction<_FgbCstAsyncNative, _FgbCstAsyncDart>(
-        'fgb_cst_async',
-      ),
-      dcoFree = library.lookupFunction<_FgbDcoFreeNative, _FgbDcoFreeDart>(
-        'fgb_dco_free',
-      ),
-      isolateAttach = library
-          .lookupFunction<_FgbIsolateAttachNative, _FgbIsolateAttachDart>(
-            'fgb_isolate_attach',
-          ),
-      callbackResult = library
-          .lookupFunction<_FgbCallbackResultNative, _FgbCallbackResultDart>(
-            'fgb_callback_result',
-          ),
-      streamCancel = library
-          .lookupFunction<_FgbStreamCancelNative, _FgbStreamCancelDart>(
-            'fgb_stream_cancel',
-          ),
-      dropAddress = library.lookup<ffi.NativeFunction<_FgbDropNative>>(
-        'fgb_drop',
-      );
+Object? fgbInternalDecodeValue(Uint8List bytes) => _FgbReader(bytes).value();
 
-  final ffi.DynamicLibrary library;
-  final int Function(ffi.Pointer<ffi.Void>) init;
-  final ffi.Pointer<ffi.Void> Function(int) alloc;
-  final void Function(ffi.Pointer<ffi.Void>) free;
-  final _FgbData Function(ffi.Pointer<ffi.Void>, int) call;
-  final void Function(ffi.Pointer<ffi.Void>, int, int) callAsync;
-  final void Function(ffi.Pointer<ffi.Void>) drop;
-  final ffi.Pointer<ffi.Void> Function(int, ffi.Pointer<ffi.Void>) cst;
-  final void Function(int, ffi.Pointer<ffi.Void>, int) cstAsync;
-  final void Function(ffi.Pointer<ffi.Void>) dcoFree;
-  final void Function(int, int, int) isolateAttach;
-  final void Function(int, ffi.Pointer<ffi.Void>, int) callbackResult;
-  final void Function(int) streamCancel;
-  final ffi.Pointer<ffi.NativeFunction<_FgbDropNative>> dropAddress;
-}
-
-final class _FgbDcoTypedData extends ffi.Struct {
-  @ffi.Uint32()
-  external int type;
-
-  @ffi.IntPtr()
-  external int length;
-
-  external ffi.Pointer<ffi.Uint8> values;
-}
-
-final class _FgbDcoArray extends ffi.Struct {
-  @ffi.IntPtr()
-  external int length;
-
-  external ffi.Pointer<ffi.Pointer<_FgbDcoObject>> values;
-}
-
-typedef _FgbDcoFinalizerNative =
-    ffi.Void Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>);
-
-final class _FgbDcoExternalTypedData extends ffi.Struct {
-  @ffi.Uint32()
-  external int type;
-
-  @ffi.IntPtr()
-  external int length;
-
-  external ffi.Pointer<ffi.Uint8> data;
-  external ffi.Pointer<ffi.Void> peer;
-  external ffi.Pointer<ffi.NativeFunction<_FgbDcoFinalizerNative>> callback;
-}
-
-final class _FgbDcoNativePointer extends ffi.Struct {
-  @ffi.IntPtr()
-  external int ptr;
-
-  @ffi.IntPtr()
-  external int size;
-
-  external ffi.Pointer<ffi.NativeFunction<_FgbDcoFinalizerNative>> callback;
-}
-
-final class _FgbDcoValue extends ffi.Union {
-  @ffi.Bool()
-  external bool asBool;
-
-  @ffi.Int32()
-  external int asInt32;
-
-  @ffi.Int64()
-  external int asInt64;
-
-  @ffi.Double()
-  external double asDouble;
-
-  external ffi.Pointer<ffi.Char> asString;
-
-  external _FgbDcoArray asArray;
-
-  external _FgbDcoTypedData asTypedData;
-
-  external _FgbDcoExternalTypedData asExternalTypedData;
-
-  external _FgbDcoNativePointer asNativePointer;
-}
-
-final class _FgbDcoObject extends ffi.Struct {
-  @ffi.Uint32()
-  external int type;
-
-  external _FgbDcoValue value;
-}
-
-final class _FgbArena {
-  _FgbArena(this.bridge);
-
-  final FlutterGoBridge bridge;
-  final List<ffi.Pointer<ffi.Void>> _allocations = <ffi.Pointer<ffi.Void>>[];
-
-  ffi.Pointer<T> allocate<T extends ffi.NativeType>(int bytes) {
-    final pointer = bridge._bindings.alloc(bytes);
-    if (pointer == ffi.nullptr) {
-      throw StateError('fgb_alloc returned null');
-    }
-    if (bytes > 0) {
-      pointer.cast<ffi.Uint8>().asTypedList(bytes).fillRange(0, bytes, 0);
-    }
-    _allocations.add(pointer);
-    return pointer.cast<T>();
-  }
-
-  ffi.Pointer<ffi.Uint8> bytes(List<int> value) {
-    final pointer = allocate<ffi.Uint8>(value.isEmpty ? 1 : value.length);
-    if (value.isNotEmpty) {
-      pointer.asTypedList(value.length).setAll(0, value);
-    }
-    return pointer;
-  }
-
-  void close() {
-    for (final pointer in _allocations.reversed) {
-      bridge._bindings.free(pointer);
-    }
-    _allocations.clear();
-  }
-}
-
-final class FlutterGoBridge {
-  FlutterGoBridge._(this._bindings, this._libraryPath)
-    : _handleFinalizer = ffi.NativeFinalizer(_bindings.dropAddress) {
-    final status = _bindings.init(ffi.NativeApi.initializeApiDLData);
-    if (status != 0) {
-      throw StateError('Dart API DL initialization failed (status $status)');
-    }
-    // Go notifies this port when the last Go copy of a DartOpaque value was
-    // collected; the entry keeping the Dart object alive is then dropped. The
-    // port must not keep the isolate alive on its own.
-    _dartOpaqueReleases.keepIsolateAlive = false;
-    _dartOpaqueReleases.handler = (Object? message) {
-      if (message is int) {
-        _dartOpaqueObjects.remove(message);
-      }
-    };
-    // Go posts callback invocation requests here whenever an //fgb:async call
-    // invokes a Dart-supplied closure; the goroutine parks until the reply is
-    // delivered through fgb_callback_result.
-    _callbackRequests.keepIsolateAlive = false;
-    _callbackRequests.handler = _handleCallbackRequest;
-    // Go posts stream items, errors and completion for every registered
-    // StreamSink here.
-    _streamEvents.keepIsolateAlive = false;
-    _streamEvents.handler = _handleStreamEvent;
-    _bindings.isolateAttach(
-      _dartOpaqueReleases.sendPort.nativePort,
-      _callbackRequests.sendPort.nativePort,
-      _streamEvents.sendPort.nativePort,
-    );
-  }
-
-  static FlutterGoBridge? _instance;
-
-  static FlutterGoBridge get instance => _instance ??= FlutterGoBridge._open();
-
-  static FlutterGoBridge open({String? libraryPath}) {
-    final existing = _instance;
-    if (existing != null) {
-      if (libraryPath != null && existing._libraryPath != libraryPath) {
-        throw StateError(
-          'FlutterGoBridge is already initialized with another library',
-        );
-      }
-      return existing;
-    }
-    return _instance = FlutterGoBridge._open(libraryPath: libraryPath);
-  }
-
-  static Future<void> initialize({
-    String? libraryPath,
-    Future<void> Function()? webInitializer,
-  }) async {
-    if (webInitializer != null) {
-      await webInitializer();
-    }
-    open(libraryPath: libraryPath);
-  }
-
-  static FlutterGoBridge _open({String? libraryPath}) {
-    final library = libraryPath == null
-        ? _openDefaultLibrary()
-        : ffi.DynamicLibrary.open(libraryPath);
-    return FlutterGoBridge._(_FgbBindings(library), libraryPath);
-  }
-
-  static ffi.DynamicLibrary _openDefaultLibrary() {
-    if (Platform.isMacOS || Platform.isIOS) {
-      return ffi.DynamicLibrary.process();
-    }
-    const libraryName = "REPLACE_ME_GO_MOD_NAME";
-    if (Platform.isWindows) {
-      return ffi.DynamicLibrary.open('$libraryName.dll');
-    }
-    return ffi.DynamicLibrary.open('lib$libraryName.so');
-  }
-
-  final _FgbBindings _bindings;
-  final String? _libraryPath;
-  final ffi.NativeFinalizer _handleFinalizer;
-  final RawReceivePort _dartOpaqueReleases = RawReceivePort();
-  final RawReceivePort _callbackRequests = RawReceivePort();
-  final RawReceivePort _streamEvents = RawReceivePort();
-  final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
-  final Map<int, _FgbStreamTarget> _streamTargets = <int, _FgbStreamTarget>{};
-  final Map<Object, int> _streamHandles = <Object, int>{};
-  int _dartOpaqueNextHandle = 0;
-  int _streamNextHandle = 0;
-  static const _FgbCodec _codec = _FgbCodec();
-
-  /// Internal: registers a Dart sink Go may push values into, and returns the
-  /// handle Go uses to address it. Registering the same sink twice reuses the
-  /// handle, so a call may pass one sink through several parameters.
-  int fgbInternalRegisterStreamSink(
-    StreamSink<dynamic> sink,
-    void Function(Object? raw) add,
-  ) {
-    final existing = _streamHandles[sink];
-    if (existing != null) {
-      return existing;
-    }
-    final handle = ++_streamNextHandle;
-    _streamTargets[handle] = _FgbStreamTarget(sink, add);
-    _streamHandles[sink] = handle;
-    // Closing the sink (the owner disposing its StreamController) retires the
-    // registration and tells Go to stop producing.
-    sink.done.then(
-      (_) => fgbInternalReleaseStreamSink(handle),
-      onError: (Object _) => fgbInternalReleaseStreamSink(handle),
-    );
-    return handle;
-  }
-
-  /// Internal: retires a stream registration and notifies Go, which then
-  /// reports fgb.ErrStreamClosed to whoever keeps adding values.
-  void fgbInternalReleaseStreamSink(int handle, {bool notifyGo = true}) {
-    final target = _streamTargets.remove(handle);
-    if (target == null) {
-      return;
-    }
-    _streamHandles.remove(target.sink);
-    if (notifyGo) {
-      _bindings.streamCancel(handle);
-    }
-  }
-
-  /// Internal: wires a call that owns its stream. Cancelling the subscription
-  /// releases the sink and retires the controller; a failing call surfaces as
-  /// a stream error.
-  void fgbInternalStartStream<T>(
-    StreamController<T> controller,
-    Future<void> call,
-  ) {
-    final handle = _streamHandles[controller.sink];
-    controller.onCancel = () {
-      if (handle != null) {
-        fgbInternalReleaseStreamSink(handle);
-      }
-      // The subscription is gone, so nothing will ever read from this
-      // controller again: close it so its "done" future completes instead of
-      // leaving an open controller behind. Closing from inside onCancel is
-      // deferred to a microtask - returning close()'s future here would wait
-      // on the very cancellation that is still in progress.
-      scheduleMicrotask(() {
-        if (!controller.isClosed) {
-          controller.close();
-        }
-      });
-    };
-    call.then(
-      (_) {},
-      onError: (Object error, StackTrace stack) {
-        if (handle != null) {
-          fgbInternalReleaseStreamSink(handle);
-        }
-        if (!controller.isClosed) {
-          controller.addError(error, stack);
-          controller.close();
-        }
-      },
-    );
-  }
-
-  void _handleStreamEvent(Object? message) {
-    Uint8List? raw;
-    if (message is Uint8List) {
-      raw = message;
-    } else if (message is List<int>) {
-      raw = Uint8List.fromList(message);
-    }
-    if (raw == null) {
-      return;
-    }
-    final decoded = _FgbReader(raw).value();
-    if (decoded is! List || decoded.length != 3) {
-      return;
-    }
-    final handle = decoded[0];
-    final kind = decoded[1];
-    if (handle is! int || kind is! int) {
-      return;
-    }
-    final target = _streamTargets[handle];
-    if (target == null) {
-      return;
-    }
-    switch (kind) {
-      case 0:
-        target.add(decoded[2]);
-        break;
-      case 1:
-        fgbInternalReleaseStreamSink(handle, notifyGo: false);
-        target.sink.close();
-        break;
-      case 2:
-        target.sink.addError(
-          FgbPlatformException('stream_error', decoded[2] as String?, null),
-        );
-        break;
-    }
-  }
-
-  /// Internal: registers a Dart object crossing into Go as a DartOpaque
-  /// handle. The registry entry keeps the object alive while Go holds it.
-  int fgbInternalRegisterDartOpaque(Object value) {
-    final handle = ++_dartOpaqueNextHandle;
-    _dartOpaqueObjects[handle] = value;
-    return handle;
-  }
-
-  /// Internal: resolves a DartOpaque handle returned by Go.
-  Object fgbInternalResolveDartOpaque(int handle, String path) {
-    final value = _dartOpaqueObjects[handle];
-    if (value == null) {
-      throw StateError('$path: unknown or released DartOpaque handle $handle');
-    }
-    return value;
-  }
-
-  /// Internal: registers a Dart closure for invocation from Go. The stored
-  /// invoker decodes the wire arguments, runs the user closure - awaiting it
-  /// when the closure is async - and returns the wire-encoded result. It
-  /// shares the DartOpaque registry, so Go dropping its last reference
-  /// releases the closure.
-  int fgbInternalRegisterCallback(
-    Future<Object?> Function(List<Object?> args) invoker,
-  ) {
-    return fgbInternalRegisterDartOpaque(_FgbCallbackInvoker(invoker));
-  }
-
-  void _handleCallbackRequest(Object? message) {
-    Uint8List? request;
-    if (message is Uint8List) {
-      request = message;
-    } else if (message is List<int>) {
-      request = Uint8List.fromList(message);
-    }
-    if (request == null) {
-      return;
-    }
-    final decoded = _FgbReader(request).value();
-    if (decoded is! List || decoded.length != 3) {
-      return;
-    }
-    final id = decoded[0];
-    final handle = decoded[1];
-    final arguments = decoded[2];
-    if (id is! int) {
-      return;
-    }
-    if (handle is! int || arguments is! List) {
-      _deliverCallbackReply(id)(
-        _encodeCallbackReply(<Object?>[
-          1,
-          'callback_error',
-          'malformed callback request',
-        ]),
-      );
-      return;
-    }
-    Future<Uint8List>(() async {
-          final entry = _dartOpaqueObjects[handle];
-          if (entry is! _FgbCallbackInvoker) {
-            throw StateError('unknown or released callback handle $handle');
-          }
-          final result = await entry.invoke(List<Object?>.of(arguments));
-          return _encodeCallbackReply(<Object?>[0, result]);
-        })
-        .catchError((Object error) {
-          return _encodeCallbackReply(<Object?>[
-            1,
-            'callback_error',
-            error.toString(),
-          ]);
-        })
-        .then(_deliverCallbackReply(id));
-  }
-
-  Uint8List _encodeCallbackReply(List<Object?> envelope) {
-    final writer = _FgbWriter();
-    _codec._writeValue(writer, envelope);
-    return writer.finish();
-  }
-
-  void Function(Uint8List) _deliverCallbackReply(int id) {
-    return (Uint8List reply) {
-      final pointer = _bindings.alloc(reply.length);
-      if (pointer == ffi.nullptr) {
-        _bindings.callbackResult(id, ffi.nullptr, 0);
-        return;
-      }
-      try {
-        pointer.cast<ffi.Uint8>().asTypedList(reply.length).setAll(0, reply);
-        _bindings.callbackResult(id, pointer, reply.length);
-      } finally {
-        _bindings.free(pointer);
-      }
-    };
-  }
-
-  /// Internal entrypoint used by generated per-source Dart API files.
-  Object? fgbInvokeSync(String method, List<Object?> arguments) {
-    final request = _codec.encodeMethodCall(method, arguments);
-    return _codec.decodeEnvelope(_syncBytes(request));
-  }
-
-  /// Internal entrypoint used by generated per-source Dart API files.
-  Future<Object?> fgbInvokeAsync(String method, List<Object?> arguments) async {
-    final request = _codec.encodeMethodCall(method, arguments);
-    return _codec.decodeEnvelope(await _asyncBytes(request));
-  }
-
-  Object? fgbInvokeCstSync(int method, ffi.Pointer<ffi.Void> args) {
-    final pointer = _bindings.cst(method, args);
-    if (pointer == ffi.nullptr) {
-      throw StateError('fgb_cst returned null');
-    }
-    try {
-      return _decodeDcoEnvelope(_decodeDco(pointer.cast<_FgbDcoObject>().ref));
-    } finally {
-      _bindings.dcoFree(pointer);
-    }
-  }
-
-  Future<Object?> fgbInvokeCstAsync(
-    int method,
-    ffi.Pointer<ffi.Void> args,
-  ) async {
-    final port = ReceivePort();
-    try {
-      _bindings.cstAsync(method, args, port.sendPort.nativePort);
-      return _decodeDcoEnvelope(await port.first);
-    } finally {
-      port.close();
-    }
-  }
-
-  Object? _decodeDco(_FgbDcoObject object) {
-    switch (object.type) {
-      case 0:
-        return null;
-      case 1:
-        return object.value.asBool;
-      case 2:
-        return object.value.asInt32;
-      case 3:
-        return object.value.asInt64;
-      case 4:
-        return object.value.asDouble;
-      case 5:
-        final pointer = object.value.asString.cast<ffi.Uint8>();
-        var length = 0;
-        while ((pointer + length).value != 0) {
-          length++;
-        }
-        return utf8.decode(pointer.asTypedList(length));
-      case 6:
-        final array = object.value.asArray;
-        return List<Object?>.generate(
-          array.length,
-          (index) => _decodeDco((array.values + index).value.ref),
-          growable: false,
-        );
-      case 7:
-        final typed = object.value.asTypedData;
-        final length = typed.length;
-        switch (typed.type) {
-          case 2:
-            return Uint8List.fromList(typed.values.asTypedList(length));
-          case 6:
-            return Int32List.fromList(
-              typed.values.cast<ffi.Int32>().asTypedList(length),
-            );
-          case 8:
-            return Int64List.fromList(
-              typed.values.cast<ffi.Int64>().asTypedList(length),
-            );
-          case 11:
-            return Float64List.fromList(
-              typed.values.cast<ffi.Double>().asTypedList(length),
-            );
-          default:
-            throw FormatException(
-              'unsupported Dart_CObject typed data ${typed.type}',
-            );
-        }
-      default:
-        throw FormatException('unsupported Dart_CObject type ${object.type}');
-    }
-  }
-
-  Object? _decodeDcoEnvelope(Object? raw) {
-    if (raw == -1) {
-      throw StateError('the native side could not allocate the reply');
-    }
-    if (raw is! List || raw.length < 2 || raw.first is! int) {
-      throw const FormatException('invalid DCO envelope');
-    }
-    if (raw.first == 0) {
-      return raw[1];
-    }
-    if (raw.first == 1 && raw.length >= 4) {
-      throw FgbPlatformException(
-        raw[1] as String,
-        raw[2] as String?,
-        raw[3],
-        goErrors: _fgbGoErrorsFrom(raw[3]),
-      );
-    }
-    throw const FormatException('unknown DCO envelope flag');
-  }
-
-  /// Attaches framework-owned cleanup for an opaque Go handle.
-  void fgbAttachOpaqueFinalizer(ffi.Finalizable object, int handle) {
-    _handleFinalizer.attach(
-      object,
-      ffi.Pointer<ffi.Void>.fromAddress(handle),
-      detach: object,
-    );
-  }
-
-  Uint8List _syncBytes(Uint8List request) {
-    final pointer = _bindings.alloc(request.length);
-    if (pointer == ffi.nullptr) {
-      throw StateError('fgb_alloc returned null');
-    }
-    try {
-      pointer.cast<ffi.Uint8>().asTypedList(request.length).setAll(0, request);
-      final result = _bindings.call(pointer, request.length);
-      if (result.data == ffi.nullptr && result.len != 0) {
-        throw StateError('fgb returned an invalid buffer');
-      }
-      try {
-        if (result.len == 0) {
-          return Uint8List(0);
-        }
-        return Uint8List.fromList(result.data.asTypedList(result.len));
-      } finally {
-        if (result.data != ffi.nullptr) {
-          _bindings.free(result.data.cast());
-        }
-      }
-    } finally {
-      _bindings.free(pointer);
-    }
-  }
-
-  Future<Uint8List> _asyncBytes(Uint8List request) async {
-    final port = ReceivePort();
-    final pointer = _bindings.alloc(request.length);
-    if (pointer == ffi.nullptr) {
-      port.close();
-      throw StateError('fgb_alloc returned null');
-    }
-    try {
-      try {
-        pointer
-            .cast<ffi.Uint8>()
-            .asTypedList(request.length)
-            .setAll(0, request);
-        _bindings.callAsync(pointer, request.length, port.sendPort.nativePort);
-      } finally {
-        _bindings.free(pointer);
-      }
-      final message = await port.first;
-      if (message is Uint8List) {
-        return message;
-      }
-      if (message is List<int>) {
-        return Uint8List.fromList(message);
-      }
-      throw StateError('fgb_async returned an invalid message');
-    } finally {
-      port.close();
-    }
-  }
+Uint8List fgbInternalEncodeValue(Object? value) {
+  final writer = _FgbWriter();
+  _fgbInternalCodec._writeValue(writer, value);
+  return writer.finish();
 }
 
 String fgbDecode0(Object? value, FlutterGoBridge bridge, String path) {
@@ -1212,16 +497,9 @@ String fgbDecode0(Object? value, FlutterGoBridge bridge, String path) {
   return value;
 }
 
-Object? fgbEncode0(
-  String value,
-  FlutterGoBridge bridge,
-  String path,
-  int depth,
-) {
+Object? fgbEncode0(String value, FlutterGoBridge bridge, String path, int depth) {
   if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
+    throw FormatException('$path: value nesting exceeds 64 levels (cyclic reference?)');
   }
   return value;
 }
@@ -1247,16 +525,9 @@ Point fgbDecode1(Object? value, FlutterGoBridge bridge, String path) {
   throw FormatException('$path: expected Map or List');
 }
 
-Object? fgbEncode1(
-  Point value,
-  FlutterGoBridge bridge,
-  String path,
-  int depth,
-) {
+Object? fgbEncode1(Point value, FlutterGoBridge bridge, String path, int depth) {
   if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
+    throw FormatException('$path: value nesting exceeds 64 levels (cyclic reference?)');
   }
   return <Object?, Object?>{
     "x": fgbEncode2(value.x, bridge, '$path.x', depth + 1),
@@ -1274,9 +545,7 @@ int fgbDecode2(Object? value, FlutterGoBridge bridge, String path) {
 
 Object? fgbEncode2(int value, FlutterGoBridge bridge, String path, int depth) {
   if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
+    throw FormatException('$path: value nesting exceeds 64 levels (cyclic reference?)');
   }
   return value;
 }
@@ -1291,16 +560,9 @@ Counter? fgbDecode3(Object? value, FlutterGoBridge bridge, String path) {
   return Counter.fgbInternal(fgbBridge: bridge, fgbHandle: value);
 }
 
-Object? fgbEncode3(
-  Counter? value,
-  FlutterGoBridge bridge,
-  String path,
-  int depth,
-) {
+Object? fgbEncode3(Counter? value, FlutterGoBridge bridge, String path, int depth) {
   if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
+    throw FormatException('$path: value nesting exceeds 64 levels (cyclic reference?)');
   }
   if (value == null) {
     return null;
@@ -1309,121 +571,4 @@ Object? fgbEncode3(
     throw StateError('opaque value belongs to a different bridge');
   }
   return value.fgbHandle;
-}
-
-ffi.Pointer<_FgbCstBytes> _fgbCstEncode0(
-  String value,
-  _FgbArena arena,
-  String path,
-  int depth,
-) {
-  if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
-  }
-  final raw = utf8.encode(value);
-  final result = arena.allocate<_FgbCstBytes>(ffi.sizeOf<_FgbCstBytes>());
-  result.ref.ptr = arena.bytes(raw);
-  result.ref.len = raw.length;
-  return result;
-}
-
-ffi.Pointer<_FgbCstType1> _fgbCstEncode1(
-  Point value,
-  _FgbArena arena,
-  String path,
-  int depth,
-) {
-  if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
-  }
-  final result = arena.allocate<_FgbCstType1>(ffi.sizeOf<_FgbCstType1>());
-  result.ref.x = _fgbCstEncode2(value.x, arena, '$path.x', depth + 1);
-  result.ref.y = _fgbCstEncode2(value.y, arena, '$path.y', depth + 1);
-  result.ref.label = _fgbCstEncode0(
-    value.label,
-    arena,
-    '$path.label',
-    depth + 1,
-  );
-  return result;
-}
-
-int _fgbCstEncode2(int value, _FgbArena arena, String path, int depth) {
-  if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
-  }
-  return value;
-}
-
-int _fgbCstEncode3(Counter? value, _FgbArena arena, String path, int depth) {
-  if (depth > 64) {
-    throw FormatException(
-      '$path: value nesting exceeds 64 levels (cyclic reference?)',
-    );
-  }
-  if (value == null) {
-    return 0;
-  }
-  if (!identical(value.fgbBridge, arena.bridge)) {
-    throw StateError('opaque value belongs to a different bridge');
-  }
-  return value.fgbHandle;
-}
-
-extension FgbGeneratedCalls on FlutterGoBridge {
-  String fgbInternalCall0(String name) {
-    final arena = _FgbArena(this);
-    try {
-      final args = arena.allocate<_FgbCstArgs0>(ffi.sizeOf<_FgbCstArgs0>());
-      args.ref.name = _fgbCstEncode0(name, arena, "name", 0);
-      final wireResult = fgbInvokeCstSync(0, args.cast<ffi.Void>());
-      return fgbDecode0(wireResult, this, 'result');
-    } finally {
-      arena.close();
-    }
-  }
-
-  Point fgbInternalCall1(Point receiver, int dx, int dy) {
-    final arena = _FgbArena(this);
-    try {
-      final args = arena.allocate<_FgbCstArgs1>(ffi.sizeOf<_FgbCstArgs1>());
-      args.ref.receiver = _fgbCstEncode1(receiver, arena, 'receiver', 0);
-      args.ref.dx = _fgbCstEncode2(dx, arena, "dx", 0);
-      args.ref.dy = _fgbCstEncode2(dy, arena, "dy", 0);
-      final wireResult = fgbInvokeCstSync(1, args.cast<ffi.Void>());
-      return fgbDecode1(wireResult, this, 'result');
-    } finally {
-      arena.close();
-    }
-  }
-
-  Counter? fgbInternalCall2() {
-    final arena = _FgbArena(this);
-    try {
-      final args = arena.allocate<_FgbCstArgs2>(ffi.sizeOf<_FgbCstArgs2>());
-      final wireResult = fgbInvokeCstSync(2, args.cast<ffi.Void>());
-      return fgbDecode3(wireResult, this, 'result');
-    } finally {
-      arena.close();
-    }
-  }
-
-  int fgbInternalCall3(Counter receiver, int delta) {
-    final arena = _FgbArena(this);
-    try {
-      final args = arena.allocate<_FgbCstArgs3>(ffi.sizeOf<_FgbCstArgs3>());
-      args.ref.receiver = _fgbCstEncode3(receiver, arena, 'receiver', 0);
-      args.ref.delta = _fgbCstEncode2(delta, arena, "delta", 0);
-      final wireResult = fgbInvokeCstSync(3, args.cast<ffi.Void>());
-      return fgbDecode2(wireResult, this, 'result');
-    } finally {
-      arena.close();
-    }
-  }
 }

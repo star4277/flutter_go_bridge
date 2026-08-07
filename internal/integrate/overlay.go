@@ -28,6 +28,9 @@ func computeReplacements(dartPackageName, libraryName, goModDir string, includeO
 		"REPLACE_ME_OHOS_PLUGIN_PLATFORM_TEXT": ohosText,
 		"go.mod.template":                      "go.mod",
 		"bridge_generated.go.template":         "bridge_generated.go",
+		"bridge_generated_web.go.template":     "bridge_generated_web.go",
+		"fgb_generated.go.template":            "fgb_generated.go",
+		"fgb_web_build.json":                   "fgb_web_build.json",
 		"lib.go.template":                      "lib.go",
 	}
 }
