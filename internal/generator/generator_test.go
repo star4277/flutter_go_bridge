@@ -3,6 +3,7 @@ package generator
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -442,6 +443,17 @@ func RoundTrip(shop decimal.Decimal, apdValue apd.Decimal, optionalShop *decimal
 		if !strings.Contains(goSource, expected) {
 			t.Fatalf("generated Go bridge missing Decimal support %q:\n%s", expected, goSource)
 		}
+	}
+	dualResult, err := GenerateAll(api, config.Resolved{
+		BaseDir: dir, GoInput: inputDir, GoOutput: filepath.Join(dir, "bridge_generated.go"),
+		DartOutput:  filepath.Join(dir, "dart", "bridge_generated.dart"),
+		LibraryName: "special", DartEntrypointClassName: "SpecialBridge", StopOnError: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dualResult.DartDependencies, []string{"uuid", "decimal"}) {
+		t.Fatalf("dual Dart dependencies = %#v", dualResult.DartDependencies)
 	}
 }
 
@@ -1124,17 +1136,17 @@ func TestGenerateDirectMainPackageDoesNotDuplicateMain(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte("package main\n\nfunc main() {}\nfunc Add(a, b int) int { return a + b }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	api, err := bridgeparser.Parse(bridgeparser.Options{Input: dir, BaseDir: dir})
+	api, err := bridgeparser.Parse(bridgeparser.Options{Input: dir, BaseDir: dir, Target: config.TargetWeb})
 	if err != nil {
 		t.Fatal(err)
 	}
 	goOutput := filepath.Join(dir, "bridge_generated.go")
 	dartOutput := filepath.Join(dir, "bridge_generated.dart")
-	_, err = Generate(api, config.Resolved{
+	_, err = GenerateAll(api, config.Resolved{
 		BaseDir: dir, GoInput: dir, GoOutput: goOutput,
-		DartOutput:  dartOutput,
-		LibraryName: "direct_main", DartEntrypointClassName: "MyFlutterGoBridge",
-		StopOnError: true,
+		DartOutput:              dartOutput,
+		DartEntrypointClassName: "MyFlutterGoBridge",
+		StopOnError:             true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1142,9 +1154,11 @@ func TestGenerateDirectMainPackageDoesNotDuplicateMain(t *testing.T) {
 	if strings.Contains(mustRead(t, goOutput), "func main() {}") {
 		t.Fatal("generated file duplicated the user's main function")
 	}
-	dartSource := mustRead(t, dartOutput)
-	if !strings.Contains(dartSource, "final class MyFlutterGoBridge") || strings.Contains(dartSource, "MyMyFlutterGoBridge") {
-		t.Fatal("Dart entrypoint class token replacement was applied more than once")
+	for _, platform := range []string{"io", "web"} {
+		dartSource := mustRead(t, dartPlatformOutputPath(dartOutput, platform))
+		if !strings.Contains(dartSource, "final class MyFlutterGoBridge") || strings.Contains(dartSource, "MyMyFlutterGoBridge") {
+			t.Fatalf("Dart entrypoint class token replacement is wrong in %s wire", platform)
+		}
 	}
 	// The input package is the module root here, so the mirrored Dart file
 	// stays at the output root.

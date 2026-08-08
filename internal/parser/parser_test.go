@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/star4277/flutter_go_bridge/internal/config"
 	"github.com/star4277/flutter_go_bridge/internal/model"
 )
 
@@ -193,6 +194,58 @@ func TestParseKeepsCgoSourceAndMirrorsItsFile(t *testing.T) {
 	}
 	if api.InputDir != dir {
 		t.Fatalf("got input dir %q, want %q", api.InputDir, dir)
+	}
+}
+
+func TestParseWebMarksCgoFileUnavailableWithoutDiscardingPureGo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/web-cgo\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	purePath := filepath.Join(dir, "pure.go")
+	cgoPath := filepath.Join(dir, "native.go")
+	if err := os.WriteFile(purePath, []byte("package api\n\nfunc Portable() string { return \"web\" }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cgoPath, []byte("package api\n\nimport \"C\"\n\nfunc NativeOnly() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := Parse(Options{Input: dir, BaseDir: dir, Target: config.TargetWeb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.Target != "web" || api.TargetError != "" {
+		t.Fatalf("unexpected Web target metadata: target=%q error=%q", api.Target, api.TargetError)
+	}
+	availability := map[string]*model.Callable{}
+	for _, callable := range api.Callables {
+		availability[callable.Func.Name()] = callable
+	}
+	if callable := availability["Portable"]; callable == nil || !callable.TargetAvailable || callable.TargetReason != "" {
+		t.Fatalf("pure Go callable should remain available: %#v", callable)
+	}
+	if callable := availability["NativeOnly"]; callable == nil || callable.TargetAvailable || !strings.Contains(callable.TargetReason, `imports "C"`) {
+		t.Fatalf("cgo callable should carry a Web reason: %#v", callable)
+	}
+}
+
+func TestParseWebReportsPackageWithoutPureGoFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/web-only-cgo\n\ngo 1.24\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "api.go"), []byte("package api\n\nimport \"C\"\n\nfunc NativeOnly() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api, err := Parse(Options{Input: dir, BaseDir: dir, Target: config.TargetWeb})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.TargetError == "" || len(api.Callables) != 1 || api.Callables[0].TargetAvailable {
+		t.Fatalf("expected package-level Web unavailability, got error=%q callables=%#v", api.TargetError, api.Callables)
+	}
+	if !strings.Contains(api.Callables[0].TargetReason, "CGO_ENABLED=0") {
+		t.Fatalf("missing target context in reason: %q", api.Callables[0].TargetReason)
 	}
 }
 

@@ -409,6 +409,7 @@ final class _FgbCodec {
     } else if (value is double) {
       writer.byte(6);
       writer.float64(value);
+      // ignore: avoid_double_and_int_checks, JS uses the double branch above
     } else if (value is int) {
       if (value >= -0x80000000 && value <= 0x7fffffff) {
         writer.byte(3);
@@ -698,7 +699,15 @@ final class __FGB_BRIDGE_CLASS__ {
     return _instance = __FGB_BRIDGE_CLASS__._open(libraryPath: libraryPath);
   }
 
-  static void initialize({String? libraryPath}) => open(libraryPath: libraryPath);
+  static Future<void> initialize({
+    String? libraryPath,
+    Future<void> Function()? webInitializer,
+  }) async {
+    if (webInitializer != null) {
+      await webInitializer();
+    }
+    open(libraryPath: libraryPath);
+  }
 
   static __FGB_BRIDGE_CLASS__ _open({String? libraryPath}) {
     final library = libraryPath == null

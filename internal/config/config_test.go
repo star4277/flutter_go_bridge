@@ -51,6 +51,28 @@ func TestResolveDefaults(t *testing.T) {
 	if !resolved.DartFormat || !resolved.StopOnError {
 		t.Fatal("expected opinionated defaults")
 	}
+	if resolved.Target != TargetNative {
+		t.Fatalf("default target = %q, want native", resolved.Target)
+	}
+}
+
+func TestResolveWebTarget(t *testing.T) {
+	dir := t.TempDir()
+	input, target := "go/api", " WEB "
+	resolved, err := Resolve(Config{GoInput: &input, Target: &target}, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Target != TargetWeb {
+		t.Fatalf("target = %q, want web", resolved.Target)
+	}
+}
+
+func TestResolveRejectsUnknownTarget(t *testing.T) {
+	input, target := "go/api", "wasm32"
+	if _, err := Resolve(Config{GoInput: &input, Target: &target}, t.TempDir()); err == nil {
+		t.Fatal("expected invalid target error")
+	}
 }
 
 func TestResolveLibraryNameFromPubspec(t *testing.T) {
@@ -112,9 +134,9 @@ func TestResolveDefaultsBesideNestedGoModule(t *testing.T) {
 	}
 }
 
-func strPtr(s string) *string     { return &s }
-func boolPtr(b bool) *bool       { return &b }
-func intPtr(i int) *int          { return &i }
+func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+func intPtr(i int) *int       { return &i }
 
 func TestLoadExplicit(t *testing.T) {
 	dir := t.TempDir()
@@ -336,9 +358,12 @@ func TestResolveDefaultsGoModuleRootBranches(t *testing.T) {
 }
 
 func TestMergePrecedence(t *testing.T) {
-	hi := Config{GoInput: strPtr("hi"), DartFormat: boolPtr(false)}
-	lo := Config{GoInput: strPtr("lo"), DartFormat: boolPtr(true),LibraryName: strPtr("low")}
+	hi := Config{Target: strPtr("web"), GoInput: strPtr("hi"), DartFormat: boolPtr(false)}
+	lo := Config{Target: strPtr("native"), GoInput: strPtr("lo"), DartFormat: boolPtr(true), LibraryName: strPtr("low")}
 	merged := Merge(hi, lo)
+	if merged.Target == nil || *merged.Target != "web" {
+		t.Fatalf("high target should win, got %#v", merged.Target)
+	}
 	if merged.GoInput == nil || *merged.GoInput != "hi" {
 		t.Fatalf("high go_input should win, got %#v", merged.GoInput)
 	}

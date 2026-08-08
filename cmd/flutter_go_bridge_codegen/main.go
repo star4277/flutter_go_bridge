@@ -22,6 +22,7 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/generator"
 	"github.com/star4277/flutter_go_bridge/internal/integrate"
 	"github.com/star4277/flutter_go_bridge/internal/parser"
+	"github.com/star4277/flutter_go_bridge/internal/platformbuild"
 	"github.com/star4277/flutter_go_bridge/internal/watcher"
 )
 
@@ -44,6 +45,7 @@ func main() {
 
 type generateFlags struct {
 	configFile              string
+	target                  string
 	goInput                 string
 	goOutput                string
 	dartOutput              string
@@ -68,6 +70,8 @@ func newRootCommand() *cobra.Command {
 	root.SetVersionTemplate("{{.DisplayName}} version {{.Version}}\nBuild with " + runtime.Version() + "\n")
 	root.AddCommand(newGenerateCommand(flags))
 	root.AddCommand(newRunCommand(&generateFlags{}))
+	root.AddCommand(newBuildCommand(&generateFlags{}))
+	root.AddCommand(newBuildWebCommand(&generateFlags{}))
 	root.AddCommand(newCreateCommand())
 	root.AddCommand(newIntegrateCommand())
 	return root
@@ -88,6 +92,141 @@ type runFlags struct {
 	projectDir string
 	dartInput  []string
 	interval   time.Duration
+}
+
+type buildFlags struct {
+	projectDir string
+}
+
+var (
+	newWebPlatformBuilder = func() *platformbuild.WebBuilder {
+		return platformbuild.NewWebBuilder()
+	}
+	newPlatformBuilder = func(platform platformbuild.Platform) platformbuild.PlatformBuilder {
+		if platform == platformbuild.PlatformWeb {
+			return newWebPlatformBuilder()
+		}
+		return platformbuild.NewNativeBuilder()
+	}
+)
+
+func newBuildCommand(flags *generateFlags) *cobra.Command {
+	options := &buildFlags{}
+	command := &cobra.Command{
+		Use:   "build <platform> [flags] [-- flutter build args]",
+		Short: "Generate the bridge and build a Flutter platform",
+		Long: `Generate the shared Native/Web bridge, build the selected platform artifact,
+and pass the result through the platform signing boundary.
+
+Web builds run Gokit build-web before flutter build web. Other targets use the
+Native implementation. Arguments after -- are forwarded to flutter build:
+
+  flutter_go_bridge_codegen build web -- --release
+  flutter_go_bridge_codegen build windows -- --release`,
+		Args: cobra.ArbitraryArgs,
+		RunE: func(command *cobra.Command, args []string) error {
+			flutterArgs, err := flutterBuildArgs(command, args)
+			if err != nil {
+				return err
+			}
+			return buildFlutter(command, flags, options, flutterArgs)
+		},
+	}
+	registerGenerateFlags(command, flags, false)
+	command.Flags().StringVar(&options.projectDir, "project-dir", "", "Flutter project to build (default the config base dir, or its example/ for plugin projects)")
+	return command
+}
+
+func newBuildWebCommand(flags *generateFlags) *cobra.Command {
+	command := &cobra.Command{
+		Use:   "build-web [flags]",
+		Short: "Generate the bridge and build the Go WebAssembly assets",
+		Long: `Generate the shared Native/Web bridge, then run Gokit build-web to
+install the current WebAssembly assets. This command does not invoke Flutter;
+run flutter run or flutter build web after it completes:
+
+  flutter_go_bridge_codegen build-web
+  flutter run -d chrome`,
+		Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return buildWeb(command, flags)
+		},
+	}
+	registerGenerateFlags(command, flags, false)
+	return command
+}
+
+func buildWeb(command *cobra.Command, flags *generateFlags) error {
+	if _, err := runGenerateFiles(command, flags); err != nil {
+		return err
+	}
+	resolved, err := resolveGenerateConfig(command, flags)
+	if err != nil {
+		return err
+	}
+	artifacts, err := buildWebWasm(command.Context(), resolved)
+	if err != nil {
+		return err
+	}
+	logBuiltArtifacts(artifacts)
+	return nil
+}
+
+func flutterBuildArgs(command *cobra.Command, args []string) ([]string, error) {
+	beforeDash := args
+	var forwarded []string
+	if index := command.ArgsLenAtDash(); index >= 0 {
+		beforeDash = args[:index]
+		forwarded = args[index:]
+	}
+	if len(beforeDash) != 1 || strings.TrimSpace(beforeDash[0]) == "" {
+		return nil, errors.New("build requires exactly one Flutter platform before --")
+	}
+	return append([]string{beforeDash[0]}, forwarded...), nil
+}
+
+func buildFlutter(command *cobra.Command, flags *generateFlags, options *buildFlags, flutterArgs []string) error {
+	resolved, err := resolveGenerateConfig(command, flags)
+	if err != nil {
+		return err
+	}
+	projectDir, err := resolveProjectDir(resolved.BaseDir, options.projectDir)
+	if err != nil {
+		return err
+	}
+	if _, err := runGenerateFiles(command, flags); err != nil {
+		return err
+	}
+
+	request := platformbuild.Request{
+		BaseDir:     resolved.BaseDir,
+		ProjectDir:  projectDir,
+		ManifestDir: filepath.Dir(resolved.GoOutput),
+		FlutterArgs: flutterArgs,
+		Target:      flutterArgs[0],
+	}
+	platform := platformbuild.PlatformNative
+	if isWebFlutterBuild(flutterArgs) {
+		platform = platformbuild.PlatformWeb
+	}
+	request.Platform = platform
+	builder := newPlatformBuilder(platform)
+	result, err := builder.Build(command.Context(), request)
+	if err != nil {
+		return err
+	}
+	logBuiltArtifacts(result.Artifacts)
+	return nil
+}
+
+func logBuiltArtifacts(artifacts []string) {
+	for _, artifact := range artifacts {
+		log.Printf("built %s", artifact)
+	}
+}
+
+func isWebFlutterBuild(flutterArgs []string) bool {
+	return len(flutterArgs) > 0 && strings.EqualFold(strings.TrimSpace(flutterArgs[0]), "web")
 }
 
 func newRunCommand(flags *generateFlags) *cobra.Command {
@@ -142,6 +281,7 @@ func runFlutter(command *cobra.Command, flags *generateFlags, options *runFlags,
 	if options.deviceID != "" {
 		flutterArgs = append([]string{"-d", options.deviceID}, flutterArgs...)
 	}
+	webRun := isWebFlutterRun(options.deviceID, flutterArgs)
 
 	// Ctrl+C must reach the loop rather than the process, so the app can be
 	// stopped in order instead of leaving gradle and adb behind.
@@ -156,9 +296,65 @@ func runFlutter(command *cobra.Command, flags *generateFlags, options *runFlags,
 		Exclude:     []string{resolved.GoOutput, resolved.DartOutput},
 		Interval:    options.interval,
 		Generate: func() ([]string, error) {
-			return runGenerateFiles(command, flags)
+			files, err := runGenerateFiles(command, flags)
+			if err != nil || !webRun {
+				return files, err
+			}
+			current, err := resolveGenerateConfig(command, flags)
+			if err != nil {
+				return files, err
+			}
+			wasmFiles, err := buildWebWasm(ctx, current)
+			return append(files, wasmFiles...), err
 		},
 	})
+}
+
+// isWebFlutterRun recognizes the explicit Flutter Web device forms accepted by
+// `flutter run`. Native runs deliberately do not build Wasm: a pure-Go Web
+// build can be a stricter target than the native cgo package and must not make
+// Windows or Android startup depend on it.
+func isWebFlutterRun(deviceID string, flutterArgs []string) bool {
+	if isWebDeviceID(deviceID) {
+		return true
+	}
+	for index, arg := range flutterArgs {
+		if arg != "-d" && arg != "--device-id" {
+			if arg == "--wasm" || arg == "--web-renderer" {
+				return true
+			}
+			continue
+		}
+		if index+1 < len(flutterArgs) && isWebDeviceID(flutterArgs[index+1]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isWebDeviceID(deviceID string) bool {
+	switch strings.ToLower(strings.TrimSpace(deviceID)) {
+	case "chrome", "edge", "web-server", "web-javascript", "web-wasm":
+		return true
+	default:
+		return false
+	}
+}
+
+// buildWebWasm reuses the same Web platform implementation as the synchronous
+// build command, but intentionally stops before `flutter build`: `run` owns a
+// live Flutter daemon instead.
+func buildWebWasm(ctx context.Context, resolved config.Resolved) ([]string, error) {
+	log.Printf("building Web Wasm with Gokit")
+	result, err := newWebPlatformBuilder().BuildWasm(ctx, platformbuild.Request{
+		Platform:    platformbuild.PlatformWeb,
+		BaseDir:     resolved.BaseDir,
+		ManifestDir: filepath.Dir(resolved.GoOutput),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result.Artifacts, nil
 }
 
 // resolveProjectDir picks the Flutter project to launch. Plugin projects keep
@@ -322,6 +518,7 @@ func registerGenerateFlags(command *cobra.Command, flags *generateFlags, shortha
 		goInput, goOutput, dartOutput = "i", "g", "d"
 	}
 	command.Flags().StringVar(&flags.configFile, "config-file", "", "Path to a flutter_go_bridge YAML/JSON config file")
+	command.Flags().StringVar(&flags.target, "target", "", "Deprecated compatibility option; generate now emits Native and Web together")
 	command.Flags().StringVarP(&flags.goInput, "go-input", goInput, "", "Go package directory, .go file, or package pattern")
 	command.Flags().StringVarP(&flags.goOutput, "go-output", goOutput, "", "Generated Go bridge file (default bridge_generated.go beside the nearest go.mod)")
 	command.Flags().StringVarP(&flags.dartOutput, "dart-output", dartOutput, "", "Generated Dart bridge file (default lib/src/bridge_generated.dart)")
@@ -402,12 +599,13 @@ func runGenerateFiles(command *cobra.Command, flags *generateFlags) ([]string, e
 	log.Printf("loading Go package %s", resolved.GoInput)
 	api, err := parser.Parse(parser.Options{
 		Input: resolved.GoInput, BaseDir: resolved.BaseDir,
+		Target:   config.TargetWeb,
 		PrintAST: flags.printAST, ASTOut: os.Stdout,
 	})
 	if err != nil {
 		return nil, err
 	}
-	result, err := generator.Generate(api, resolved)
+	result, err := generator.GenerateAll(api, resolved)
 	for _, warning := range result.Warnings {
 		log.Printf("warning: %v", warning)
 	}
@@ -510,6 +708,7 @@ func (flags *generateFlags) toConfig(command *cobra.Command) config.Config {
 		}
 		return &value
 	}
+	result.Target = setString(flags.target)
 	result.GoInput = setString(flags.goInput)
 	result.GoOutput = setString(flags.goOutput)
 	result.DartOutput = setString(flags.dartOutput)

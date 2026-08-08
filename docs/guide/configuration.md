@@ -1,6 +1,6 @@
 # Configuration
 
-`generate` and `run` read configuration from the current project directory. The first matching
+`generate`, `run`, and `build` read configuration from the current project directory. The first matching
 file wins:
 
 ```text
@@ -19,6 +19,7 @@ configuration file (or the current directory when flags are used).
 ## Example
 
 ```yaml
+target: native
 go_input: go/api
 go_output: go/bridge_generated.go
 dart_output: lib/src/bridge_generated.dart
@@ -33,6 +34,7 @@ dart_format_line_length: 100
 
 | Key | Default | Meaning |
 | --- | --- | --- |
+| `target` | `native` | Go analysis and generated transport target: `native` or `web`. |
 | `base_dir` | current directory | Base used to resolve relative paths. |
 | `go_input` | required | Directory, `.go` file, or package pattern resolving to one Go package. |
 | `go_output` | nearest `go.mod` root + `bridge_generated.go` | Generated Go cgo bridge. |
@@ -47,6 +49,13 @@ dart_format_line_length: 100
 `go_input` must resolve to exactly one package. Keep the generated bridge beside `go.mod`; an
 input subpackage cannot write its bridge inside itself unless it is `package main`.
 
+For `target: web`, package analysis always uses `CGO_ENABLED=0 GOOS=js GOARCH=wasm`. A source file
+that imports `"C"` is excluded by the Go toolchain, so every exported API declared in that file is
+unavailable on Web. This does not automatically exclude the whole package: other pure-Go files may
+still compile and provide their APIs. The package is unavailable only when the remaining Web files
+cannot form a valid package or fail to provide symbols they reference. Keep Web-facing packages free
+of cgo; generation records the exact unavailable declaration or package reason.
+
 ## Pubspec form
 
 ```yaml
@@ -56,4 +65,3 @@ flutter_go_bridge:
 ```
 
 Use `--config-file path/to/file.yaml` to select a file explicitly.
-

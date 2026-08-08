@@ -163,7 +163,26 @@ flutter_go_bridge_codegen run -d emulator-5554
 ```
 
 Dart changes use hot reload. Go changes regenerate the bridge and restart the application process so
-the rebuilt native library is loaded.
+the rebuilt platform artifact is loaded. When the device is Web, `run` also invokes Gokit
+`build-web` before startup and after Go changes.
+
+To prepare only the WebAssembly assets for a direct Flutter command, use:
+
+```sh
+flutter_go_bridge_codegen build-web
+flutter run -d chrome
+# or: flutter build web
+```
+
+`build-web` generates the shared bridge and runs Gokit `build-web`; it does not start or build
+Flutter itself.
+
+For a one-shot platform artifact, generate and build together:
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
 
 ## Configuration
 
@@ -206,6 +225,7 @@ Code generation produces one Go bridge and a mirrored Dart tree:
 ```text
 go/
 ├── bridge_generated.go
+├── bridge_generated_web.go
 ├── internal/fgb/fgb_generated.go
 └── api/
     ├── api.go
@@ -213,14 +233,17 @@ go/
 
 lib/src/
 ├── bridge_generated.dart
+├── bridge_generated.io.dart
+├── bridge_generated.web.dart
 └── api/
     ├── api.dart
     └── account.dart
 ```
 
-- `bridge_generated.go` contains the cgo exports, dispatchers, and Go codecs.
-- `bridge_generated.dart` contains the FFI runtime, dynamic library bindings, codecs, and handle
-  management.
+- `bridge_generated.go` contains the Native cgo exports, dispatchers, and Go codecs.
+- `bridge_generated_web.go` contains the pure-Go `js/wasm` dispatcher and standard codec.
+- `bridge_generated.dart` contains shared types/codecs and conditionally selects the Native or Web
+  wire.
 - Mirrored Dart files contain the public classes, functions, methods, interfaces, and constants.
 
 ## Serialization model
@@ -337,6 +360,8 @@ accepted.
 | `generate` | Generate the Go bridge and mirrored Dart API |
 | `generate --watch` | Regenerate when Go source changes |
 | `run` | Run Flutter, hot reload Dart, and restart after Go changes |
+| `build` | Generate once and build a Flutter platform through the signing boundary |
+| `build-web` | Generate once and prepare the Go WebAssembly assets for direct Flutter Web commands |
 | `create` | Create a new Flutter app or FFI plugin with Go integration |
 | `integrate` | Add the bridge to an existing Flutter project |
 

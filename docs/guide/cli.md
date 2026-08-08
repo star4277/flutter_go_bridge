@@ -35,7 +35,8 @@ understand syntax or type-system behavior introduced by a newer project toolchai
 flutter_go_bridge_codegen generate [flags]
 ```
 
-Generates the Go bridge and Dart API. Important flags are `--go-input`, `--go-output`,
+Generates both the Native and Web Go bridges plus one shared Dart API. `--target native|web` is a
+deprecated compatibility option and does not change the dual output. Important flags are `--go-input`, `--go-output`,
 `--dart-output`, `--library-name`, `--config-file`, `--watch`, `--no-dart-format`,
 `--print-ast`, and `--stop-on-error`.
 
@@ -50,6 +51,40 @@ flutter_go_bridge_codegen run -d <device> -- [flutter run args]
 
 Starts `flutter run --machine`, hot reloads Dart changes, and regenerates/restarts for Go changes.
 `-d all` is not supported because one daemon session targets one device.
+For Web devices, it also runs Gokit `build-web` before startup and after each Go regeneration.
+
+## `build-web`
+
+```sh
+flutter_go_bridge_codegen build-web [flags]
+```
+
+Generates the shared Native/Web bridge once, then runs Gokit `build-web` to install the current
+`.wasm`, `wasm_exec.js`, and `fgb_wasm_manifest.json` under the configured package assets directory.
+It does not invoke Flutter. Use it before running `flutter run -d chrome` or `flutter build web`
+directly. It accepts the same generation and configuration flags as `run`, including
+`--config-file`, `--go-input`, `--go-output`, `--dart-output`, `--library-name`, and
+`--no-dart-format`.
+
+## `build`
+
+```sh
+flutter_go_bridge_codegen build <platform> -- [flutter build args]
+```
+
+Runs one shared Native/Web generation, then builds the requested Flutter platform. The platform is
+the same positional target accepted by `flutter build`, for example:
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+`build web` invokes Gokit `build-web` first so the current `.wasm`, `wasm_exec.js`, and manifest are
+installed before `flutter build web`. Other targets use the Native platform builder. Both builders
+pass their results through a platform-specific signing interface; the initial Native and Web
+signers are no-ops reserved for future signing integration. Use `--project-dir` to select a Flutter
+project explicitly. Plugin projects default to their runnable `example/` app.
 
 ## `create`
 

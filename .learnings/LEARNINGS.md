@@ -547,3 +547,336 @@ Use `time.Time.UnixMicro`/`time.UnixMicro` in generated Go and `DateTime.microse
 - **Notes**: Generator codecs and type-mapping documentation now use Unix microseconds.
 
 ---
+
+## [LRN-20260807-001] correction
+
+**Logged**: 2026-08-07T07:19:47+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+With `CGO_ENABLED=0`, Go excludes files that import `C`; the presence of one
+such file does not by itself disable every other file in the package.
+
+### Details
+
+The initial WebAssembly design discussion treated a package containing
+`import "C"` too broadly. Go excludes each cgo source file from a disabled-cgo
+build, while pure Go files in the same package remain eligible. The package
+becomes unavailable only when the remaining files are insufficient, refer to
+symbols from excluded files, or depend on packages without a `js/wasm`
+fallback. A Dart-exported callable declared in a cgo file is unavailable on
+Web even when its signature contains only pure Go types.
+
+### Suggested Action
+
+For Web bridge generation, combine source-file `import "C"` tracking with a
+second `go/packages` load under `CGO_ENABLED=0 GOOS=js GOARCH=wasm`. Classify
+availability per callable and report package-level failure only when the Web
+load proves the package cannot compile.
+
+### Metadata
+
+- Source: user_feedback
+- Related Files: internal/parser/parser.go, internal/generator/builder.go, WEB_WASM_SUPPORT_PLAN.md
+- Tags: cgo, wasm, go-packages, build-constraints, web
+
+### Resolution
+
+- **Resolved**: 2026-08-07T07:19:47+08:00
+- **Notes**: The local Web Wasm support plan now documents file-level cgo exclusion and Web-target package analysis explicitly.
+
+---
+
+## [LRN-20260807-002] correction
+
+**Logged**: 2026-08-07T08:10:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+WebAssembly builds must remain under Gokit's build orchestration when Native
+and Web need one configuration, cache, hash, artifact, and logging contract.
+
+### Details
+
+The initial recommendation kept Gokit Native-only because the IDE already
+precompiles `.wasm`. That would duplicate `gokit.yaml` parsing, build flags,
+cache identity, artifact manifests, and diagnostics in the IDE. The IDE should
+instead invoke Gokit's explicit Web build entrypoint and only coordinate when
+it runs and where the resulting assets are installed.
+
+### Suggested Action
+
+Add a first-class `js/wasm` target and explicit Web build command to Gokit.
+Keep bridge generation in flutter_go_bridge, but make Gokit the sole executor
+of both Native and Web Go builds and the owner of build fingerprints,
+incremental cache decisions, artifact manifests, and structured logs.
+
+### Metadata
+- Source: user_feedback
+- Related Files: template/app/go_builder/gokit/build_tool/lib/src/builder.dart, template/app/go_builder/gokit/build_tool/lib/src/build_tool.dart, WEB_WASM_SUPPORT_PLAN.md
+- Tags: gokit, wasm, build-orchestration, cache, manifest, ide
+
+### Resolution
+
+- **Resolved**: 2026-08-07T08:10:00+08:00
+- **Notes**: The architecture discussion was corrected to make Gokit the unified Native/Web build layer.
+
+---
+
+## [LRN-20260807-003] correction
+
+**Logged**: 2026-08-07T08:45:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+
+Develop and commit Gokit in a standalone repository clone, not inside a template submodule worktree.
+
+### Details
+
+Editing `template/app/go_builder/gokit` directly mixed source changes with submodule checkout state,
+generated Dart package files, and lock-file normalization. The user supplied a root-level `gokit`
+clone as the authoritative development repository. Template submodules should remain clean until the
+standalone Gokit branch has a tested commit, after which both app and plugin gitlinks are synchronized.
+
+### Suggested Action
+
+Create the feature branch and checkpoint commits in the standalone Gokit clone. Run Gokit analysis
+and tests there. Only then update `.gitmodules` branch metadata if desired and move both template
+submodules to the tested commit.
+
+### Metadata
+- Source: user_feedback
+- Related Files: gokit/, template/app/go_builder/gokit, template/plugin/gokit, .gitmodules
+- Tags: git-submodule, gokit, branch, repository-boundary
+
+### Resolution
+
+- **Resolved**: 2026-08-07T08:45:00+08:00
+- **Notes**: Migrated the implementation to the root-level Gokit clone on `feature/web-wasm-build`.
+
+---
+## [LRN-20260807-001] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+The Web initializer callback is an extension point, not a replacement for the default Web path.
+
+### Details
+The requested API must preserve `webInitializer` for custom loading while automatically selecting a
+Web default when it is omitted. That default must call `WidgetsFlutterBinding.ensureInitialized()`
+before `FgbWasmLoader.ensureReady()`.
+
+### Suggested Action
+Keep the optional callback in both generated runtimes, and make only the Web runtime fall back to the
+Flutter Web loader initializer.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/dart_web_runtime.go, template/shared/common/lib/src/fgb_wasm_loader_web.dart
+- Tags: web, wasm, flutter-binding, initializer
+
+---
+## [LRN-20260807-002] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: tests
+
+### Summary
+Flutter build success is not a substitute for launching the app when validating runtime initialization.
+
+### Details
+The user reported that the app could not open after build-only validation. Web Wasm loader work must
+be verified with `flutter run`, including browser startup, asset requests, and bridge initialization.
+
+### Suggested Action
+Use build gates only as compilation checks; always run the affected Flutter target and inspect its
+runtime logs before reporting the application works.
+
+### Metadata
+- Source: user_feedback
+- Related Files: template/shared/common/lib/src/fgb_wasm_loader_web.dart
+- Tags: flutter-run, runtime, web-wasm, validation
+
+---
+## [LRN-20260807-003] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: critical
+**Status**: pending
+**Area**: backend
+
+### Summary
+The generator contract is dual-platform output, not a target switch.
+
+### Details
+A Flutter project must keep Native and Web implementations in the same generated source tree. A
+manual `generate --target native` or `generate --target web` workflow leaves the other platform
+missing and defeats Flutter's platform selection. One generate invocation must emit both Go bridges
+and both Dart runtimes, with Go build tags and Dart conditional exports selecting the active target.
+
+### Suggested Action
+Make dual generation the default command behavior. Keep target-specific internals private to the
+renderer and use `--target` only as a compatibility/deprecation path, if it remains accepted.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/generator.go, internal/generator/render_dart_split.go, cmd/flutter_go_bridge_codegen
+- Tags: native, wasm, dual-output, flutter-platform-selection
+
+---
+
+## [LRN-20260807-004] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+Dual-platform generation must share the Dart API; it must not duplicate the whole generated library into Native and Web directories.
+
+### Details
+The first dual-output implementation generated `native/api/**` and `web/api/**` plus two complete bridge runtimes. That preserves both targets but duplicates the public model and API surface. The required shape follows flutter_rust_bridge: one shared generated entrypoint and one shared API tree, with only platform-specific wire files selected through a conditional import/export.
+
+### Suggested Action
+Generate `bridge_generated.dart` and `api/**` once. Emit `bridge_generated.io.dart` and `bridge_generated.web.dart` only for platform-specific loading, transport, and call dispatch, and validate all targets from that unchanged generated tree.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/generator.go, internal/generator/render_dart_split.go
+- Tags: dart-codegen, shared-api, conditional-import, flutter-rust-bridge
+
+---
+
+## [LRN-20260807-005] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The CLI needs a stable `build` interface in addition to the long-running `run` workflow.
+
+### Details
+`run` is responsible for a live Flutter daemon and restart-on-Go-change behavior. A separate
+`build` command must expose a synchronous build entrypoint with explicit platform implementations,
+so future signing integration can be added without changing the public command contract. Web and
+Native implementations may initially return an explicit not-implemented error, but the interface
+must exist now.
+
+### Suggested Action
+Add a build service interface with Web and Native platform implementations, wire it to a
+`flutter_go_bridge_codegen build` command, and keep signing as an implementation detail behind that
+interface.
+
+### Metadata
+- Source: user_feedback
+- Related Files: cmd/flutter_go_bridge_codegen/main.go
+- Tags: cli, build, signing, platform-interface
+
+### Resolution
+- **Resolved**: 2026-08-07T00:00:00+08:00
+- **Notes**: Added `build <platform>`, Native/Web builders, and explicit Native/Web signer implementations.
+
+---
+
+## [LRN-20260807-006] correction
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+Use a user-provided Codecov report directly when it already includes the failing gate, target, and affected files.
+
+### Details
+PR #41 already had enough coverage information to begin focused tests. Re-querying the external
+check added no implementation value and introduced unrelated local launcher/encoding failures.
+
+### Suggested Action
+Start with the reported files and validate the fix with the repository's local coverage command;
+inspect remote logs only when the supplied report is missing actionable detail.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/*_test.go
+- Tags: codecov, coverage, ci, scope
+
+### Resolution
+- **Resolved**: 2026-08-07T00:00:00+08:00
+- **Notes**: Added focused generator/parser coverage and verified a 97.59% local patch statement estimate.
+
+---
+
+## [LRN-20260807-007] correction
+
+**Logged**: 2026-08-07T15:45:00+08:00
+**Priority**: high
+**Status**: in_progress
+**Area**: tests
+
+### Summary
+Aggregate and locally intersected statement coverage do not prove that Codecov patch coverage has enough margin.
+
+### Details
+The branch reached 95.7% aggregate Go statement coverage and a 97.64% local changed-statement
+estimate, while Codecov still reported exactly 92.13% patch coverage. Codecov evaluates changed
+source lines and partial lines differently from the local statement-range approximation. A result
+equal to the configured target is not a safe passing margin.
+
+### Suggested Action
+Use the user-provided Codecov file/line report as the authoritative patch-gap list. Add focused tests
+for those concrete branches and push enough newly covered patch lines to exceed the target clearly.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/*_test.go, internal/integrate/*_test.go
+- Tags: codecov, patch-coverage, partial-lines, coverage-margin
+
+---
+
+## [LRN-20260807-008] correction
+
+**Logged**: 2026-08-07T17:10:00+08:00
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+WebAssembly support is complete only when it matches every Native FFI bridge capability except cgo.
+
+### Details
+The initial Web transport ran primitive and value-struct calls but deliberately emitted
+UnsupportedError fallbacks for GoOpaque, DartOpaque, callbacks, streams, interfaces, and any call
+whose nested type contained one of them. Treating that as finished Web support was incorrect. The
+required contract is one shared Dart API with feature parity across Native FFI and WebAssembly;
+import "C" is the sole platform exclusion, and syscall/js replaces native ports and C entrypoints
+for asynchronous calls, callbacks, stream events, cancellation, and handle lifecycle on Web.
+
+### Suggested Action
+Maintain an explicit cross-platform capability fixture and require real Native and browser/Wasm
+smoke calls for every supported category before describing Web support as complete.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/builder.go, internal/generator/render_go_web.go, internal/generator/dart_web_runtime.go
+- Tags: wasm, ffi-parity, opaque, callback, stream, syscall-js
+
+---

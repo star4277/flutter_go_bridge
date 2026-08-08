@@ -41,10 +41,19 @@ func (r *splitDartRenderer) renderCentralCall(call *callModel) {
 	} else {
 		r.line("%s fgbInternalCall%d(%s) {", resultType, call.ID, paramText)
 	}
+	if !call.TargetAvailable {
+		reason := call.TargetReason
+		if reason == "" {
+			reason = "method is unavailable for the selected target"
+		}
+		r.line("  throw UnsupportedError(%s);", strconv.Quote("Go method "+call.GoName+" is unavailable on Web: "+reason))
+		r.line("}")
+		return
+	}
 
 	// CST/DCO generation is emitted by render_dart_cst.go. Until a type is
 	// proven representable by both directions, use the stable Standard codec.
-	if call.usesCstDco() {
+	if r.unit.Target != "web" && call.usesCstDco() {
 		r.renderCentralCstCall(call, arguments)
 	} else {
 		r.renderCentralStandardCall(call, arguments)

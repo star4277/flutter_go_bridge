@@ -3,7 +3,7 @@ import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/bridge_generated.dart';
 import 'package:REPLACE_ME_DART_PACKAGE_NAME/src/api/lib.dart';
 
 Future<void> main() async {
-  FlutterGoBridge.initialize();
+  await FlutterGoBridge.initialize();
   runApp(const MyApp());
 }
 

@@ -13,6 +13,13 @@ import (
 
 var ErrNotFound = errors.New("flutter_go_bridge configuration not found")
 
+type Target string
+
+const (
+	TargetNative Target = "native"
+	TargetWeb    Target = "web"
+)
+
 var autoConfigNames = []string{
 	".flutter_go_bridge.yml",
 	".flutter_go_bridge.yaml",
@@ -23,6 +30,7 @@ var autoConfigNames = []string{
 }
 
 type Config struct {
+	Target                  *string `yaml:"target" json:"target"`
 	BaseDir                 *string `yaml:"base_dir" json:"base_dir"`
 	GoInput                 *string `yaml:"go_input" json:"go_input"`
 	GoOutput                *string `yaml:"go_output" json:"go_output"`
@@ -37,6 +45,7 @@ type Config struct {
 }
 
 type Resolved struct {
+	Target                  Target
 	BaseDir                 string
 	GoInput                 string
 	GoOutput                string
@@ -52,6 +61,7 @@ type Resolved struct {
 
 func Merge(high, low Config) Config {
 	return Config{
+		Target:                  first(high.Target, low.Target),
 		BaseDir:                 first(high.BaseDir, low.BaseDir),
 		GoInput:                 first(high.GoInput, low.GoInput),
 		GoOutput:                first(high.GoOutput, low.GoOutput),
@@ -175,6 +185,7 @@ func Resolve(raw Config, cwd string) (Resolved, error) {
 	}
 
 	result := Resolved{
+		Target:                  TargetNative,
 		BaseDir:                 absBase,
 		GoInput:                 resolvePathIfLocal(absBase, *raw.GoInput),
 		GoOutput:                resolvePath(absBase, goOutput),
@@ -183,6 +194,14 @@ func Resolve(raw Config, cwd string) (Resolved, error) {
 		DartFormatLineLength:    100,
 		DartFormat:              true,
 		StopOnError:             true,
+	}
+	if raw.Target != nil && strings.TrimSpace(*raw.Target) != "" {
+		switch target := Target(strings.ToLower(strings.TrimSpace(*raw.Target))); target {
+		case TargetNative, TargetWeb:
+			result.Target = target
+		default:
+			return Resolved{}, fmt.Errorf("target must be %q or %q, got %q", TargetNative, TargetWeb, *raw.Target)
+		}
 	}
 	if raw.LibraryName != nil && strings.TrimSpace(*raw.LibraryName) != "" {
 		result.LibraryName = strings.TrimSpace(*raw.LibraryName)

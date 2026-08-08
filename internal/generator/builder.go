@@ -6,6 +6,8 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	"github.com/star4277/flutter_go_bridge/internal/model"
 	"github.com/star4277/flutter_go_bridge/internal/names"
 	"golang.org/x/tools/go/packages"
+	"gopkg.in/yaml.v3"
 )
 
 // structClass is the FRB-style bridge classification of a named Go struct:
@@ -66,19 +69,21 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		}
 	}
 	result := &unit{
-		PackagePath:      api.Package.PkgPath,
-		PackageName:      api.Package.Name,
-		InputDir:         api.InputDir,
-		MirrorRoot:       api.InputDir,
-		SourceFiles:      append([]string(nil), api.SourceFiles...),
-		Direct:           direct,
-		NeedsMain:        needsMain,
-		LibraryName:      resolved.LibraryName,
-		ClassName:        names.UpperCamel(resolved.DartEntrypointClassName),
-		GoPreamble:       resolved.GoPreamble,
-		DartPreamble:     resolved.DartPreamble,
-		GoPackageAliases: map[string]string{},
-		codecSupport:     map[codecCacheKey]bool{},
+		PackagePath:         api.Package.PkgPath,
+		PackageName:         api.Package.Name,
+		InputDir:            api.InputDir,
+		MirrorRoot:          api.InputDir,
+		SourceFiles:         append([]string(nil), api.SourceFiles...),
+		Direct:              direct,
+		NeedsMain:           needsMain,
+		LibraryName:         resolved.LibraryName,
+		ClassName:           names.UpperCamel(resolved.DartEntrypointClassName),
+		GoPreamble:          resolved.GoPreamble,
+		DartPreamble:        resolved.DartPreamble,
+		Target:              string(resolved.Target),
+		UseFlutterWebLoader: resolved.Target == config.TargetWeb && isFlutterProject(resolved.BaseDir),
+		GoPackageAliases:    map[string]string{},
+		codecSupport:        map[codecCacheKey]bool{},
 	}
 	// Mirror the Dart tree from the Go module root so a package directory such
 	// as api/ shows up as api/ on the Dart side too.
@@ -123,6 +128,15 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 			b.warnings = append(b.warnings, wrapped)
 			continue
 		}
+		call.Source = callable
+		call.TargetAvailable = resolved.Target != config.TargetWeb || callable.TargetAvailable
+		call.TargetReason = callable.TargetReason
+		if resolved.Target == config.TargetWeb && call.TargetAvailable {
+			if reason := unsupportedWebCallReason(call); reason != "" {
+				call.TargetAvailable = false
+				call.TargetReason = reason
+			}
+		}
 		b.unit.Calls = append(b.unit.Calls, call)
 		call.ID = len(b.unit.Calls) - 1
 		call.Codec = preferredCodecForCall(call, b.unit.codecSupport)
@@ -163,6 +177,69 @@ func buildUnit(api *model.API, resolved config.Resolved, direct bool) (*unit, []
 		return nil, b.warnings, err
 	}
 	return b.unit, b.warnings, nil
+}
+
+func isFlutterProject(baseDir string) bool {
+	raw, err := os.ReadFile(filepath.Join(baseDir, "pubspec.yaml"))
+	if err != nil {
+		return false
+	}
+	var pubspec struct {
+		Dependencies map[string]any `yaml:"dependencies"`
+	}
+	if err := yaml.Unmarshal(raw, &pubspec); err != nil {
+		return false
+	}
+	_, found := pubspec.Dependencies["flutter"]
+	return found
+}
+
+func unsupportedWebCallReason(call *callModel) string {
+	seen := map[int]bool{}
+	var unsupported func(*wireType) string
+	unsupported = func(typ *wireType) string {
+		if typ == nil || seen[typ.ID] {
+			return ""
+		}
+		seen[typ.ID] = true
+		if typ.CgoScalar {
+			return "cgo scalar types are unavailable on Web"
+		}
+		switch typ.Kind {
+		case kindPointer, kindSlice, kindArray, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
+			return unsupported(typ.Elem)
+		case kindMap:
+			if reason := unsupported(typ.Key); reason != "" {
+				return reason
+			}
+			return unsupported(typ.Elem)
+		case kindStruct:
+			for _, field := range typ.Struct.allFields() {
+				if reason := unsupported(field.Type); reason != "" {
+					return reason
+				}
+			}
+		case kindNamed:
+			return unsupported(typ.Named.Underlying)
+		case kindAtomic:
+			return unsupported(typ.Atomic.Value)
+		}
+		return ""
+	}
+	if reason := unsupported(call.Receiver); reason != "" {
+		return reason
+	}
+	for _, param := range call.Params {
+		if reason := unsupported(param.Type); reason != "" {
+			return reason
+		}
+	}
+	for _, result := range call.Results {
+		if reason := unsupported(result.Type); reason != "" {
+			return reason
+		}
+	}
+	return ""
 }
 
 func (b *builder) selectInterfaceToStringMethods() {
@@ -495,6 +572,7 @@ func (b *builder) propagateInterfaceMethodShapes() error {
 					claimed[concrete] = claim{iface: declaration, method: declared, signature: shape}
 					concrete.DartName = declared.DartName
 					concrete.Mode = declared.Mode
+					concrete.Overrides = true
 					// The same principle applies to an operator, and more
 					// sharply: an operator provides no named member at all, so
 					// the `implements` clause would be left without the one the

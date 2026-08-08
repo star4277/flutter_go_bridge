@@ -15,6 +15,27 @@ final class Point {
   Point moved({required int dx, required int dy}) {
     return FlutterGoBridge.instance.fgbInternalCall1(this, dx, dy);
   }
+
+  @override
+  String toString() => 'Point(x: $x, y: $y, label: $label)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Point &&
+          other.runtimeType == runtimeType &&
+          fgbInternalDeepEquals(x, other.x) &&
+          fgbInternalDeepEquals(y, other.y) &&
+          fgbInternalDeepEquals(label, other.label);
+
+  @override
+  int get hashCode {
+    var result = runtimeType.hashCode;
+    result = result * 31 + fgbInternalDeepHash(x);
+    result = result * 31 + fgbInternalDeepHash(y);
+    result = result * 31 + fgbInternalDeepHash(label);
+    return result;
+  }
 }
 
 /// Counter keeps its state on the Go side and crosses the bridge as a

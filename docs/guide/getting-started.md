@@ -102,12 +102,19 @@ import 'bridge_generated.dart'; // FlutterGoBridge / FgbPlatformException / GoOp
 import 'api/api.dart';
 
 void main() async {
-  FlutterGoBridge.initialize(libraryPath: 'path/to/mylib.dll');
+  await FlutterGoBridge.initialize(libraryPath: 'path/to/mylib.dll');
 
   final answer = add(a: 20, b: 22);
   final message = await greet(name: 'world');
 }
 ```
+
+For a Web build, `FlutterGoBridge.initialize()` has a default Web initializer. It calls
+`WidgetsFlutterBinding.ensureInitialized()` first and then the `FgbWasmLoader` embedded in
+`bridge_generated.web.dart` before opening the bridge. You can pass `webInitializer` to replace
+that default when a project needs a custom loader. Native and pure-Dart builds do not import
+Flutter widgets; a pure-Dart Web caller must provide its own `webInitializer` instead of using the
+Flutter asset loader. No separate `fgb_wasm_loader*.dart` files are generated.
 
 Errors from Go arrive as `FgbPlatformException`; see [Returns and errors](/reference/returns-errors).
 

@@ -157,6 +157,7 @@ func isAsyncCall(call *callModel) bool {
 }
 
 func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, error) {
+	isWeb := unit.Target == "web"
 	root, central := dartOutputPaths(configuredOutput)
 	groups, paths := dartSourceGroups(unit)
 	orderedKeys := sortedSourceKeys(paths)
@@ -167,9 +168,18 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 	centralRenderer.line("// ignore_for_file: unused_element, unused_import, unnecessary_import")
 	centralRenderer.line("import 'dart:async';")
 	centralRenderer.line("import 'dart:convert';")
-	centralRenderer.line("import 'dart:ffi' as ffi;")
-	centralRenderer.line("import 'dart:io';")
-	centralRenderer.line("import 'dart:isolate';")
+	if isWeb {
+		centralRenderer.line("import 'dart:js_interop';")
+		centralRenderer.line("import 'dart:js_interop_unsafe';")
+		if unit.UseFlutterWebLoader {
+			centralRenderer.line("import 'package:flutter/services.dart';")
+			centralRenderer.line("import 'package:flutter/widgets.dart';")
+		}
+	} else {
+		centralRenderer.line("import 'dart:ffi' as ffi;")
+		centralRenderer.line("import 'dart:io';")
+		centralRenderer.line("import 'dart:isolate';")
+	}
 	centralRenderer.line("import 'dart:typed_data';")
 	if unit.UsesUUID {
 		centralRenderer.line("import 'package:uuid/uuid.dart';")
@@ -186,11 +196,19 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		centralRenderer.raw(strings.TrimRight(unit.DartPreamble, "\n"))
 		centralRenderer.line("")
 	}
-	if hasCstDcoCalls(unit) {
+	if !isWeb && hasCstDcoCalls(unit) {
 		centralRenderer.raw(cstDartDefinitions(unit))
 		centralRenderer.line("")
 	}
-	runtime := strings.ReplaceAll(dartRuntimeSource, "__FGB_LIBRARY_NAME__", strconv.Quote(unit.LibraryName))
+	runtime, err := dartNativeRuntimeSource(unit)
+	if isWeb {
+		runtime, err = dartWebRuntimeSource(unit)
+		if err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	}
 	runtime = strings.ReplaceAll(runtime, "__FGB_BRIDGE_CLASS__", unit.ClassName)
 	centralRenderer.raw(runtime)
 	// Absent stand-in classes are library-private and live alongside the
@@ -208,7 +226,7 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		}
 		centralRenderer.line("")
 	}
-	if hasCstDcoCalls(unit) {
+	if !isWeb && hasCstDcoCalls(unit) {
 		centralRenderer.renderCstEncoders()
 	}
 	centralRenderer.renderCentralCallMethods()
@@ -237,7 +255,7 @@ func renderDartSplit(unit *unit, configuredOutput string) (map[string][]byte, er
 		if unitNeedsJSONToString(unit) {
 			renderer.line("import 'dart:convert';")
 		}
-		if unit.UsesInternetIP {
+		if unit.UsesInternetIP && !isWeb {
 			renderer.line("import 'dart:io';")
 		}
 		renderer.line("import 'dart:typed_data';")
@@ -969,7 +987,7 @@ func (r *splitDartRenderer) renderDecoder(typ *wireType) error {
 		r.line("  if (value is! String) {")
 		r.line("    throw FormatException('$path: expected InternetAddress string');")
 		r.line("  }")
-		r.line("  return InternetAddress(value);")
+		r.line("  return fgbInternalDecodeInternetAddress(value);")
 	case kindIPPrefix:
 		r.line("  if (value is! String) {")
 		r.line("    throw FormatException('$path: expected CIDR prefix string');")
@@ -1168,7 +1186,7 @@ func (r *splitDartRenderer) renderEncoder(typ *wireType) error {
 	case kindTime:
 		r.line("  return value.microsecondsSinceEpoch;")
 	case kindInternetIP:
-		r.line("  return value.address;")
+		r.line("  return fgbInternalEncodeInternetAddress(value);")
 	case kindUUID:
 		r.line("  return value.uuid;")
 	case kindDecimal:

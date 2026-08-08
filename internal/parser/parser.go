@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/star4277/flutter_go_bridge/internal/config"
 	"github.com/star4277/flutter_go_bridge/internal/model"
 	"github.com/star4277/flutter_go_bridge/internal/names"
 	"golang.org/x/tools/go/packages"
@@ -25,6 +26,7 @@ import (
 type Options struct {
 	Input    string
 	BaseDir  string
+	Target   config.Target
 	PrintAST bool
 	ASTOut   io.Writer
 }
@@ -44,20 +46,10 @@ func Parse(options Options) (*model.API, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg := &packages.Config{
-		Dir: dir,
-		Mode: packages.NeedName |
-			packages.NeedFiles |
-			packages.NeedCompiledGoFiles |
-			packages.NeedImports |
-			packages.NeedDeps |
-			packages.NeedModule |
-			packages.NeedSyntax |
-			packages.NeedTypes |
-			packages.NeedTypesInfo |
-			packages.NeedTypesSizes,
-		Tests: false,
+	if options.Target == "" {
+		options.Target = config.TargetNative
 	}
+	cfg := packageLoadConfig(dir, config.TargetNative)
 	loaded, err := packages.Load(cfg, pattern)
 	if err != nil {
 		return nil, err
@@ -79,6 +71,7 @@ func Parse(options Options) (*model.API, error) {
 	api := &model.API{
 		Package:      pkg,
 		InputDir:     packageDir(pkg, dir),
+		Target:       string(options.Target),
 		Types:        map[*types.TypeName]*model.TypeDecl{},
 		Constants:    map[*types.Named][]*model.Constant{},
 		IgnoredTypes: map[string]bool{},
@@ -142,6 +135,7 @@ func Parse(options Options) (*model.API, error) {
 		kept = append(kept, callable)
 	}
 	api.Callables = kept
+	applyTargetAvailability(api, options.Target, dir, pattern)
 
 	sort.SliceStable(api.Callables, func(i, j int) bool {
 		return sourcePositionLess(
@@ -159,6 +153,90 @@ func Parse(options Options) (*model.API, error) {
 	}
 	sort.Strings(api.SourceFiles)
 	return api, nil
+}
+
+func packageLoadConfig(dir string, target config.Target) *packages.Config {
+	cfg := &packages.Config{
+		Dir: dir,
+		Mode: packages.NeedName |
+			packages.NeedFiles |
+			packages.NeedCompiledGoFiles |
+			packages.NeedImports |
+			packages.NeedDeps |
+			packages.NeedModule |
+			packages.NeedSyntax |
+			packages.NeedTypes |
+			packages.NeedTypesInfo |
+			packages.NeedTypesSizes,
+		Tests: false,
+	}
+	if target == config.TargetWeb {
+		cfg.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=js", "GOARCH=wasm")
+	}
+	return cfg
+}
+
+func applyTargetAvailability(api *model.API, target config.Target, dir, pattern string) {
+	if target != config.TargetWeb {
+		for _, callable := range api.Callables {
+			callable.TargetAvailable = true
+		}
+		return
+	}
+
+	targetFiles, targetError := loadWebTargetFiles(dir, pattern)
+	api.TargetError = targetError
+	for _, callable := range api.Callables {
+		callable.TargetAvailable, callable.TargetReason = targetAvailability(callable.SourceFile, targetFiles, targetError)
+	}
+}
+
+func loadWebTargetFiles(dir, pattern string) (map[string]bool, string) {
+	loaded, err := packages.Load(packageLoadConfig(dir, config.TargetWeb), pattern)
+	if err != nil {
+		return nil, err.Error()
+	}
+	if len(loaded) != 1 {
+		return nil, fmt.Sprintf("Web target must resolve to exactly one package, got %d", len(loaded))
+	}
+	if len(loaded[0].Errors) != 0 {
+		return nil, packageErrors(loaded).Error()
+	}
+	files := make(map[string]bool, len(loaded[0].CompiledGoFiles))
+	for _, file := range loaded[0].CompiledGoFiles {
+		absolute, absErr := filepath.Abs(file)
+		if absErr == nil {
+			file = absolute
+		}
+		files[filepath.Clean(file)] = true
+	}
+	return files, ""
+}
+
+func targetAvailability(sourceFile string, targetFiles map[string]bool, targetError string) (bool, string) {
+	if targetError != "" {
+		return false, "Go package is unavailable for Web with CGO_ENABLED=0 GOOS=js GOARCH=wasm: " + targetError
+	}
+	if targetFiles[filepath.Clean(sourceFile)] {
+		return true, ""
+	}
+	if importsC(sourceFile) {
+		return false, "source file imports \"C\" and is excluded from Web builds by CGO_ENABLED=0"
+	}
+	return false, "source file is excluded by GOOS=js/GOARCH=wasm build constraints"
+}
+
+func importsC(sourceFile string) bool {
+	file, err := goparser.ParseFile(token.NewFileSet(), sourceFile, nil, goparser.ImportsOnly)
+	if err != nil {
+		return false
+	}
+	for _, item := range file.Imports {
+		if item.Path != nil && item.Path.Value == `"C"` {
+			return true
+		}
+	}
+	return false
 }
 
 func sourcePositionLess(leftFile string, leftPosition token.Pos, rightFile string, rightPosition token.Pos) bool {

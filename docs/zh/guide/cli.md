@@ -34,7 +34,9 @@ Build with go1.25.0
 flutter_go_bridge_codegen generate
 ```
 
-常用参数包括 `--config-file`、`--go-input`、`--go-output`、`--dart-output`、
+一次生成会同时输出 Native 和 Web Go bridge 以及一份共享 Dart API。`--target native|web` 仅为
+兼容旧调用保留，不再改变双平台输出。常用参数包括
+`--config-file`、`--go-input`、`--go-output`、`--dart-output`、
 `--library-name`、`--no-dart-format`、`--print-ast` 和 `--stop-on-error`。
 
 ### `generate --watch`
@@ -54,6 +56,38 @@ flutter_go_bridge_codegen run -d emulator-5554 -- --flavor dev
 
 启动 `flutter run --machine`，Dart 改动 hot reload，Go 改动重新生成并重启进程。
 `--` 后参数原样传给 Flutter；不支持 `-d all`。
+目标为 Web 时，启动前和每次 Go 重新生成后还会调用 Gokit `build-web`。
+
+## `build-web`
+
+```sh
+flutter_go_bridge_codegen build-web [参数]
+```
+
+该命令先生成一次共享 Native/Web bridge，再调用 Gokit `build-web`，把最新的 `.wasm`、
+`wasm_exec.js` 和 `fgb_wasm_manifest.json` 安装到配置的包资源目录。它不会调用 Flutter，
+可以在直接执行 `flutter run -d chrome` 或 `flutter build web` 前运行。它支持与 `run` 相同的
+代码生成和配置参数，包括 `--config-file`、`--go-input`、`--go-output`、`--dart-output`、
+`--library-name` 和 `--no-dart-format`。
+
+## `build`
+
+```sh
+flutter_go_bridge_codegen build <platform> -- [flutter build 参数]
+```
+
+先统一生成 Native/Web bridge，再构建指定的 Flutter 平台。`platform` 与 `flutter build`
+接受的位置参数一致，例如：
+
+```sh
+flutter_go_bridge_codegen build web -- --release
+flutter_go_bridge_codegen build windows -- --release
+```
+
+`build web` 会先调用 Gokit `build-web`，安装最新的 `.wasm`、`wasm_exec.js` 和 manifest，
+然后执行 `flutter build web`。其他目标使用 Native 平台 builder。两套 builder 都会把结果
+传入各自的平台签名接口；当前 Native/Web signer 是明确的空实现，后续接入签名时不需要修改
+CLI 命令契约。可用 `--project-dir` 指定 Flutter 工程；plugin 工程默认构建可运行的 `example/`。
 
 ## `create`
 

@@ -28,6 +28,9 @@ func computeReplacements(dartPackageName, libraryName, goModDir string, includeO
 		"REPLACE_ME_OHOS_PLUGIN_PLATFORM_TEXT": ohosText,
 		"go.mod.template":                      "go.mod",
 		"bridge_generated.go.template":         "bridge_generated.go",
+		"bridge_generated_web.go.template":     "bridge_generated_web.go",
+		"fgb_generated.go.template":            "fgb_generated.go",
+		"fgb_web_build.json":                   "fgb_web_build.json",
 		"lib.go.template":                      "lib.go",
 	}
 }
@@ -137,6 +140,14 @@ func modifyFile(rel, target string, reference, existing []byte, exists bool, rep
 	if exists {
 		if slices.Contains(commentOutFiles, filepath.Base(target)) {
 			return commentOutExistingAndAppendTemplate(existing, src), true
+		}
+		// Upgrade the generated bridge when an earlier integration still has
+		// the synchronous initializer signature. The bridge is generated output,
+		// so this narrow signature check does not overwrite user-authored files.
+		if strings.Contains(string(existing), "static void initialize({String? libraryPath})") &&
+			strings.Contains(string(src), "static Future<void> initialize") &&
+			strings.HasSuffix(filepath.ToSlash(rel), "lib/src/bridge_generated.dart") {
+			return src, true
 		}
 		log.Printf("warning: skip writing to %s because the file already exists; remove it and rerun to apply the full template", target)
 		return nil, false

@@ -17,6 +17,13 @@ type API struct {
 	InputDir    string
 	SourceFiles []string
 	Callables   []*Callable
+	// Target records which Go build constraints the parser evaluated. Web
+	// analysis uses GOOS=js, GOARCH=wasm, and CGO_ENABLED=0.
+	Target string
+	// TargetError describes a package-level target failure. The native package
+	// is still retained so the generator can preserve its Dart API and emit
+	// explicit unsupported fallbacks for unavailable Web declarations.
+	TargetError string
 	Types       map[*types.TypeName]*TypeDecl
 	Constants   map[*types.Named][]*Constant
 	// IgnoredTypes records input-package type names carrying fgb(ignore).
@@ -48,6 +55,11 @@ type Callable struct {
 	Mode        CallMode
 	Receiver    *types.Named
 	PointerRecv bool
+	// TargetAvailable is true when this declaration belongs to the selected
+	// target's compiled Go files. TargetReason explains an unavailable Web
+	// declaration, most commonly exclusion of a source file importing "C".
+	TargetAvailable bool
+	TargetReason    string
 	// NullableParams lists Go parameter names marked by
 	// `//fgb:nullable = "a,b"`. Only callback (function-typed) parameters may
 	// appear here; the generator rejects anything else.

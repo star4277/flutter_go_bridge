@@ -1,6 +1,9 @@
 package generator
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"go/format"
 	"os"
@@ -18,6 +21,105 @@ type Result struct {
 	Files            []string
 	Warnings         []error
 	DartDependencies []string
+}
+
+// GenerateAll emits both platform implementations and the conditional Dart
+// facades that select Native or Web at compile time. The existing Generate
+// function remains the single-target renderer used by focused generator tests
+// and by callers that intentionally need one platform only.
+func GenerateAll(api *model.API, resolved config.Resolved) (Result, error) {
+	if filepath.Ext(resolved.GoOutput) != ".go" {
+		return Result{}, fmt.Errorf("go_output must be a .go file: %s", resolved.GoOutput)
+	}
+	if resolved.LibraryName == "" {
+		modulePath := api.Package.PkgPath
+		if api.Package.Module != nil && api.Package.Module.Path != "" {
+			modulePath = api.Package.Module.Path
+		}
+		resolved.LibraryName = config.GoLibraryName(names.LibraryBase(modulePath))
+	}
+	outputDir := filepath.Dir(resolved.GoOutput)
+	direct := samePath(outputDir, api.InputDir)
+	if direct && api.Package.Name != "main" {
+		return Result{}, fmt.Errorf("go_output is inside input package %q; keep the API in a subpackage and place bridge_generated.go beside go.mod, or make the input package main", api.Package.Name)
+	}
+	if !direct && api.Package.Name == "main" {
+		return Result{}, fmt.Errorf("package main cannot be imported by a separate bridge package; place go_output in %s", api.InputDir)
+	}
+
+	native := resolved
+	native.Target = config.TargetNative
+	web := resolved
+	web.Target = config.TargetWeb
+	web.GoOutput = webGoOutputPath(resolved.GoOutput)
+
+	nativeUnit, warnings, err := buildUnit(api, native, direct)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+	webUnit, _, err := buildUnit(api, web, direct)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+	available := *api
+	available.Callables = nil
+	for _, call := range webUnit.Calls {
+		if call.TargetAvailable {
+			available.Callables = append(available.Callables, call.Source)
+		} else {
+			warnings = append(warnings, fmt.Errorf("%s is unavailable on Web: %s", call.GoName, call.TargetReason))
+		}
+	}
+	webGoUnit, _, err := buildUnit(&available, web, direct)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+
+	nativeGo, err := renderGo(nativeUnit)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+	nativeGo, err = format.Source(append([]byte("//go:build !(js && wasm)\n\n"), nativeGo...))
+	if err != nil {
+		return Result{Warnings: warnings}, fmt.Errorf("format generated Native Go code: %w\n%s", err, numberedSource(nativeGo))
+	}
+	webGo, err := renderGoWeb(webGoUnit)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+	webGo, err = format.Source(append([]byte("//go:build js && wasm\n\n"), webGo...))
+	if err != nil {
+		return Result{Warnings: warnings}, fmt.Errorf("format generated Web Go code: %w\n%s", err, numberedSource(webGo))
+	}
+	dartFiles, err := renderDartDual(nativeUnit, webUnit, resolved.DartOutput)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+	metadata, err := webBridgeMetadata(api, web)
+	if err != nil {
+		return Result{Warnings: warnings}, err
+	}
+	files := map[string][]byte{
+		resolved.GoOutput: nativeGo,
+		web.GoOutput:      webGo,
+		filepath.Join(filepath.Dir(resolved.GoOutput), "fgb_web_build.json"): metadata,
+	}
+	for path, content := range dartFiles {
+		files[path] = content
+	}
+	dependencies := []string{}
+	if nativeUnit.UsesUUID {
+		dependencies = append(dependencies, "uuid")
+	}
+	if nativeUnit.UsesDecimal {
+		dependencies = append(dependencies, "decimal")
+	}
+	return writeGeneratedFiles(files, Result{Warnings: warnings, DartDependencies: dependencies})
+}
+
+func webGoOutputPath(path string) string {
+	ext := filepath.Ext(path)
+	return strings.TrimSuffix(path, ext) + "_web" + ext
 }
 
 func Generate(api *model.API, resolved config.Resolved) (Result, error) {
@@ -54,7 +156,29 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 		dartDependencies = append(dartDependencies, "decimal")
 	}
 
-	goSource, err := renderGo(unit)
+	goUnit := unit
+	if resolved.Target == config.TargetWeb {
+		available := *api
+		available.Callables = nil
+		for _, call := range unit.Calls {
+			if call.TargetAvailable {
+				available.Callables = append(available.Callables, call.Source)
+			} else {
+				warnings = append(warnings, fmt.Errorf("%s is unavailable on Web: %s", call.GoName, call.TargetReason))
+			}
+		}
+		goUnit, _, err = buildUnit(&available, resolved, direct)
+		if err != nil {
+			return Result{Warnings: warnings}, err
+		}
+	}
+
+	var goSource []byte
+	if resolved.Target == config.TargetWeb {
+		goSource, err = renderGoWeb(goUnit)
+	} else {
+		goSource, err = renderGo(goUnit)
+	}
 	if err != nil {
 		return Result{Warnings: warnings}, err
 	}
@@ -70,10 +194,21 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 	files := map[string][]byte{
 		resolved.GoOutput: formattedGo,
 	}
+	if resolved.Target == config.TargetWeb {
+		metadata, metadataErr := webBridgeMetadata(api, resolved)
+		if metadataErr != nil {
+			return Result{Warnings: warnings}, metadataErr
+		}
+		files[filepath.Join(filepath.Dir(resolved.GoOutput), "fgb_web_build.json")] = metadata
+	}
 	for path, content := range dartFiles {
 		files[path] = content
 	}
 	result := Result{Warnings: warnings, DartDependencies: dartDependencies}
+	return writeGeneratedFiles(files, result)
+}
+
+func writeGeneratedFiles(files map[string][]byte, result Result) (Result, error) {
 	paths := make([]string, 0, len(files))
 	for path := range files {
 		paths = append(paths, path)
@@ -115,6 +250,26 @@ func Generate(api *model.API, resolved config.Resolved) (Result, error) {
 		result.Files = append(result.Files, path)
 	}
 	return result, nil
+}
+
+func webBridgeMetadata(api *model.API, resolved config.Resolved) ([]byte, error) {
+	hash := sha256.New()
+	for _, source := range api.SourceFiles {
+		content, err := os.ReadFile(source)
+		if err != nil {
+			return nil, fmt.Errorf("read Web bridge source %s: %w", source, err)
+		}
+		_, _ = hash.Write([]byte(filepath.ToSlash(source)))
+		_, _ = hash.Write(content)
+	}
+	payload := map[string]any{
+		"protocol_version":  1,
+		"generator_version": "flutter_go_bridge_codegen",
+		"target":            string(resolved.Target),
+		"library_name":      resolved.LibraryName,
+		"api_hash":          hex.EncodeToString(hash.Sum(nil)),
+	}
+	return json.MarshalIndent(payload, "", "  ")
 }
 
 func samePath(left, right string) bool {
