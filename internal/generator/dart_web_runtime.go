@@ -157,10 +157,12 @@ func prepareDartPlatformRuntime(source string) string {
 }
 
 const dartWebOpaqueSource = `
-/// Base class for generated opaque Go handles. Web methods using opaque
-/// handles currently fail before transport, so no native finalizer is needed.
+/// Base class for generated opaque Go handles. Web uses a Dart Finalizer to
+/// tell the Wasm runtime when the corresponding Go handle can be released.
 abstract base class GoOpaque {
-  GoOpaque({required this.fgbBridge, required this.fgbHandle});
+  GoOpaque({required this.fgbBridge, required this.fgbHandle}) {
+    fgbBridge.fgbAttachOpaqueFinalizer(this, fgbHandle);
+  }
 
   final __FGB_BRIDGE_CLASS__ fgbBridge;
   final int fgbHandle;
@@ -314,7 +316,31 @@ final class FgbWasmLoader {
 
 const dartWebBridgeSource = `
 final class __FGB_BRIDGE_CLASS__ {
-  __FGB_BRIDGE_CLASS__._();
+  __FGB_BRIDGE_CLASS__._() {
+    _handleFinalizer = Finalizer<int>(_dropOpaque);
+    _dartOpaqueReleaseFunction = ((JSNumber rawHandle) {
+      _dartOpaqueObjects.remove(rawHandle.toDartInt);
+    }).toJS;
+    _callbackRequestFunction = ((JSUint8Array rawRequest) {
+      return _handleCallbackRequest(rawRequest.toDart)
+          .then((reply) => reply.toJS)
+          .toJS;
+    }).toJS;
+    _streamEventFunction = ((JSUint8Array rawEvent) {
+      return _handleStreamEvent(rawEvent.toDart).toJS;
+    }).toJS;
+    final attached = _webFunction('#attach').callAsFunction(
+      null,
+      _dartOpaqueReleaseFunction,
+      _callbackRequestFunction,
+      _streamEventFunction,
+    );
+    if (attached == null ||
+        !attached.isA<JSBoolean>() ||
+        !(attached as JSBoolean).toDart) {
+      throw StateError('Go Wasm bridge rejected the Dart runtime attachment');
+    }
+  }
 
   static __FGB_BRIDGE_CLASS__? _instance;
 
@@ -341,18 +367,43 @@ final class __FGB_BRIDGE_CLASS__ {
 
   static const _FgbCodec _codec = _FgbCodec();
 
-  Object? fgbInvokeSync(String method, List<Object?> arguments) {
-    const libraryName = __FGB_LIBRARY_NAME__;
-    final registry = globalContext.getProperty<JSObject?>('__flutterGoBridge'.toJS);
+  late final Finalizer<int> _handleFinalizer;
+  late final JSFunction _dartOpaqueReleaseFunction;
+  late final JSFunction _callbackRequestFunction;
+  late final JSFunction _streamEventFunction;
+  final Map<int, Object> _dartOpaqueObjects = <int, Object>{};
+  final Map<int, FgbInternalStreamTarget> _streamTargets =
+      <int, FgbInternalStreamTarget>{};
+  final Map<Object, int> _streamHandles = <Object, int>{};
+  int _dartOpaqueNextHandle = 0;
+  int _streamNextHandle = 0;
+
+  JSObject _webRegistry() {
+    final registry = globalContext.getProperty<JSObject?>(
+      '__flutterGoBridge'.toJS,
+    );
     if (registry == null) {
-      throw StateError('Go Wasm runtime is not initialized; load wasm_exec.js and the .wasm artifact first');
+      throw StateError(
+        'Go Wasm runtime is not initialized; load wasm_exec.js and the .wasm artifact first',
+      );
     }
-    final invoke = registry.getProperty<JSFunction?>(libraryName.toJS);
-    if (invoke == null) {
-      throw StateError('Go Wasm bridge $libraryName is not registered');
+    return registry;
+  }
+
+  JSFunction _webFunction(String suffix) {
+    const libraryName = __FGB_LIBRARY_NAME__;
+    final function = _webRegistry().getProperty<JSFunction?>(
+      '$libraryName$suffix'.toJS,
+    );
+    if (function == null) {
+      throw StateError('Go Wasm bridge function $libraryName$suffix is not registered');
     }
+    return function;
+  }
+
+  Object? fgbInvokeSync(String method, List<Object?> arguments) {
     final request = _codec.encodeMethodCall(method, arguments);
-    final rawResponse = invoke.callAsFunction(null, request.toJS);
+    final rawResponse = _webFunction('').callAsFunction(null, request.toJS);
     if (rawResponse == null || !rawResponse.isA<JSUint8Array>()) {
       throw StateError('Go Wasm bridge returned a non-Uint8Array response');
     }
@@ -360,32 +411,154 @@ final class __FGB_BRIDGE_CLASS__ {
   }
 
   Future<Object?> fgbInvokeAsync(String method, List<Object?> arguments) async {
-    return fgbInvokeSync(method, arguments);
+    final request = _codec.encodeMethodCall(method, arguments);
+    final promise = _webFunction('#async').callAsFunction(null, request.toJS);
+    if (promise == null || !promise.isA<JSPromise<JSAny?>>()) {
+      throw StateError('Go Wasm bridge returned a non-Promise async response');
+    }
+    final rawResponse = await (promise as JSPromise<JSAny?>).toDart;
+    if (rawResponse == null || !rawResponse.isA<JSUint8Array>()) {
+      throw StateError('Go Wasm bridge returned a non-Uint8Array async response');
+    }
+    return _codec.decodeEnvelope((rawResponse as JSUint8Array).toDart);
   }
 
-  void fgbAttachOpaqueFinalizer(Object object, int handle) {}
+  void fgbAttachOpaqueFinalizer(Object object, int handle) {
+    _handleFinalizer.attach(object, handle, detach: object);
+  }
+
+  void _dropOpaque(int handle) {
+    _webFunction('#drop').callAsFunction(null, handle.toJS);
+  }
 
   int fgbInternalRegisterDartOpaque(Object value) {
-    throw UnsupportedError('DartOpaque is not supported by the Web Wasm transport');
+    final handle = ++_dartOpaqueNextHandle;
+    _dartOpaqueObjects[handle] = value;
+    return handle;
   }
 
   Object fgbInternalResolveDartOpaque(int handle, String path) {
-    throw UnsupportedError('$path: DartOpaque is not supported by the Web Wasm transport');
+    final value = _dartOpaqueObjects[handle];
+    if (value == null) {
+      throw StateError('$path: unknown or released DartOpaque handle $handle');
+    }
+    return value;
   }
 
   int fgbInternalRegisterCallback(Future<Object?> Function(List<Object?> args) invoker) {
-    throw UnsupportedError('Dart callbacks are not supported by the Web Wasm transport');
+    return fgbInternalRegisterDartOpaque(FgbInternalCallbackInvoker(invoker));
   }
 
   int fgbInternalRegisterStreamSink(
     StreamSink<dynamic> sink,
     void Function(Object? raw) add,
   ) {
-    throw UnsupportedError('streams are not supported by the Web Wasm transport');
+    final existing = _streamHandles[sink];
+    if (existing != null) {
+      return existing;
+    }
+    final handle = ++_streamNextHandle;
+    _streamTargets[handle] = FgbInternalStreamTarget(sink, add);
+    _streamHandles[sink] = handle;
+    sink.done.then(
+      (_) => fgbInternalReleaseStreamSink(handle),
+      onError: (Object _) => fgbInternalReleaseStreamSink(handle),
+    );
+    return handle;
   }
 
-  void fgbInternalStartStream<T>(StreamController<T> controller, Future<void> call) {
-    throw UnsupportedError('streams are not supported by the Web Wasm transport');
+  void fgbInternalReleaseStreamSink(int handle, {bool notifyGo = true}) {
+    final target = _streamTargets.remove(handle);
+    if (target == null) {
+      return;
+    }
+    _streamHandles.remove(target.sink);
+    if (notifyGo) {
+      _webFunction('#stream_cancel').callAsFunction(null, handle.toJS);
+    }
+  }
+
+  void fgbInternalStartStream<T>(
+    StreamController<T> controller,
+    Future<void> call,
+  ) {
+    final handle = _streamHandles[controller.sink];
+    controller.onCancel = () {
+      if (handle != null) {
+        fgbInternalReleaseStreamSink(handle);
+      }
+      scheduleMicrotask(() {
+        if (!controller.isClosed) {
+          controller.close();
+        }
+      });
+    };
+    call.then((_) {}, onError: (Object error, StackTrace stack) {
+      if (handle != null) {
+        fgbInternalReleaseStreamSink(handle);
+      }
+      if (!controller.isClosed) {
+        controller.addError(error, stack);
+        controller.close();
+      }
+    });
+  }
+
+  bool _handleStreamEvent(Uint8List raw) {
+    final decoded = fgbInternalDecodeValue(raw);
+    if (decoded is! List || decoded.length != 3) {
+      return false;
+    }
+    final handle = decoded[0];
+    final kind = decoded[1];
+    if (handle is! int || kind is! int) {
+      return false;
+    }
+    final target = _streamTargets[handle];
+    if (target == null) {
+      return false;
+    }
+    switch (kind) {
+      case 0:
+        target.add(decoded[2]);
+        return true;
+      case 1:
+        fgbInternalReleaseStreamSink(handle, notifyGo: false);
+        target.sink.close();
+        return true;
+      case 2:
+        target.sink.addError(
+          FgbPlatformException('stream_error', decoded[2] as String?, null),
+        );
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Future<Uint8List> _handleCallbackRequest(Uint8List request) async {
+    try {
+      final decoded = fgbInternalDecodeValue(request);
+      if (decoded is! List || decoded.length != 3) {
+        throw const FormatException('malformed callback request');
+      }
+      final id = decoded[0];
+      final handle = decoded[1];
+      final arguments = decoded[2];
+      if (id is! int || handle is! int || arguments is! List) {
+        throw const FormatException('malformed callback request');
+      }
+      final entry = _dartOpaqueObjects[handle];
+      if (entry is! FgbInternalCallbackInvoker) {
+        throw StateError('unknown or released callback handle $handle');
+      }
+      final result = await entry.invoke(List<Object?>.of(arguments));
+      return fgbInternalEncodeValue(<Object?>[0, result]);
+    } catch (error) {
+      return fgbInternalEncodeValue(
+        <Object?>[1, 'callback_error', error.toString()],
+      );
+    }
   }
 }
 `

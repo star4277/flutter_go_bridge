@@ -17,14 +17,8 @@ func renderGoWeb(unit *unit) ([]byte, error) {
 	r.line("")
 	r.line("import (")
 	imports := []string{
-		"bytes", "encoding/binary", "fmt", "io", "math/big", "os", "reflect",
-		"runtime/debug", "sync", "sync/atomic", "syscall/js", "unsafe",
-	}
-	for _, call := range unit.Calls {
-		if isAsyncCall(call) {
-			imports = append(imports, "context")
-			break
-		}
+		"bytes", "context", "encoding/binary", "fmt", "io", "math/big", "os", "reflect",
+		"runtime", "runtime/debug", "sync", "sync/atomic", "syscall/js", "unsafe",
 	}
 	if unit.UsesTime {
 		imports = append(imports, "time")
@@ -76,6 +70,20 @@ func renderGoWeb(unit *unit) ([]byte, error) {
 			return nil, err
 		}
 		r.line("")
+	}
+	for _, typ := range unit.Types {
+		if typ.Kind == kindCallback {
+			r.renderCallbackFactory(typ)
+			r.line("")
+		}
+		if typ.Kind == kindStreamSink {
+			if typ.ChannelStream {
+				r.renderStreamChannelHelpers(typ)
+			} else {
+				r.renderStreamSinkFactory(typ)
+			}
+			r.line("")
+		}
 	}
 	r.renderDispatch()
 	r.line("")
@@ -133,23 +141,433 @@ func fgbPanicStack() []byte {
 	return nil
 }
 
-var fgbWebInvokeFunction js.Func
+func fgbWebCopyBytes(value js.Value) ([]byte, error) {
+	if value.Type() != js.TypeObject {
+		return nil, fmt.Errorf("expected Uint8Array, got %s", value.Type())
+	}
+	length := value.Get("byteLength").Int()
+	if length < 0 {
+		return nil, fmt.Errorf("negative Uint8Array length %d", length)
+	}
+	result := make([]byte, length)
+	if copied := js.CopyBytesToGo(result, value); copied != len(result) {
+		return nil, fmt.Errorf("could not copy the complete Uint8Array")
+	}
+	return result, nil
+}
+
+func fgbWebRequest(arguments []js.Value) ([]byte, error) {
+	if len(arguments) != 1 {
+		return nil, fmt.Errorf("Web bridge expects one Uint8Array argument")
+	}
+	return fgbWebCopyBytes(arguments[0])
+}
+
+func fgbWebError(message string) []byte {
+	return fgbEncodeCallError(fgbStandardMethodCodec{}, &fgbCallError{
+		Code: "invalid_request", Message: message,
+	})
+}
+
+func fgbWebResolve(resolve js.Value, response []byte, transfer *fgbOpaqueTransfer) {
+	defer func() {
+		if recover() != nil && transfer != nil {
+			transfer.rollback()
+		}
+	}()
+	resolve.Invoke(fgbWebBytes(response))
+	if transfer != nil {
+		transfer.commit()
+	}
+}
+
+var (
+	fgbWebInvokeFunction       js.Func
+	fgbWebInvokeAsyncFunction  js.Func
+	fgbWebAttachFunction       js.Func
+	fgbWebDropFunction         js.Func
+	fgbWebStreamCancelFunction js.Func
+	fgbWebDartTargetMu         sync.RWMutex
+	fgbWebDartOpaqueRelease    js.Value
+	fgbWebDartCallback         js.Value
+	fgbWebDartStream           js.Value
+)
 
 func fgbWebInvoke(_ js.Value, arguments []js.Value) any {
-	if len(arguments) != 1 || arguments[0].Type() != js.TypeObject {
-		return fgbWebBytes(fgbEncodeCallError(fgbStandardMethodCodec{}, &fgbCallError{
-			Code: "invalid_request", Message: "Web bridge expects one Uint8Array argument",
-		}))
-	}
-	request := make([]byte, arguments[0].Get("byteLength").Int())
-	if copied := js.CopyBytesToGo(request, arguments[0]); copied != len(request) {
-		return fgbWebBytes(fgbEncodeCallError(fgbStandardMethodCodec{}, &fgbCallError{
-			Code: "invalid_request", Message: "could not copy the complete Web request",
-		}))
+	request, err := fgbWebRequest(arguments)
+	if err != nil {
+		return fgbWebBytes(fgbWebError(err.Error()))
 	}
 	response, transfer := fgbHandle(request)
 	transfer.commit()
 	return fgbWebBytes(response)
+}
+
+func fgbWebInvokeAsync(_ js.Value, arguments []js.Value) any {
+	request, err := fgbWebRequest(arguments)
+	if err != nil {
+		request = nil
+	}
+	requestErr := err
+	var executor js.Func
+	executor = js.FuncOf(func(_ js.Value, promiseArguments []js.Value) any {
+		if len(promiseArguments) == 0 || promiseArguments[0].Type() != js.TypeFunction {
+			return nil
+		}
+		resolve := promiseArguments[0]
+		if requestErr != nil {
+			fgbWebResolve(resolve, fgbWebError(requestErr.Error()), nil)
+			return nil
+		}
+		if !fgbSchedule(func() {
+			response, transfer := fgbHandle(request)
+			fgbWebResolve(resolve, response, transfer)
+		}, func(recovered any) {
+			response := fgbEncodeCallError(fgbStandardMethodCodec{}, &fgbCallError{
+				Code: "panic", Message: fmt.Sprintf("panic: %v", recovered),
+				Details: map[any]any{"stack": fgbPanicStack()},
+			})
+			fgbWebResolve(resolve, response, nil)
+		}) {
+			response := fgbEncodeCallError(fgbStandardMethodCodec{}, &fgbCallError{
+				Code: "busy", Message: "Web async queue is full",
+			})
+			fgbWebResolve(resolve, response, nil)
+		}
+		return nil
+	})
+	promise := js.Global().Get("Promise").New(executor)
+	executor.Release()
+	return promise
+}
+
+func fgbWebAttach(_ js.Value, arguments []js.Value) any {
+	if len(arguments) != 3 {
+		return false
+	}
+	for _, argument := range arguments {
+		if argument.Type() != js.TypeFunction {
+			return false
+		}
+	}
+
+	fgbAttachMu.Lock()
+	defer fgbAttachMu.Unlock()
+	generation := fgbGenerationCounter.Add(1)
+	fgbDartOpaqueTargetRef.Store(&fgbPortTarget{generation: generation, port: 1})
+	fgbCallbackTargetRef.Store(&fgbPortTarget{generation: generation, port: 1})
+	fgbStreamTargetRef.Store(&fgbPortTarget{generation: generation, port: 1})
+	fgbWebDartTargetMu.Lock()
+	fgbWebDartOpaqueRelease = arguments[0]
+	fgbWebDartCallback = arguments[1]
+	fgbWebDartStream = arguments[2]
+	fgbWebDartTargetMu.Unlock()
+	fgbClearOpaqueHandles()
+	fgbRetireCallbackWaiters()
+	fgbRetireStreams()
+	return true
+}
+
+func fgbWebDrop(_ js.Value, arguments []js.Value) any {
+	if len(arguments) != 1 || arguments[0].Type() != js.TypeNumber {
+		return false
+	}
+	handle := arguments[0].Int()
+	if handle <= 0 {
+		return false
+	}
+	fgbDeleteOpaque(uintptr(handle))
+	return true
+}
+
+func fgbWebStreamCancel(_ js.Value, arguments []js.Value) any {
+	if len(arguments) != 1 || arguments[0].Type() != js.TypeNumber {
+		return false
+	}
+	handle := int64(arguments[0].Int())
+	if handle <= 0 {
+		return false
+	}
+	fgbStreamCancel(handle)
+	return true
+}
+
+func fgbWebDartTargets() (js.Value, js.Value, js.Value) {
+	fgbWebDartTargetMu.RLock()
+	defer fgbWebDartTargetMu.RUnlock()
+	return fgbWebDartOpaqueRelease, fgbWebDartCallback, fgbWebDartStream
+}
+
+func fgbCurrentDartOpaqueGeneration() int64 {
+	if target := fgbDartOpaqueTargetRef.Load(); target != nil {
+		return target.generation
+	}
+	return 0
+}
+
+func fgbReleaseDartOpaque(generation int64, handle int64) {
+	target := fgbDartOpaqueTargetRef.Load()
+	if target == nil || target.generation != generation || handle == 0 {
+		return
+	}
+	release, _, _ := fgbWebDartTargets()
+	if release.Type() != js.TypeFunction {
+		return
+	}
+	func() {
+		defer func() { _ = recover() }()
+		release.Invoke(handle)
+	}()
+}
+
+// fgbRetireCallbackWaiters wakes every producer still blocked on a Dart reply.
+// A fresh attachment means the isolate that owed those replies is gone, so the
+// promises it handed us can never settle and the goroutines waiting on them
+// would block forever.
+func fgbRetireCallbackWaiters() {
+	fgbCallbackWaiters.Range(func(key, value any) bool {
+		actual, taken := fgbCallbackWaiters.LoadAndDelete(key)
+		if !taken {
+			return true
+		}
+		if waiter, ok := actual.(chan fgbWebCallbackResult); ok {
+			select {
+			case waiter <- fgbWebCallbackResult{err: fmt.Errorf("callback belongs to a retired Dart isolate")}:
+			default:
+			}
+		}
+		return true
+	})
+}
+
+type fgbCallbackRef struct {
+	generation int64
+	handle     int64
+}
+
+func fgbNewCallbackRef(generation int64, handle int64) *fgbCallbackRef {
+	ref := &fgbCallbackRef{generation: generation, handle: handle}
+	runtime.AddCleanup(ref, func(value fgbCallbackRef) {
+		fgbReleaseDartOpaque(value.generation, value.handle)
+	}, *ref)
+	return ref
+}
+
+type fgbWebCallbackResult struct {
+	payload []byte
+	err     error
+}
+
+func fgbInvokeCallback(ctx context.Context, generation int64, handle int64, arguments []any, transfer *fgbOpaqueTransfer) (any, error) {
+	target := fgbCallbackTargetRef.Load()
+	if target == nil || target.generation != generation {
+		return nil, fmt.Errorf("callback belongs to a retired Dart isolate")
+	}
+	_, callback, _ := fgbWebDartTargets()
+	if callback.Type() != js.TypeFunction {
+		return nil, fmt.Errorf("callback transport is not initialized")
+	}
+
+	id := fgbNextCallbackCall.Add(1)
+	codec := fgbStandardMethodCodec{}
+	var buffer bytes.Buffer
+	if err := codec.writeValue(&buffer, []any{id, handle, arguments}); err != nil {
+		return nil, fmt.Errorf("encode callback request: %w", err)
+	}
+
+	// Register before invoking: once a new isolate attaches, this waiter is how
+	// fgbRetireCallbackWaiters reaches a goroutine whose promise is now orphaned.
+	completed := make(chan fgbWebCallbackResult, 1)
+	fgbCallbackWaiters.Store(id, completed)
+	defer fgbCallbackWaiters.Delete(id)
+
+	promise := callback.Invoke(fgbWebBytes(buffer.Bytes()))
+	if promise.Type() != js.TypeObject {
+		return nil, fmt.Errorf("Dart callback transport returned a non-Promise value")
+	}
+	transfer.commit()
+
+	var settleOnce sync.Once
+	settled := make(chan struct{})
+	markSettled := func() { settleOnce.Do(func() { close(settled) }) }
+	var fulfilled js.Func
+	var rejected js.Func
+	fulfilled = js.FuncOf(func(_ js.Value, values []js.Value) any {
+		defer markSettled()
+		if len(values) != 1 {
+			select {
+			case completed <- fgbWebCallbackResult{err: fmt.Errorf("Dart callback returned no reply")}:
+			default:
+			}
+			return nil
+		}
+		payload, err := fgbWebCopyBytes(values[0])
+		select {
+		case completed <- fgbWebCallbackResult{payload: payload, err: err}:
+		default:
+		}
+		return nil
+	})
+	rejected = js.FuncOf(func(_ js.Value, values []js.Value) any {
+		defer markSettled()
+		message := "Dart callback Promise was rejected"
+		if len(values) != 0 {
+			message += ": " + values[0].String()
+		}
+		select {
+		case completed <- fgbWebCallbackResult{err: fmt.Errorf("%s", message)}:
+		default:
+		}
+		return nil
+	})
+	promise.Call("then", fulfilled).Call("catch", rejected)
+
+	// The trampolines stay alive until the promise can no longer reach them.
+	// Cancellation and isolate retirement both return before that point, and
+	// releasing a js.Func the promise still holds would crash the runtime.
+	defer func() {
+		go func() {
+			<-settled
+			fulfilled.Release()
+			rejected.Release()
+		}()
+	}()
+
+	var result fgbWebCallbackResult
+	select {
+	case result = <-completed:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("callback cancelled: %w", ctx.Err())
+	}
+	if result.err != nil {
+		return nil, result.err
+	}
+	if result.payload == nil {
+		return nil, fmt.Errorf("callback reply was empty")
+	}
+	replyBuffer := bytes.NewBuffer(result.payload)
+	decoded, err := codec.readValue(replyBuffer, len(result.payload))
+	if err != nil {
+		return nil, fmt.Errorf("decode callback reply: %w", err)
+	}
+	envelope, ok := decoded.([]any)
+	if !ok || len(envelope) == 0 {
+		return nil, fmt.Errorf("invalid callback reply envelope")
+	}
+	flag, err := fgbAsInt64(envelope[0], "callback envelope")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case flag == 0 && len(envelope) == 2:
+		return envelope[1], nil
+	case flag == 1 && len(envelope) >= 3:
+		return nil, fmt.Errorf("dart callback failed: %v", envelope[2])
+	default:
+		return nil, fmt.Errorf("invalid callback reply envelope")
+	}
+}
+
+func fgbRetireStreams() {
+	fgbStreamCancels.Range(func(key, value any) bool {
+		fgbStreamCancels.Delete(key)
+		if cancel, ok := value.(context.CancelFunc); ok {
+			cancel()
+		}
+		return true
+	})
+	fgbCancelledStreams.Range(func(key, _ any) bool {
+		fgbCancelledStreams.Delete(key)
+		return true
+	})
+}
+
+func fgbCurrentStreamGeneration() int64 {
+	if target := fgbStreamTargetRef.Load(); target != nil {
+		return target.generation
+	}
+	return 0
+}
+
+func fgbStreamCancel(handle int64) {
+	key := fgbStreamKey{generation: fgbCurrentStreamGeneration(), handle: handle}
+	fgbCancelledStreams.Store(key, true)
+	if value, ok := fgbStreamCancels.LoadAndDelete(key); ok {
+		if cancel, valid := value.(context.CancelFunc); valid {
+			cancel()
+		}
+	}
+}
+
+func fgbRegisterStreamCancel(generation int64, handle int64, cancel context.CancelFunc) {
+	key := fgbStreamKey{generation: generation, handle: handle}
+	if _, cancelled := fgbCancelledStreams.Load(key); cancelled {
+		cancel()
+		return
+	}
+	fgbStreamCancels.Store(key, cancel)
+	if _, cancelled := fgbCancelledStreams.Load(key); cancelled {
+		if value, ok := fgbStreamCancels.LoadAndDelete(key); ok {
+			if fn, valid := value.(context.CancelFunc); valid {
+				fn()
+			}
+		}
+	}
+}
+
+func fgbUnregisterStreamCancel(generation int64, handle int64) {
+	fgbStreamCancels.Delete(fgbStreamKey{generation: generation, handle: handle})
+}
+
+func fgbMustStreamHandle(value any) int64 {
+	handle, err := fgbAsInt64(value, "stream")
+	if err != nil {
+		return 0
+	}
+	return handle
+}
+
+func fgbPostStreamEvent(generation int64, handle int64, kind int32, payload any) bool {
+	transfer := (*fgbOpaqueTransfer)(nil)
+	if tracked, ok := payload.(fgbStreamPayload); ok {
+		payload = tracked.value
+		transfer = tracked.transfer
+	}
+	if transfer != nil {
+		defer transfer.rollback()
+	}
+	target := fgbStreamTargetRef.Load()
+	if target == nil || target.generation != generation {
+		return false
+	}
+	if _, cancelled := fgbCancelledStreams.Load(fgbStreamKey{generation: generation, handle: handle}); cancelled {
+		return false
+	}
+	_, _, stream := fgbWebDartTargets()
+	if stream.Type() != js.TypeFunction {
+		return false
+	}
+	var buffer bytes.Buffer
+	if err := (fgbStandardMethodCodec{}).writeValue(&buffer, []any{handle, int64(kind), payload}); err != nil {
+		return false
+	}
+	ok := false
+	func() {
+		defer func() { _ = recover() }()
+		result := stream.Invoke(fgbWebBytes(buffer.Bytes()))
+		ok = result.Type() == js.TypeBoolean && result.Bool()
+	}()
+	if ok && transfer != nil {
+		transfer.commit()
+	}
+	return ok
+}
+
+func fgbReleaseStreamSink(generation int64, handle int64) {
+	if _, cancelled := fgbCancelledStreams.LoadAndDelete(fgbStreamKey{generation: generation, handle: handle}); cancelled {
+		return
+	}
+	fgbPostStreamEvent(generation, handle, 1, nil)
 }
 
 func fgbWebBytes(value []byte) js.Value {
@@ -166,6 +584,14 @@ func init() {
 		global.Set("__flutterGoBridge", registry)
 	}
 	fgbWebInvokeFunction = js.FuncOf(fgbWebInvoke)
+	fgbWebInvokeAsyncFunction = js.FuncOf(fgbWebInvokeAsync)
+	fgbWebAttachFunction = js.FuncOf(fgbWebAttach)
+	fgbWebDropFunction = js.FuncOf(fgbWebDrop)
+	fgbWebStreamCancelFunction = js.FuncOf(fgbWebStreamCancel)
 	registry.Set(__FGB_LIBRARY_NAME__, fgbWebInvokeFunction)
+	registry.Set(__FGB_LIBRARY_NAME__+"#async", fgbWebInvokeAsyncFunction)
+	registry.Set(__FGB_LIBRARY_NAME__+"#attach", fgbWebAttachFunction)
+	registry.Set(__FGB_LIBRARY_NAME__+"#drop", fgbWebDropFunction)
+	registry.Set(__FGB_LIBRARY_NAME__+"#stream_cancel", fgbWebStreamCancelFunction)
 }
 `

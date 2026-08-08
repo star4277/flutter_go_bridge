@@ -1595,6 +1595,7 @@ func Describe(shape Shape) string { return shape.Label() }
 		"int area();",
 		"String label();",
 		"class Circle implements Shape {",
+		"@override\n  int area()",
 	} {
 		if !strings.Contains(apiDart, expected) {
 			t.Fatalf("api.dart missing %q:\n%s", expected, apiDart)
