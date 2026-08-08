@@ -1,0 +1,4 @@
+interface:
+  display_name: "FGB Comprehensive Code Review"
+  short_description: "Exhaustive Go, Dart, native, and Wasm review"
+  default_prompt: "Use $fgb-comprehensive-code-review to audit every project code file and verify standard-codec parity across native and Wasm."
