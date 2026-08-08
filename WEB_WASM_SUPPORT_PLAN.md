@@ -95,9 +95,16 @@ loader 的默认实现，必须传入自定义 `webInitializer`，否则初始�
   `Dart_PostCObject` 或 CST/DCO 的 C 映射。
 - Web 使用标准 codec，把 Dart 请求编码为字节，经 JS `Uint8Array` 传给 Go Wasm，再把响应字节
   解码回 Dart。共享 Dart codec 和公共 API 仍只生成一份。
-- Web 初始实现明确拒绝 callback、stream、`DartOpaque`、opaque handle/interface、
-  `dart:io` `InternetAddress` 以及 CGO-only 方法。Dart API 保留成员以维持跨平台签名一致，
-  调用时返回同步异常、失败 Future 或带错误的 Stream。
+- Web 与 Native FFI 功能对等，`import "C"` 是唯一的平台排除项。callback、stream（`StreamSink`
+  和 channel 两种形式）、`GoOpaque`、`DartOpaque`、interface 和 `InternetAddress` 全部在 Web
+  实现；syscall/js 取代 Dart native port 和 C 入口，承担异步调用、回调、事件投递、取消和句柄
+  生命周期。
+- Web 的异步调用返回真正的 JS `Promise`：Go 侧在独立 goroutine 中执行请求，而不是同步跑完再
+  包一层 Future。这是 callback 和 stream 能在 Web 工作的前提——同步调用期间 JS 事件循环无法
+  推进，Dart 的回复永远送不回 Go。生成器因此在源头就拒绝把带函数参数或 `StreamSink` 参数的
+  方法标成 `//fgb:sync`。
+- Dart 在 Web attach 时向 Go 提供 release / callback / stream 三个 JS 函数，Go 由此完全不依赖
+  C ABI 或 Dart native port。
 
 浏览器的网络、TCP/UDP、TUN、原始 socket、本地文件系统等能力仍受浏览器沙箱限制；Go 能够
 编译成 Wasm 不代表这些系统能力在浏览器中存在。
@@ -160,8 +167,9 @@ Plugin 项目把路径换成 `gokit/build_tool/bin/build_tool.dart`、`<project>
 4. 检查 Web warning；把 CGO 方法拆到 Native 文件，或提供 js/wasm 替代实现。
 5. 运行 Gokit `build-web`，再执行 `flutter run -d chrome` 或 `flutter build web`。
 
-当前实现不承诺把 Native-only callback、stream、opaque/interface 自动变成 Web 实现；这些能力
-需要后续单独设计 Web 协议，不能通过把 FFI/CST/DCO 直接搬到 Wasm 解决。
+当前实现在 Web 上提供与 Native FFI 对等的 callback、stream、opaque/interface 和 DartOpaque；
+它们走的是 syscall/js 协议，而不是把 FFI/CST/DCO 直接搬到 Wasm。CST/DCO 是 cgo 专用的传输优化，
+Web 只用标准 codec。仍然不可用的只有 `import "C"` 方法，以及浏览器沙箱本身不提供的系统能力。
 
 ## 8. 验证结果
 
@@ -171,6 +179,10 @@ Plugin 项目把路径换成 `gokit/build_tool/bin/build_tool.dart`、`<project>
 - 变更 Go 文件 `gopls check`
 - 生成项目 `go build -buildmode=c-shared`
 - 生成项目 `CGO_ENABLED=0 GOOS=js GOARCH=wasm go build`
+- Web Wasm 运行时对等回归（`TestWebWasmRuntimeParity`）：把生成的桥接编译成 Wasm，在真实
+  JS 运行时里按生成的 Dart Web wire 同一套协议驱动，覆盖 value struct、GoOpaque 及其释放、
+  interface、DartOpaque、异步调用的真实并发交错、callback 及其错误传播、`StreamSink` 和
+  channel 两种 stream，以及重新 attach 时退休在途 callback。没有 `node` 时跳过。
 - 生成 Flutter 项目 `dart analyze lib`、`flutter analyze`
 - 文档 `bun run typecheck`、`bun run build`
 - Chrome `flutter run -d chrome`：Wasm 资源加载和页面启动已验证。

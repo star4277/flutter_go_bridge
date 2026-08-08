@@ -103,8 +103,8 @@ func TestGeneratorWriteAndMetadataErrors(t *testing.T) {
 }
 
 func TestUnsupportedWebCallReasonTraversesWireShapes(t *testing.T) {
-	callback := func(id int) *wireType {
-		return &wireType{ID: id, Kind: kindCallback}
+	cgo := func(id int) *wireType {
+		return &wireType{ID: id, Kind: kindSigned, CgoScalar: true}
 	}
 	tests := []struct {
 		name string
@@ -112,25 +112,29 @@ func TestUnsupportedWebCallReasonTraversesWireShapes(t *testing.T) {
 		want string
 	}{
 		{"cgo scalar", &callModel{Params: []*paramModel{{Type: &wireType{ID: 1, CgoScalar: true}}}}, "cgo scalar types"},
-		{"callback", &callModel{Params: []*paramModel{{Type: callback(2)}}}, "Dart callbacks"},
-		{"stream", &callModel{Params: []*paramModel{{Type: &wireType{ID: 3, Kind: kindStreamSink}}}}, "streams"},
-		{"opaque", &callModel{Params: []*paramModel{{Type: &wireType{ID: 4, Kind: kindOpaque}}}}, "opaque handles"},
-		{"interface", &callModel{Params: []*paramModel{{Type: &wireType{ID: 5, Kind: kindInterface}}}}, "opaque handles"},
-		{"internet address", &callModel{Params: []*paramModel{{Type: &wireType{ID: 6, Kind: kindInternetIP}}}}, "InternetAddress"},
-		{"pointer element", &callModel{Params: []*paramModel{{Type: &wireType{ID: 7, Kind: kindPointer, Elem: callback(8)}}}}, "Dart callbacks"},
-		{"map key", &callModel{Params: []*paramModel{{Type: &wireType{ID: 9, Kind: kindMap, Key: callback(10), Elem: &wireType{ID: 11, Kind: kindString}}}}}, "Dart callbacks"},
-		{"map value", &callModel{Params: []*paramModel{{Type: &wireType{ID: 12, Kind: kindMap, Key: &wireType{ID: 13, Kind: kindString}, Elem: callback(14)}}}}, "Dart callbacks"},
-		{"struct field", &callModel{Params: []*paramModel{{Type: &wireType{ID: 15, Kind: kindStruct, Struct: &structModel{Fields: []*fieldModel{{Type: callback(16)}}}}}}}, "Dart callbacks"},
-		{"named underlying", &callModel{Params: []*paramModel{{Type: &wireType{ID: 17, Kind: kindNamed, Named: &namedModel{Underlying: callback(18)}}}}}, "Dart callbacks"},
-		{"atomic value", &callModel{Params: []*paramModel{{Type: &wireType{ID: 19, Kind: kindAtomic, Atomic: &atomicModel{Value: callback(20)}}}}}, "Dart callbacks"},
-		{"receiver", &callModel{Receiver: callback(21)}, "Dart callbacks"},
-		{"result", &callModel{Results: []*resultModel{{Type: callback(22)}}}, "Dart callbacks"},
-		{"supported", &callModel{Params: []*paramModel{{Type: &wireType{ID: 23, Kind: kindString}}}}, ""},
+		{"pointer cgo", &callModel{Params: []*paramModel{{Type: &wireType{ID: 2, Kind: kindPointer, Elem: cgo(3)}}}}, "cgo scalar types"},
+		{"map key cgo", &callModel{Params: []*paramModel{{Type: &wireType{ID: 4, Kind: kindMap, Key: cgo(5), Elem: &wireType{ID: 6, Kind: kindString}}}}}, "cgo scalar types"},
+		{"map value cgo", &callModel{Params: []*paramModel{{Type: &wireType{ID: 7, Kind: kindMap, Key: &wireType{ID: 8, Kind: kindString}, Elem: cgo(9)}}}}, "cgo scalar types"},
+		{"struct field cgo", &callModel{Params: []*paramModel{{Type: &wireType{ID: 10, Kind: kindStruct, Struct: &structModel{Fields: []*fieldModel{{Type: cgo(11)}}}}}}}, "cgo scalar types"},
+		{"named cgo", &callModel{Params: []*paramModel{{Type: &wireType{ID: 12, Kind: kindNamed, Named: &namedModel{Underlying: cgo(13)}}}}}, "cgo scalar types"},
+		{"atomic cgo", &callModel{Params: []*paramModel{{Type: &wireType{ID: 14, Kind: kindAtomic, Atomic: &atomicModel{Value: cgo(15)}}}}}, "cgo scalar types"},
+		{"receiver cgo", &callModel{Receiver: cgo(16)}, "cgo scalar types"},
+		{"result cgo", &callModel{Results: []*resultModel{{Type: cgo(17)}}}, "cgo scalar types"},
+		{"callback", &callModel{Params: []*paramModel{{Type: &wireType{ID: 18, Kind: kindCallback}}}}, ""},
+		{"stream", &callModel{Params: []*paramModel{{Type: &wireType{ID: 19, Kind: kindStreamSink}}}}, ""},
+		{"opaque", &callModel{Params: []*paramModel{{Type: &wireType{ID: 20, Kind: kindOpaque}}}}, ""},
+		{"dart opaque", &callModel{Params: []*paramModel{{Type: &wireType{ID: 21, Kind: kindDartOpaque}}}}, ""},
+		{"interface", &callModel{Params: []*paramModel{{Type: &wireType{ID: 22, Kind: kindInterface}}}}, ""},
+		{"internet address", &callModel{Params: []*paramModel{{Type: &wireType{ID: 23, Kind: kindInternetIP}}}}, ""},
+		{"supported", &callModel{Params: []*paramModel{{Type: &wireType{ID: 24, Kind: kindString}}}}, ""},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := unsupportedWebCallReason(test.call)
-			if !strings.Contains(got, test.want) {
+			if test.want == "" && got != "" {
+				t.Fatalf("supported Web call was rejected: %q", got)
+			}
+			if test.want != "" && !strings.Contains(got, test.want) {
 				t.Fatalf("unsupported reason %q does not contain %q", got, test.want)
 			}
 		})

@@ -851,3 +851,32 @@ for those concrete branches and push enough newly covered patch lines to exceed 
 - Tags: codecov, patch-coverage, partial-lines, coverage-margin
 
 ---
+
+## [LRN-20260807-008] correction
+
+**Logged**: 2026-08-07T17:10:00+08:00
+**Priority**: critical
+**Status**: in_progress
+**Area**: backend
+
+### Summary
+WebAssembly support is complete only when it matches every Native FFI bridge capability except cgo.
+
+### Details
+The initial Web transport ran primitive and value-struct calls but deliberately emitted
+UnsupportedError fallbacks for GoOpaque, DartOpaque, callbacks, streams, interfaces, and any call
+whose nested type contained one of them. Treating that as finished Web support was incorrect. The
+required contract is one shared Dart API with feature parity across Native FFI and WebAssembly;
+import "C" is the sole platform exclusion, and syscall/js replaces native ports and C entrypoints
+for asynchronous calls, callbacks, stream events, cancellation, and handle lifecycle on Web.
+
+### Suggested Action
+Maintain an explicit cross-platform capability fixture and require real Native and browser/Wasm
+smoke calls for every supported category before describing Web support as complete.
+
+### Metadata
+- Source: user_feedback
+- Related Files: internal/generator/builder.go, internal/generator/render_go_web.go, internal/generator/dart_web_runtime.go
+- Tags: wasm, ffi-parity, opaque, callback, stream, syscall-js
+
+---

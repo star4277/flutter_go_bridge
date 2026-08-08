@@ -206,14 +206,6 @@ func unsupportedWebCallReason(call *callModel) string {
 			return "cgo scalar types are unavailable on Web"
 		}
 		switch typ.Kind {
-		case kindCallback:
-			return "Dart callbacks are not supported by the Web transport"
-		case kindStreamSink:
-			return "streams are not supported by the Web transport"
-		case kindOpaque, kindDartOpaque, kindInterface:
-			return "opaque handles and interfaces are not supported by the Web transport"
-		case kindInternetIP:
-			return "dart:io InternetAddress is unavailable on Web"
 		case kindPointer, kindSlice, kindArray, kindBytes, kindInt32List, kindInt64List, kindFloat64List:
 			return unsupported(typ.Elem)
 		case kindMap:
@@ -580,6 +572,7 @@ func (b *builder) propagateInterfaceMethodShapes() error {
 					claimed[concrete] = claim{iface: declaration, method: declared, signature: shape}
 					concrete.DartName = declared.DartName
 					concrete.Mode = declared.Mode
+					concrete.Overrides = true
 					// The same principle applies to an operator, and more
 					// sharply: an operator provides no named member at all, so
 					// the `implements` clause would be left without the one the
